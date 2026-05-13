@@ -69,9 +69,18 @@ pub struct OrderData {
 }
 
 impl OrderData {
-    /// EIP-712 `typeHash` of the `GPv2Order.Data` struct.
+    /// EIP-712 `typeHash` of the canonical `Order` struct.
     ///
-    /// `keccak256("Order(address sellToken,address buyToken,address receiver,uint256 sellAmount,uint256 buyAmount,uint32 validTo,bytes32 appData,uint256 feeAmount,bytes32 kind,bool partiallyFillable,bytes32 sellTokenBalance,bytes32 buyTokenBalance)")`
+    /// `keccak256(`
+    /// `"Order(address sellToken,address buyToken,address receiver,uint256 sellAmount,"`
+    /// `"uint256 buyAmount,uint32 validTo,bytes32 appData,uint256 feeAmount,"`
+    /// `"string kind,bool partiallyFillable,string sellTokenBalance,string buyTokenBalance)"`
+    /// `)`
+    ///
+    /// Note that `kind`, `sellTokenBalance` and `buyTokenBalance` are declared
+    /// as `string` in the EIP-712 schema, even though `GPv2Order.Data` stores
+    /// them as `bytes32` markers — see
+    /// [`GPv2Order.sol`](https://github.com/cowprotocol/contracts/blob/main/src/contracts/libraries/GPv2Order.sol).
     pub const TYPE_HASH: [u8; 32] =
         hex!("d5a25ba2e97094ad7d83dc28a6572da797d6b3e7fc6663bd93efb789fc17e489");
 
@@ -127,10 +136,12 @@ pub enum OrderKind {
 }
 
 impl OrderKind {
-    /// `keccak256("buy")` — used as the on-chain encoding of [`OrderKind::Buy`].
+    /// `keccak256("buy")` — the EIP-712 string encoding of [`OrderKind::Buy`]
+    /// and the on-chain `bytes32` marker stored in `GPv2Order.Data.kind`.
     pub const BUY: [u8; 32] =
         hex!("6ed88e868af0a1983e3886d5f3e95a2fafbd6c3450bc229e27342283dc429ccc");
-    /// `keccak256("sell")` — used as the on-chain encoding of [`OrderKind::Sell`].
+    /// `keccak256("sell")` — the EIP-712 string encoding of [`OrderKind::Sell`]
+    /// and the on-chain `bytes32` marker stored in `GPv2Order.Data.kind`.
     pub const SELL: [u8; 32] =
         hex!("f3b277728b3fee749481eb3e0b3b48980dbbab78658fc419025cb16eee346775");
 }
@@ -150,17 +161,17 @@ pub enum SellTokenSource {
 }
 
 impl SellTokenSource {
-    /// `keccak256("erc20")`.
+    /// `keccak256("erc20")` — EIP-712 string encoding and on-chain marker.
     pub const ERC20: [u8; 32] =
         hex!("5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9");
-    /// `keccak256("external")`.
+    /// `keccak256("external")` — EIP-712 string encoding and on-chain marker.
     pub const EXTERNAL: [u8; 32] =
         hex!("abee3b73373acd583a130924aad6dc38cfdc44ba0555ba94ce2ff63980ea0632");
-    /// `keccak256("internal")`.
+    /// `keccak256("internal")` — EIP-712 string encoding and on-chain marker.
     pub const INTERNAL: [u8; 32] =
         hex!("4ac99ace14ee0a5ef932dc609df0943ab7ac16b7583634612f8dc35a4289a6ce");
 
-    /// On-chain `bytes32` encoding of this variant.
+    /// 32-byte EIP-712 encoding of this variant for inclusion in `hash_struct`.
     pub const fn as_bytes(&self) -> [u8; 32] {
         match self {
             Self::Erc20 => Self::ERC20,
@@ -182,14 +193,14 @@ pub enum BuyTokenDestination {
 }
 
 impl BuyTokenDestination {
-    /// `keccak256("erc20")`.
+    /// `keccak256("erc20")` — EIP-712 string encoding and on-chain marker.
     pub const ERC20: [u8; 32] =
         hex!("5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9");
-    /// `keccak256("internal")`.
+    /// `keccak256("internal")` — EIP-712 string encoding and on-chain marker.
     pub const INTERNAL: [u8; 32] =
         hex!("4ac99ace14ee0a5ef932dc609df0943ab7ac16b7583634612f8dc35a4289a6ce");
 
-    /// On-chain `bytes32` encoding of this variant.
+    /// 32-byte EIP-712 encoding of this variant for inclusion in `hash_struct`.
     pub const fn as_bytes(&self) -> [u8; 32] {
         match self {
             Self::Erc20 => Self::ERC20,
@@ -330,6 +341,40 @@ mod tests {
         assert_eq!(order.uid(&domain, owner).0, expected);
     }
 
+    /// Locks `OrderData::TYPE_HASH` against the canonical EIP-712 type
+    /// signature published in
+    /// [`GPv2Order.sol`](https://github.com/cowprotocol/contracts/blob/main/src/contracts/libraries/GPv2Order.sol).
+    /// Note that `kind`, `sellTokenBalance` and `buyTokenBalance` are typed
+    /// as `string` in the EIP-712 schema even though `GPv2Order.Data` stores
+    /// them as `bytes32` markers.
+    #[test]
+    fn order_type_hash_matches_canonical_signature() {
+        let signature = b"Order(\
+            address sellToken,\
+            address buyToken,\
+            address receiver,\
+            uint256 sellAmount,\
+            uint256 buyAmount,\
+            uint32 validTo,\
+            bytes32 appData,\
+            uint256 feeAmount,\
+            string kind,\
+            bool partiallyFillable,\
+            string sellTokenBalance,\
+            string buyTokenBalance\
+        )";
+        assert_eq!(OrderData::TYPE_HASH, *keccak256(signature));
+    }
+
+    #[test]
+    fn buy_eth_address_matches_canonical_sentinel() {
+        // Source: cowprotocol/contracts/src/ts/order.ts (BUY_ETH_ADDRESS).
+        assert_eq!(
+            BUY_ETH_ADDRESS,
+            address!("EeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE")
+        );
+    }
+
     #[test]
     fn order_kind_keccak_constants() {
         assert_eq!(OrderKind::BUY, *keccak256(b"buy"));
@@ -379,5 +424,31 @@ mod tests {
         uid.0[55] = 0xff;
         let expected = "0x01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ff";
         assert_eq!(uid.to_string(), expected);
+    }
+
+    /// Mirrors `packOrderUidParams` from
+    /// `cowprotocol/contracts/test/GPv2Order/PackOrderUidParams.t.sol`,
+    /// which derives `(digest, owner, validTo)` from keccak-256 of UTF-8
+    /// constants. Locks the 56-byte packing layout `digest || owner || validTo`.
+    #[test]
+    fn order_uid_pack_matches_contracts_solidity_reference() {
+        let digest = keccak256(b"order digest");
+        let owner_seed = keccak256(b"owner");
+        let owner = Address::from_slice(&owner_seed[12..32]);
+        let valid_to_seed = keccak256(b"valid to");
+        let valid_to = u32::from_be_bytes(valid_to_seed[28..32].try_into().unwrap());
+
+        let uid = OrderUid::from_parts(digest, owner, valid_to);
+
+        let mut expected = [0u8; 56];
+        expected[0..32].copy_from_slice(digest.as_slice());
+        expected[32..52].copy_from_slice(owner.as_slice());
+        expected[52..56].copy_from_slice(&valid_to.to_be_bytes());
+        assert_eq!(uid.0, expected);
+
+        let (round_digest, round_owner, round_valid_to) = uid.parts();
+        assert_eq!(round_digest, digest);
+        assert_eq!(round_owner, owner);
+        assert_eq!(round_valid_to, valid_to);
     }
 }
