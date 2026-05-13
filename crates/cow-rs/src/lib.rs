@@ -2,47 +2,38 @@
 //!
 //! Rust SDK for the [CoW Protocol](https://cow.fi).
 //!
-//! This crate is in early development. The first public surface is the
-//! canonical signed-order payload — [`OrderData`] — and the primitives
-//! needed to hash and identify it: [`DomainSeparator`], [`OrderUid`], and
-//! the on-chain `bytes32` encodings of [`OrderKind`], [`SellTokenSource`],
-//! [`BuyTokenDestination`], along with [`AppDataHash`].
+//! Public surface so far:
 //!
-//! Everything else (orderbook client, signing, contract bindings, app-data
+//! - [`OrderData`] — the 12-field signed payload, with
+//!   [`OrderData::hash_struct`] for EIP-712 hashing and
+//!   [`OrderData::uid`] for the 56-byte order identifier.
+//! - [`DomainSeparator`] and [`hashed_eip712_message`] for the typed-data
+//!   envelope.
+//! - [`Chain`] — the five chains the CoW orderbook supports, with their
+//!   `api.cow.fi` URL slugs.
+//! - [`OrderBookApi`] — async client for `POST /api/v1/quote`.
+//!
+//! Everything else (signing, order submission, contract bindings, app-data
 //! schema, subgraph, composable orders) will land in subsequent commits so
 //! each addition can be reviewed in isolation.
 //!
-//! ## Example
+//! ## Quote example
 //!
-//! ```
-//! use cow_rs::{
-//!     AppDataHash, BuyTokenDestination, DomainSeparator, OrderData, OrderKind, SellTokenSource,
-//! };
+//! ```no_run
+//! use cow_rs::{Chain, OrderBookApi, QuoteRequest};
 //! use alloy_primitives::{Address, U256, address};
 //!
-//! // Sepolia GPv2Settlement deployment.
-//! let domain = DomainSeparator::new(
-//!     11_155_111,
-//!     address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
+//! # async fn run() -> cow_rs::Result<()> {
+//! let api = OrderBookApi::new(Chain::Mainnet);
+//! let request = QuoteRequest::sell_amount_before_fee(
+//!     address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"), // USDC
+//!     address!("6B175474E89094C44Da98b954EedeAC495271d0F"), // DAI
+//!     address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
+//!     U256::from(100_000_000_u64),
 //! );
-//!
-//! let order = OrderData {
-//!     sell_token: Address::ZERO,
-//!     buy_token: Address::ZERO,
-//!     sell_amount: U256::from(1_000_000_u64),
-//!     buy_amount: U256::from(1_000_000_u64),
-//!     valid_to: 1_700_000_000,
-//!     app_data: AppDataHash::default(),
-//!     fee_amount: U256::ZERO,
-//!     kind: OrderKind::Sell,
-//!     partially_fillable: false,
-//!     sell_token_balance: SellTokenSource::Erc20,
-//!     buy_token_balance: BuyTokenDestination::Erc20,
-//!     receiver: None,
-//! };
-//!
-//! let uid = order.uid(&domain, Address::ZERO);
-//! assert_eq!(uid.0.len(), 56);
+//! let response = api.get_quote(&request).await?;
+//! println!("buy amount: {}", response.quote.buy_amount);
+//! # Ok(()) }
 //! ```
 //!
 //! ## Parity references
@@ -61,13 +52,21 @@
 
 pub mod app_data;
 pub mod bytes_hex;
+pub mod chain;
 pub mod domain;
+pub mod error;
 pub mod order;
+pub mod order_book;
+pub mod signing_scheme;
 
 pub use crate::{
     app_data::AppDataHash,
+    chain::{Chain, UnsupportedChain},
     domain::{DomainSeparator, hashed_eip712_message},
+    error::{ApiError, Error, Result},
     order::{
         BUY_ETH_ADDRESS, BuyTokenDestination, OrderData, OrderKind, OrderUid, SellTokenSource,
     },
+    order_book::{OrderBookApi, OrderQuote, OrderQuoteResponse, QuoteRequest},
+    signing_scheme::SigningScheme,
 };

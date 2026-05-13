@@ -18,6 +18,7 @@ use {
     alloy_primitives::{Address, B256, U256, keccak256},
     hex_literal::hex,
     serde::{Deserialize, Deserializer, Serialize, Serializer, de},
+    serde_with::{DisplayFromStr, serde_as},
     std::{
         fmt::{self, Debug, Display},
         str::FromStr,
@@ -35,6 +36,7 @@ pub const BUY_ETH_ADDRESS: Address = Address::repeat_byte(0xee);
 /// See [`GPv2Order.Data`] for the Solidity counterpart.
 ///
 /// [`GPv2Order.Data`]: https://github.com/cowprotocol/contracts/blob/v1.1.2/src/contracts/libraries/GPv2Order.sol
+#[serde_as]
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderData {
@@ -46,8 +48,10 @@ pub struct OrderData {
     #[serde(default)]
     pub receiver: Option<Address>,
     /// Amount of `sell_token` the owner is willing to part with, in atomic units.
+    #[serde_as(as = "DisplayFromStr")]
     pub sell_amount: U256,
     /// Amount of `buy_token` the owner expects to receive, in atomic units.
+    #[serde_as(as = "DisplayFromStr")]
     pub buy_amount: U256,
     /// Unix timestamp (seconds) after which the order is no longer valid.
     pub valid_to: u32,
@@ -55,6 +59,7 @@ pub struct OrderData {
     pub app_data: AppDataHash,
     /// Protocol fee charged in `sell_token` atomic units. Zero for limit
     /// orders (their fee is taken from surplus) and for liquidity orders.
+    #[serde_as(as = "DisplayFromStr")]
     pub fee_amount: U256,
     /// Whether the owner is fixing the sell amount or the buy amount.
     pub kind: OrderKind,
