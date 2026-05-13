@@ -57,16 +57,18 @@ pub mod domain;
 pub mod error;
 pub mod order;
 pub mod order_book;
+pub mod signature;
 pub mod signing_scheme;
 
 pub use crate::{
     app_data::AppDataHash,
     chain::{Chain, UnsupportedChain},
-    domain::{DomainSeparator, hashed_eip712_message},
+    domain::{DomainSeparator, hashed_eip712_message, hashed_ethsign_message},
     error::{ApiError, Error, Result},
     order::{
         BUY_ETH_ADDRESS, BuyTokenDestination, OrderData, OrderKind, OrderUid, SellTokenSource,
     },
     order_book::{OrderBookApi, OrderQuote, OrderQuoteResponse, QuoteRequest},
-    signing_scheme::SigningScheme,
+    signature::{EcdsaSignature, Recovered, Signature, SignatureError},
+    signing_scheme::{EcdsaSigningScheme, SigningScheme},
 };

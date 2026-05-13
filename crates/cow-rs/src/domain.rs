@@ -68,6 +68,20 @@ pub fn hashed_eip712_message(domain_separator: &DomainSeparator, struct_hash: &[
     keccak256(message)
 }
 
+/// Compute the EIP-191 personal-sign wrapping over the EIP-712 typed-data
+/// hash: `keccak256("\x19Ethereum Signed Message:\n32" || hashed_eip712_message)`.
+///
+/// This is the message wallets sign when the owner uses the
+/// [`SigningScheme::EthSign`] flow.
+///
+/// [`SigningScheme::EthSign`]: crate::signing_scheme::SigningScheme::EthSign
+pub fn hashed_ethsign_message(domain_separator: &DomainSeparator, struct_hash: &[u8; 32]) -> B256 {
+    let mut message = [0u8; 60];
+    message[..28].copy_from_slice(b"\x19Ethereum Signed Message:\n32");
+    message[28..].copy_from_slice(hashed_eip712_message(domain_separator, struct_hash).as_slice());
+    keccak256(message)
+}
+
 #[cfg(test)]
 mod tests {
     use {super::*, alloy_primitives::address, hex_literal::hex};
