@@ -10,7 +10,8 @@ use {
         app_data::AppDataHash,
         chain::Chain,
         error::{ApiError, Error, Result},
-        order::{BuyTokenDestination, OrderData, OrderKind, SellTokenSource},
+        order::{BuyTokenDestination, OrderData, OrderKind, OrderUid, SellTokenSource},
+        signature::Signature,
         signing_scheme::SigningScheme,
     },
     alloy_primitives::{Address, U256},
@@ -224,6 +225,43 @@ impl OrderQuote {
     }
 }
 
+impl OrderQuoteResponse {
+    /// Apply the submission adjustments documented at
+    /// [`api.mdx §"Step 3"`][step3] and return the [`OrderData`] that must
+    /// be hashed and signed by the order owner.
+    ///
+    /// - For sell orders, `sell_amount` is the quoted `sellAmount +
+    ///   feeAmount`. For buy orders, the quote values pass through.
+    /// - `fee_amount` is always `0` at submission — solvers price gas at
+    ///   settlement time.
+    /// - `app_data` is the 32-byte digest of the canonical metadata JSON
+    ///   the caller will submit (use [`EMPTY_APP_DATA_HASH`] for the empty
+    ///   document `"{}"`).
+    ///
+    /// [step3]: https://docs.cow.fi/cow-protocol/howto/integrate/api#step-3-compute-the-amounts-to-sign
+    pub const fn to_signed_order_data(&self, app_data: AppDataHash) -> OrderData {
+        let q = &self.quote;
+        let (sell_amount, buy_amount) = match q.kind {
+            OrderKind::Sell => (q.sell_amount.saturating_add(q.fee_amount), q.buy_amount),
+            OrderKind::Buy => (q.sell_amount, q.buy_amount),
+        };
+        OrderData {
+            sell_token: q.sell_token,
+            buy_token: q.buy_token,
+            receiver: q.receiver,
+            sell_amount,
+            buy_amount,
+            valid_to: q.valid_to,
+            app_data,
+            fee_amount: U256::ZERO,
+            kind: q.kind,
+            partially_fillable: q.partially_fillable,
+            sell_token_balance: q.sell_token_balance,
+            buy_token_balance: q.buy_token_balance,
+        }
+    }
+}
+
 /// Full response body of `POST /api/v1/quote`.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -242,6 +280,112 @@ pub struct OrderQuoteResponse {
     /// Protocol fee in basis points (decimal string).
     #[serde(default)]
     pub protocol_fee_bps: Option<String>,
+}
+
+/// Body of `POST /api/v1/orders`.
+///
+/// Differs from a raw [`OrderData`] in three load-bearing ways
+/// (`cow-protocol/howto/integrate/api.mdx`):
+///
+/// - `fee_amount` here is what the user signed (which must be `0`); the
+///   protocol fee is taken from surplus at settlement.
+/// - `app_data` is the canonical JSON string of the metadata document;
+///   `app_data_hash` is the `keccak256` digest of those exact bytes. The
+///   signed [`OrderData::app_data`] field equals `app_data_hash`.
+/// - `signing_scheme`, `signature` and `from` carry the owner's signature
+///   along with the order.
+///
+/// Use [`OrderCreation::from_signed_order_data`] to assemble the body once
+/// the owner has signed [`OrderQuoteResponse::to_signed_order_data`].
+#[serde_as]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrderCreation {
+    /// Token the owner is selling.
+    pub sell_token: Address,
+    /// Token the owner is buying.
+    pub buy_token: Address,
+    /// Optional buy-token recipient.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<Address>,
+    /// Sell amount in atomic units (must agree with the signed payload).
+    #[serde_as(as = "DisplayFromStr")]
+    pub sell_amount: U256,
+    /// Buy amount in atomic units (must agree with the signed payload).
+    #[serde_as(as = "DisplayFromStr")]
+    pub buy_amount: U256,
+    /// Order expiry in Unix seconds.
+    pub valid_to: u32,
+    /// Canonical JSON of the app-data document.
+    pub app_data: String,
+    /// `keccak256(app_data)`. Mirrors the signed payload's `app_data` field.
+    pub app_data_hash: AppDataHash,
+    /// User-signed fee amount. Must be `"0"` at submission.
+    #[serde_as(as = "DisplayFromStr")]
+    pub fee_amount: U256,
+    /// Direction of the order.
+    pub kind: OrderKind,
+    /// Whether partial fills are allowed.
+    pub partially_fillable: bool,
+    /// Source the sell amount is drawn from.
+    pub sell_token_balance: SellTokenSource,
+    /// Destination the buy amount is paid to.
+    pub buy_token_balance: BuyTokenDestination,
+    /// Off-chain signing scheme used to authenticate the order.
+    pub signing_scheme: SigningScheme,
+    /// Signature bytes. Empty for [`SigningScheme::PreSign`].
+    #[serde(serialize_with = "serialise_signature_bytes")]
+    pub signature: Signature,
+    /// Order owner. Required for `presign` / `eip1271`; recommended for
+    /// ECDSA schemes so the server can reject malformed signatures early.
+    pub from: Address,
+    /// Identifier returned by `POST /api/v1/quote`. Optional but improves
+    /// solver fee accounting when the order is matched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quote_id: Option<i64>,
+}
+
+fn serialise_signature_bytes<S>(
+    signature: &Signature,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    crate::bytes_hex::serialize(signature.to_bytes(), serializer)
+}
+
+impl OrderCreation {
+    /// Assemble a submission body from a signed [`OrderData`] plus the
+    /// metadata required by the orderbook (`from`, signature, app-data
+    /// document, optional quote id).
+    pub const fn from_signed_order_data(
+        order_data: OrderData,
+        signature: Signature,
+        from: Address,
+        app_data_json: String,
+        quote_id: Option<i64>,
+    ) -> Self {
+        Self {
+            sell_token: order_data.sell_token,
+            buy_token: order_data.buy_token,
+            receiver: order_data.receiver,
+            sell_amount: order_data.sell_amount,
+            buy_amount: order_data.buy_amount,
+            valid_to: order_data.valid_to,
+            app_data: app_data_json,
+            app_data_hash: order_data.app_data,
+            fee_amount: order_data.fee_amount,
+            kind: order_data.kind,
+            partially_fillable: order_data.partially_fillable,
+            sell_token_balance: order_data.sell_token_balance,
+            buy_token_balance: order_data.buy_token_balance,
+            signing_scheme: signature.scheme(),
+            signature,
+            from,
+            quote_id,
+        }
+    }
 }
 
 /// Thin client for the CoW Protocol orderbook.
@@ -275,16 +419,30 @@ impl OrderBookApi {
     /// `POST /api/v1/quote` — ask the orderbook for a quote that the
     /// requester can sign and submit.
     pub async fn get_quote(&self, request: &QuoteRequest) -> Result<OrderQuoteResponse> {
-        let url = self.base_url.join("api/v1/quote")?;
-        let response = self.client.post(url).json(request).send().await?;
+        self.post_json("api/v1/quote", request).await
+    }
+
+    /// `POST /api/v1/orders` — submit a signed order. Returns the
+    /// 56-byte UID assigned by the orderbook.
+    pub async fn post_order(&self, order: &OrderCreation) -> Result<OrderUid> {
+        self.post_json("api/v1/orders", order).await
+    }
+
+    async fn post_json<TReq, TResp>(&self, path: &str, body: &TReq) -> Result<TResp>
+    where
+        TReq: Serialize + ?Sized,
+        TResp: for<'de> Deserialize<'de>,
+    {
+        let url = self.base_url.join(path)?;
+        let response = self.client.post(url).json(body).send().await?;
         let status = response.status();
-        let body = response.text().await?;
+        let text = response.text().await?;
         if status.is_success() {
-            serde_json::from_str(&body).map_err(Error::from)
-        } else if let Ok(api) = serde_json::from_str::<ApiError>(&body) {
+            serde_json::from_str(&text).map_err(Error::from)
+        } else if let Ok(api) = serde_json::from_str::<ApiError>(&text) {
             Err(Error::OrderbookApi { status, api })
         } else {
-            Err(Error::UnexpectedStatus { status, body })
+            Err(Error::UnexpectedStatus { status, body: text })
         }
     }
 }
@@ -299,7 +457,10 @@ fn ensure_trailing_slash(mut url: url::Url) -> url::Url {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {
+        super::*,
+        crate::app_data::{EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON},
+    };
 
     /// Token addresses used by [`fixture_quote_request`]: USDC and DAI on
     /// Ethereum mainnet.
@@ -381,5 +542,94 @@ mod tests {
         // signed-payload type and hashes deterministically.
         let order_data = response.quote.to_order_data();
         let _ = order_data.hash_struct();
+    }
+
+    fn load_mainnet_quote() -> OrderQuoteResponse {
+        serde_json::from_str(include_str!("../tests/fixtures/quote-mainnet.json")).unwrap()
+    }
+
+    /// `to_signed_order_data` for a sell-side quote adds `feeAmount` back
+    /// into `sellAmount` and zeroes the fee — the documented submission
+    /// adjustment.
+    #[test]
+    fn to_signed_order_data_adjusts_sell_amount_and_zeroes_fee() {
+        let quote = load_mainnet_quote();
+        assert_eq!(quote.quote.kind, OrderKind::Sell);
+        let original_sell = quote.quote.sell_amount;
+        let original_fee = quote.quote.fee_amount;
+
+        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH);
+
+        assert_eq!(signed.sell_amount, original_sell + original_fee);
+        assert_eq!(signed.buy_amount, quote.quote.buy_amount);
+        assert_eq!(signed.fee_amount, U256::ZERO);
+        assert_eq!(signed.app_data, EMPTY_APP_DATA_HASH);
+        assert_eq!(signed.kind, OrderKind::Sell);
+    }
+
+    /// Buy-side quote keeps `sellAmount` as-is; only `feeAmount` gets zeroed.
+    #[test]
+    fn to_signed_order_data_buy_side_passes_through_amounts() {
+        let mut quote = load_mainnet_quote();
+        quote.quote.kind = OrderKind::Buy;
+        let original_sell = quote.quote.sell_amount;
+        let original_buy = quote.quote.buy_amount;
+
+        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH);
+
+        assert_eq!(signed.sell_amount, original_sell);
+        assert_eq!(signed.buy_amount, original_buy);
+        assert_eq!(signed.fee_amount, U256::ZERO);
+    }
+
+    /// `OrderCreation` serialises to the wire shape documented by the
+    /// orderbook OpenAPI: 12 signed fields, plus `appData` (JSON string),
+    /// `appDataHash` (bytes32), `signingScheme`, `signature`, `from` and
+    /// optional `quoteId`. Verifies the field-name overrides that make
+    /// `OrderCreation` distinct from a flattened `OrderData`.
+    #[test]
+    fn order_creation_serialises_to_expected_wire_shape() {
+        let quote = load_mainnet_quote();
+        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH);
+        let signature = Signature::default();
+        let creation = OrderCreation::from_signed_order_data(
+            signed,
+            signature,
+            quote.from,
+            EMPTY_APP_DATA_JSON.to_owned(),
+            Some(quote.id),
+        );
+
+        let body = serde_json::to_value(&creation).unwrap();
+        assert_eq!(body["feeAmount"], "0");
+        assert_eq!(body["appData"], "{}");
+        assert_eq!(
+            body["appDataHash"],
+            "0xb48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d"
+        );
+        assert_eq!(body["signingScheme"], "eip712");
+        assert!(body["signature"].as_str().unwrap().starts_with("0x"));
+        assert_eq!(body["from"], format!("{:?}", quote.from).to_lowercase());
+        assert_eq!(body["quoteId"], 1_176_992_200_i64);
+        assert!(body["sellAmount"].is_string());
+        // Sell-side adjustment is visible in the serialised body.
+        let expected_sell = quote.quote.sell_amount + quote.quote.fee_amount;
+        assert_eq!(body["sellAmount"], expected_sell.to_string());
+    }
+
+    /// `quoteId` is omitted when not provided rather than emitted as `null`.
+    #[test]
+    fn order_creation_skips_optional_quote_id() {
+        let quote = load_mainnet_quote();
+        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH);
+        let creation = OrderCreation::from_signed_order_data(
+            signed,
+            Signature::default(),
+            quote.from,
+            EMPTY_APP_DATA_JSON.to_owned(),
+            None,
+        );
+        let body = serde_json::to_value(&creation).unwrap();
+        assert!(body.get("quoteId").is_none());
     }
 }

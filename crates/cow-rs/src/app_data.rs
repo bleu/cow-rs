@@ -40,6 +40,21 @@ impl AsRef<[u8]> for AppDataHash {
     }
 }
 
+/// `keccak256("{}")` — the digest of the canonical empty app-data document.
+///
+/// The orderbook accepts an unset / empty app-data digest, but for fixtures
+/// and tests we mirror cow-sdk's convention of explicitly pinning the empty
+/// document.
+pub const EMPTY_APP_DATA_HASH: AppDataHash = AppDataHash(hex_literal::hex!(
+    "b48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d"
+));
+
+/// JSON representation of the empty app-data document (`"{}"`).
+///
+/// Paired with [`EMPTY_APP_DATA_HASH`] when submitting orders without
+/// custom app-data metadata.
+pub const EMPTY_APP_DATA_JSON: &str = "{}";
+
 impl Serialize for AppDataHash {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -103,5 +118,14 @@ mod tests {
             serde_json::json!("0000000000000000000000000000000000000000000000000000000000000000");
         let result: Result<AppDataHash, _> = serde_json::from_value(json);
         assert!(result.is_err());
+    }
+
+    /// Lock [`EMPTY_APP_DATA_HASH`] against `keccak256("{}")` — any drift
+    /// would either break interop with cow-sdk fixtures or signal that the
+    /// canonical empty document changed.
+    #[test]
+    fn empty_app_data_hash_matches_keccak() {
+        let computed = alloy_primitives::keccak256(EMPTY_APP_DATA_JSON);
+        assert_eq!(EMPTY_APP_DATA_HASH.0, *computed);
     }
 }

@@ -126,6 +126,21 @@ impl OrderData {
             self.valid_to,
         )
     }
+
+    /// Sign this order with an ECDSA signer. Equivalent to calling
+    /// [`crate::signature::EcdsaSignature::sign`] over
+    /// [`OrderData::hash_struct`] and promoting the result into a
+    /// [`crate::signature::Signature`].
+    pub fn sign<S: alloy_signer::SignerSync>(
+        &self,
+        scheme: crate::signing_scheme::EcdsaSigningScheme,
+        domain: &DomainSeparator,
+        signer: &S,
+    ) -> Result<crate::signature::Signature, crate::signature::SignatureError> {
+        let ecdsa =
+            crate::signature::EcdsaSignature::sign(scheme, domain, &self.hash_struct(), signer)?;
+        Ok(ecdsa.to_signature(scheme))
+    }
 }
 
 /// Direction of an order — whether the owner is fixing the buy side or the
