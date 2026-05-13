@@ -1,0 +1,16 @@
+/target
+**/*.rs.bk
+Cargo.lock
+Cargo.lock.bak
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+
+# Recon and synthesis artefacts (kept out of upstream)
+/recon
