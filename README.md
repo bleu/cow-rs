@@ -233,10 +233,31 @@ const signatureHex = await walletClient.signTypedData({ account: ACCOUNT, ...pay
 
 // ethers v6
 const signatureHex = await ethersSigner.signTypedData(
-  payload.domain, { Order: payload.types.Order }, payload.message,
+  payload.domain, payload.types, payload.message,
 );
 
-// either path → (r, s, v)
+// raw EIP-1193 (window.ethereum, WalletConnect, Safe SDK): viem and
+// ethers both throw if `types` contains an `EIP712Domain` entry, so
+// the shim deliberately omits it. The raw `eth_signTypedData_v4` RPC
+// needs it, so inject before stringifying:
+const v4 = {
+  ...payload,
+  types: {
+    EIP712Domain: [
+      { name: 'name',              type: 'string'  },
+      { name: 'version',           type: 'string'  },
+      { name: 'chainId',           type: 'uint256' },
+      { name: 'verifyingContract', type: 'address' },
+    ],
+    ...payload.types,
+  },
+};
+const signatureHex = await window.ethereum.request({
+  method: 'eth_signTypedData_v4',
+  params: [ACCOUNT, JSON.stringify(v4)],
+});
+
+// any path → (r, s, v)
 const bytes = hexToBytes(signatureHex); // or ethers.getBytes
 const sig = {
   signingScheme: 'eip712',
