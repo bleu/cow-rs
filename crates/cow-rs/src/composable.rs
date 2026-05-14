@@ -24,8 +24,9 @@
 //!
 //! [cc]: https://github.com/nullislabs/composable-cow
 
-use alloy_primitives::{Address, address};
-use alloy_sol_types::sol;
+use alloy_primitives::{Address, B256, Bytes, U256, address, keccak256};
+use alloy_sol_types::{SolValue, sol};
+use std::fmt::{self, Display};
 
 use crate::chain::Chain;
 
@@ -41,6 +42,30 @@ sol! {
         address handler;
         bytes32 salt;
         bytes staticInput;
+    }
+
+    /// Per-part static input for the canonical `TWAP` handler.
+    ///
+    /// Mirrors `TWAPOrder.Data` in
+    /// [`composable-cow/src/types/twap/libraries/TWAPOrder.sol`][src].
+    /// All ten fields are static, so ABI-encoding the struct produces
+    /// `10 * 32 = 320` bytes that match
+    /// `eth_abi.encode(["(address,address,address,uint256,uint256,uint256,uint256,uint256,uint256,bytes32)"], [[...]])`
+    /// byte for byte (cow-py's `Twap.encode_static_input`).
+    ///
+    /// [src]: https://github.com/nullislabs/composable-cow/blob/main/src/types/twap/libraries/TWAPOrder.sol
+    #[derive(Debug, Eq, Hash, PartialEq)]
+    struct TwapStaticInput {
+        address sellToken;
+        address buyToken;
+        address receiver;
+        uint256 partSellAmount;
+        uint256 minPartLimit;
+        uint256 t0;
+        uint256 n;
+        uint256 t;
+        uint256 span;
+        bytes32 appData;
     }
 
     /// Pointer to off-chain merkle proofs, recorded by
@@ -176,6 +201,185 @@ impl Chain {
     }
 }
 
+/// Canonical CREATE2 address of the `TWAP` handler, identical on every
+/// chain where the ComposableCoW suite is deployed.
+///
+/// Source: `composable-cow/networks.json` and cow-py's
+/// `TWAP_ADDRESS` (`cowdao_cowpy/composable/order_types/twap.py:24`).
+pub const TWAP_HANDLER: Address = address!("0x6cF1e9cA41f7611dEf408122793c358a3d11E5a5");
+
+/// When a TWAP becomes active.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum TwapStart {
+    /// Start at the block timestamp the registration is mined in. The
+    /// watch tower reads the timestamp through the
+    /// [`CURRENT_BLOCK_TIMESTAMP_FACTORY`].
+    AtMiningTime,
+    /// Start at a specific Unix timestamp (seconds). Must fit in `u32`.
+    AtEpoch(u32),
+}
+
+/// How long each TWAP part is fillable for, within its slot.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum TwapDuration {
+    /// Part is fillable for the full slot (`span = 0`).
+    Auto,
+    /// Part is fillable for the first `seconds` of its slot only; must
+    /// be `<= time_between_parts` (the TWAP handler reverts otherwise).
+    LimitDuration(u32),
+}
+
+/// User-facing TWAP order parameters. Mirrors `TwapData` in
+/// `cowdao_cowpy/composable/order_types/twap.py`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct TwapData {
+    /// Token the owner sells.
+    pub sell_token: Address,
+    /// Token the owner buys.
+    pub buy_token: Address,
+    /// Receiver of the buy token. Set to the owner address for self-fills.
+    pub receiver: Address,
+    /// Total sell amount across every part, in atomic units. The handler
+    /// is given `sell_amount / number_of_parts` per part.
+    pub sell_amount: U256,
+    /// Total minimum buy amount across every part, in atomic units. The
+    /// handler enforces `buy_amount / number_of_parts` per part.
+    pub buy_amount: U256,
+    /// Seconds between part start timestamps. Must be > 0 and
+    /// <= 365 days (the handler reverts outside that range).
+    pub time_between_parts: u32,
+    /// Number of parts. Must be > 1 (the handler reverts otherwise).
+    pub number_of_parts: u32,
+    /// When the TWAP becomes active.
+    pub start: TwapStart,
+    /// How long each part is fillable for.
+    pub duration: TwapDuration,
+    /// 32-byte app-data digest applied to every discrete part.
+    pub app_data: B256,
+}
+
+/// Failures returned by [`TwapData::static_input`] /
+/// [`TwapData::encode_static_input`] / [`TwapData::leaf_id`].
+///
+/// Mirrors the `OrderNotValid(string)` reverts raised by `TWAPOrder.validate`
+/// in composable-cow; client-side validation lets callers reject malformed
+/// TWAPs without paying the on-chain revert cost.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TwapError {
+    /// `sell_token == buy_token`.
+    SameToken,
+    /// One of the tokens is the zero address.
+    InvalidToken,
+    /// `sell_amount == 0` or doesn't divide cleanly into a non-zero
+    /// per-part amount.
+    InvalidSellAmount,
+    /// `buy_amount == 0` or doesn't divide cleanly into a non-zero
+    /// per-part amount.
+    InvalidBuyAmount,
+    /// `number_of_parts <= 1`.
+    InvalidNumParts,
+    /// `time_between_parts == 0` or `> 365 days`.
+    InvalidFrequency,
+    /// `LimitDuration(span)` with `span > time_between_parts`.
+    InvalidSpan,
+}
+
+impl Display for TwapError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::SameToken => "TWAP sell_token equals buy_token",
+            Self::InvalidToken => "TWAP token is the zero address",
+            Self::InvalidSellAmount => "TWAP sell amount is zero or smaller than number_of_parts",
+            Self::InvalidBuyAmount => "TWAP buy amount is zero or smaller than number_of_parts",
+            Self::InvalidNumParts => "TWAP number_of_parts must be > 1",
+            Self::InvalidFrequency => "TWAP time_between_parts must be > 0 and <= 365 days",
+            Self::InvalidSpan => "TWAP LimitDuration span must be <= time_between_parts",
+        })
+    }
+}
+
+impl std::error::Error for TwapError {}
+
+const TWAP_MAX_FREQUENCY_SECONDS: u32 = 365 * 24 * 60 * 60;
+
+impl TwapData {
+    /// Validate the parameters and lower to the canonical
+    /// [`TwapStaticInput`] the handler sees, splitting the total amounts
+    /// across `number_of_parts`.
+    pub fn static_input(&self) -> Result<TwapStaticInput, TwapError> {
+        if self.sell_token == self.buy_token {
+            return Err(TwapError::SameToken);
+        }
+        if self.sell_token == Address::ZERO || self.buy_token == Address::ZERO {
+            return Err(TwapError::InvalidToken);
+        }
+        if self.number_of_parts <= 1 {
+            return Err(TwapError::InvalidNumParts);
+        }
+        if self.time_between_parts == 0 || self.time_between_parts > TWAP_MAX_FREQUENCY_SECONDS {
+            return Err(TwapError::InvalidFrequency);
+        }
+        let span = match self.duration {
+            TwapDuration::Auto => 0,
+            TwapDuration::LimitDuration(s) => {
+                if s > self.time_between_parts {
+                    return Err(TwapError::InvalidSpan);
+                }
+                s
+            }
+        };
+        let t0 = match self.start {
+            TwapStart::AtMiningTime => 0,
+            TwapStart::AtEpoch(s) => s,
+        };
+        let n = U256::from(self.number_of_parts);
+        let part_sell_amount = self.sell_amount / n;
+        let min_part_limit = self.buy_amount / n;
+        if part_sell_amount.is_zero() {
+            return Err(TwapError::InvalidSellAmount);
+        }
+        if min_part_limit.is_zero() {
+            return Err(TwapError::InvalidBuyAmount);
+        }
+        Ok(TwapStaticInput {
+            sellToken: self.sell_token,
+            buyToken: self.buy_token,
+            receiver: self.receiver,
+            partSellAmount: part_sell_amount,
+            minPartLimit: min_part_limit,
+            t0: U256::from(t0),
+            n,
+            t: U256::from(self.time_between_parts),
+            span: U256::from(span),
+            appData: self.app_data,
+        })
+    }
+
+    /// Validate the parameters and ABI-encode the canonical static input.
+    /// Locked byte-exact against cow-py via the
+    /// `twap_leaf_id_matches_cow_py_vector` test.
+    pub fn encode_static_input(&self) -> Result<Vec<u8>, TwapError> {
+        Ok(self.static_input()?.abi_encode())
+    }
+
+    /// Wrap into a [`ConditionalOrderParams`] with the canonical
+    /// [`TWAP_HANDLER`] address.
+    pub fn into_params(&self, salt: B256) -> Result<ConditionalOrderParams, TwapError> {
+        Ok(ConditionalOrderParams {
+            handler: TWAP_HANDLER,
+            salt,
+            staticInput: Bytes::from(self.encode_static_input()?),
+        })
+    }
+
+    /// Compute the canonical leaf id
+    /// `keccak256(abi.encode(ConditionalOrderParams))` for this TWAP and
+    /// salt. Matches `ConditionalOrder.id` in cow-py.
+    pub fn leaf_id(&self, salt: B256) -> Result<B256, TwapError> {
+        Ok(keccak256(self.into_params(salt)?.abi_encode()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloy_primitives::{B256, Bytes, U256, hex, keccak256};
@@ -292,6 +496,106 @@ mod tests {
         assert_eq!(
             ComposableCoW::SwapGuardSet::SIGNATURE_HASH,
             keccak256("SwapGuardSet(address,address)")
+        );
+    }
+
+    /// Locks the TWAP leaf-id derivation against cow-py's canonical
+    /// vector at `cow-py::tests/composable/order_types/test_twap.py:23`.
+    /// If `TwapStaticInput::abi_encode` ever drifts from
+    /// `eth_abi.encode("(address,...,bytes32)", ...)`, the id mismatches
+    /// and the watch tower can't find the order.
+    #[test]
+    fn twap_leaf_id_matches_cow_py_vector() {
+        let twap = TwapData {
+            sell_token: address!("6810e776880C02933D47DB1b9fc05908e5386b96"),
+            buy_token: address!("DAE5F1590db13E3B40423B5b5c5fbf175515910b"),
+            receiver: address!("DeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF"),
+            sell_amount: U256::from(1_000_000_000_000_000_000_u128),
+            buy_amount: U256::from(1_000_000_000_000_000_000_u128),
+            time_between_parts: 3600,
+            number_of_parts: 10,
+            start: TwapStart::AtMiningTime,
+            duration: TwapDuration::Auto,
+            app_data: B256::from(hex!(
+                "d51f28edffcaaa76be4a22f6375ad289272c037f3cc072345676e88d92ced8b5"
+            )),
+        };
+        let salt = B256::from(hex!(
+            "d98a87ed4e45bfeae3f779e1ac09ceacdfb57da214c7fffa6434aeb969f396c0"
+        ));
+        let id = twap.leaf_id(salt).unwrap();
+        assert_eq!(
+            id.0,
+            hex!("d8a6889486a47d8ca8f4189f11573b39dbc04f605719ebf4050e44ae53c1bedf"),
+        );
+
+        // Second cow-py vector with a different salt; same TwapData
+        // produces a different id, confirming the salt path.
+        let salt2 = B256::from(hex!(
+            "d98a87ed4e45bfeae3f779e1ac09ceacdfb57da214c7fffa6434aeb969f396c1"
+        ));
+        let id2 = twap.leaf_id(salt2).unwrap();
+        assert_eq!(
+            id2.0,
+            hex!("8ddb7e8e1cd6a06d5bb6f91af21a2b26a433a5d8402ccddb00a72e4006c46994"),
+        );
+    }
+
+    /// Validation must reject parameter combinations the on-chain
+    /// `TWAPOrder.validate` reverts on.
+    #[test]
+    fn twap_validation_rejects_invalid_parameters() {
+        let base = TwapData {
+            sell_token: address!("6810e776880C02933D47DB1b9fc05908e5386b96"),
+            buy_token: address!("DAE5F1590db13E3B40423B5b5c5fbf175515910b"),
+            receiver: address!("DeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF"),
+            sell_amount: U256::from(1_000_000_000_000_000_000_u128),
+            buy_amount: U256::from(1_000_000_000_000_000_000_u128),
+            time_between_parts: 3600,
+            number_of_parts: 10,
+            start: TwapStart::AtMiningTime,
+            duration: TwapDuration::Auto,
+            app_data: B256::ZERO,
+        };
+        assert!(base.static_input().is_ok());
+
+        let mut same_token = base;
+        same_token.buy_token = base.sell_token;
+        assert_eq!(same_token.static_input().unwrap_err(), TwapError::SameToken);
+
+        let mut zero_sell = base;
+        zero_sell.sell_token = alloy_primitives::Address::ZERO;
+        assert_eq!(
+            zero_sell.static_input().unwrap_err(),
+            TwapError::InvalidToken
+        );
+
+        let mut one_part = base;
+        one_part.number_of_parts = 1;
+        assert_eq!(
+            one_part.static_input().unwrap_err(),
+            TwapError::InvalidNumParts
+        );
+
+        let mut zero_freq = base;
+        zero_freq.time_between_parts = 0;
+        assert_eq!(
+            zero_freq.static_input().unwrap_err(),
+            TwapError::InvalidFrequency
+        );
+
+        let mut excess_span = base;
+        excess_span.duration = TwapDuration::LimitDuration(7200);
+        assert_eq!(
+            excess_span.static_input().unwrap_err(),
+            TwapError::InvalidSpan
+        );
+
+        let mut tiny_sell = base;
+        tiny_sell.sell_amount = U256::from(5_u64); // 5 / 10 = 0
+        assert_eq!(
+            tiny_sell.static_input().unwrap_err(),
+            TwapError::InvalidSellAmount
         );
     }
 

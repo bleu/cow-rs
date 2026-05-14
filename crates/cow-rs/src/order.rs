@@ -210,9 +210,15 @@ impl OrderBuilder {
         Self(data)
     }
 
-    /// Set the order recipient. `None` defaults the receiver to the owner.
-    pub const fn receiver(mut self, receiver: Option<Address>) -> Self {
-        self.0.receiver = receiver;
+    /// Set the order recipient. `None` (and `Some(Address::ZERO)`) default
+    /// the receiver to the owner; the explicit zero is normalised to `None`
+    /// so the wire form, signed hash and contract decoding all agree
+    /// (`cow-sdk` and `cow-py` treat the two as the same sentinel).
+    pub fn receiver(mut self, receiver: Option<Address>) -> Self {
+        self.0.receiver = match receiver {
+            Some(addr) if addr == Address::ZERO => None,
+            other => other,
+        };
         self
     }
 
@@ -389,6 +395,38 @@ impl OrderKind {
             Self::Sell => "sell",
         }
     }
+
+    /// 32-byte EIP-712 encoding of this variant for inclusion in `hash_struct`.
+    pub const fn as_bytes(self) -> [u8; 32] {
+        match self {
+            Self::Buy => Self::BUY,
+            Self::Sell => Self::SELL,
+        }
+    }
+
+    /// Parse the 32-byte on-chain marker (as returned by `GPv2Order.Data.kind`)
+    /// into a Rust enum. Returns `None` for unknown markers; the contract
+    /// itself only ever writes `BUY` or `SELL`.
+    pub const fn from_contract_bytes(bytes: [u8; 32]) -> Option<Self> {
+        if matches_bytes(&bytes, &Self::BUY) {
+            Some(Self::Buy)
+        } else if matches_bytes(&bytes, &Self::SELL) {
+            Some(Self::Sell)
+        } else {
+            None
+        }
+    }
+}
+
+const fn matches_bytes(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    let mut i = 0;
+    while i < 32 {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 impl Display for OrderKind {
@@ -430,6 +468,21 @@ impl SellTokenSource {
             Self::Internal => Self::INTERNAL,
         }
     }
+
+    /// Parse the 32-byte on-chain marker (as returned by
+    /// `GPv2Order.Data.sellTokenBalance`) into a Rust enum. Returns `None`
+    /// for unknown markers.
+    pub const fn from_contract_bytes(bytes: [u8; 32]) -> Option<Self> {
+        if matches_bytes(&bytes, &Self::ERC20) {
+            Some(Self::Erc20)
+        } else if matches_bytes(&bytes, &Self::EXTERNAL) {
+            Some(Self::External)
+        } else if matches_bytes(&bytes, &Self::INTERNAL) {
+            Some(Self::Internal)
+        } else {
+            None
+        }
+    }
 }
 
 /// Destination to which `buyAmount` is paid out to the receiver on fulfilment.
@@ -456,6 +509,19 @@ impl BuyTokenDestination {
         match self {
             Self::Erc20 => Self::ERC20,
             Self::Internal => Self::INTERNAL,
+        }
+    }
+
+    /// Parse the 32-byte on-chain marker (as returned by
+    /// `GPv2Order.Data.buyTokenBalance`) into a Rust enum. Returns `None`
+    /// for unknown markers.
+    pub const fn from_contract_bytes(bytes: [u8; 32]) -> Option<Self> {
+        if matches_bytes(&bytes, &Self::ERC20) {
+            Some(Self::Erc20)
+        } else if matches_bytes(&bytes, &Self::INTERNAL) {
+            Some(Self::Internal)
+        } else {
+            None
         }
     }
 }

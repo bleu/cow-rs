@@ -34,11 +34,14 @@
 //! - [`ConditionalOrderParams`], [`Proof`] and [`PollOutcome`] for the
 //!   `ComposableCoW` conditional-order primitives, plus the
 //!   [`COMPOSABLE_COW`], [`EXTENSIBLE_FALLBACK_HANDLER`] and
-//!   [`CURRENT_BLOCK_TIMESTAMP_FACTORY`] address constants. Handler-
-//!   specific `staticInput` payloads (TWAP, GoodAfterTime, StopLoss,
-//!   etc.) are deliberately out of scope: encode them with your
-//!   preferred ABI library or generate bindings against the canonical
-//!   Solidity in `nullislabs/composable-cow`.
+//!   [`CURRENT_BLOCK_TIMESTAMP_FACTORY`] address constants.
+//! - [`TwapData`] / [`TwapStaticInput`] for the canonical TWAP handler
+//!   `staticInput`, locked byte-conformant against cow-py's
+//!   `test_twap.py` vector.
+//! - [`Multiplexer`] plus [`conditional_order_leaf`] / [`verify_proof`]
+//!   for batched conditional orders behind a single
+//!   `ComposableCoW.setRoot`, matching the contract's OpenZeppelin
+//!   sorted-pair merkle proof verifier exactly.
 //!
 //! ## Quote example
 //!
@@ -87,6 +90,7 @@ pub mod contracts;
 pub mod domain;
 pub mod error;
 pub mod eth_flow;
+pub mod multiplexer;
 pub mod order;
 pub mod order_book;
 pub mod signature;
@@ -104,7 +108,8 @@ pub use crate::{
     chain::{Chain, UnsupportedChain},
     composable::{
         COMPOSABLE_COW, CURRENT_BLOCK_TIMESTAMP_FACTORY, ComposableCoW, ConditionalOrderParams,
-        EXTENSIBLE_FALLBACK_HANDLER, PollOutcome, Proof,
+        EXTENSIBLE_FALLBACK_HANDLER, PollOutcome, Proof, TWAP_HANDLER, TwapData, TwapDuration,
+        TwapError, TwapStart, TwapStaticInput,
     },
     contracts::{
         CoWSwapOnchainOrders, ERC20, GPV2_SETTLEMENT, GPV2_VAULT_RELAYER, GPv2OrderData,
@@ -113,12 +118,13 @@ pub use crate::{
     domain::{DomainSeparator, hashed_eip712_message, hashed_ethsign_message},
     error::{ApiError, Error, Result},
     eth_flow::{ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowOrder},
+    multiplexer::{Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof},
     order::{
         BUY_ETH_ADDRESS, BuyTokenDestination, Order, OrderBuilder, OrderClass, OrderData,
         OrderKind, OrderStatus, OrderUid, SellTokenSource,
     },
     order_book::{
-        AppDataDocument, AuctionStatus, AuctionStatusType, NativePrice, OrderBookApi,
+        AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderBookApi,
         OrderCreation, OrderQuote, OrderQuoteResponse, PriceQuality, QuoteRequest, TokenMetadata,
         TotalSurplus, Trade,
     },

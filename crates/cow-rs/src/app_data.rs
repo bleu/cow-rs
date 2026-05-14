@@ -249,11 +249,17 @@ impl Serialize for AppDataPartnerFee {
                 // and is still accepted by the upstream deserializer.
                 map.serialize_entry("bps", &bps)?;
             }
-            FeePolicy::Surplus { bps, max_volume_bps } => {
+            FeePolicy::Surplus {
+                bps,
+                max_volume_bps,
+            } => {
                 map.serialize_entry("surplusBps", &bps)?;
                 map.serialize_entry("maxVolumeBps", &max_volume_bps)?;
             }
-            FeePolicy::PriceImprovement { bps, max_volume_bps } => {
+            FeePolicy::PriceImprovement {
+                bps,
+                max_volume_bps,
+            } => {
                 map.serialize_entry("priceImprovementBps", &bps)?;
                 map.serialize_entry("maxVolumeBps", &max_volume_bps)?;
             }
@@ -293,7 +299,10 @@ impl<'de> Deserialize<'de> for AppDataPartnerFee {
                 volume_bps: None,
                 bps: None,
                 ..
-            } => FeePolicy::Surplus { bps, max_volume_bps },
+            } => FeePolicy::Surplus {
+                bps,
+                max_volume_bps,
+            },
             Helper {
                 surplus_bps: None,
                 max_volume_bps: Some(max_volume_bps),
@@ -301,7 +310,10 @@ impl<'de> Deserialize<'de> for AppDataPartnerFee {
                 volume_bps: None,
                 bps: None,
                 ..
-            } => FeePolicy::PriceImprovement { bps, max_volume_bps },
+            } => FeePolicy::PriceImprovement {
+                bps,
+                max_volume_bps,
+            },
             Helper {
                 surplus_bps: None,
                 max_volume_bps: None,
@@ -950,7 +962,8 @@ mod tests {
         // app-data hashes stay stable. The `recipient` is in the same
         // flat object, not nested under `policy`.
         assert!(
-            json.to_lowercase().contains(r#""partnerfee":{"bps":75,"recipient":"#),
+            json.to_lowercase()
+                .contains(r#""partnerfee":{"bps":75,"recipient":"#),
             "got: {json}",
         );
         let parsed: AppDataDoc = serde_json::from_str(&json).unwrap();
@@ -1019,9 +1032,7 @@ mod tests {
     #[test]
     fn partner_fee_deserialises_volume_bps_alias() {
         let recipient = address!("00000000219AB540356CBb839CbE05303D7705FA");
-        let json = format!(
-            r#"{{"volumeBps":42,"recipient":"{recipient:?}"}}"#,
-        );
+        let json = format!(r#"{{"volumeBps":42,"recipient":"{recipient:?}"}}"#,);
         let fee: AppDataPartnerFee = serde_json::from_str(&json).unwrap();
         assert!(matches!(fee.policy, FeePolicy::Volume { bps: 42 }));
         assert_eq!(fee.recipient, recipient);
@@ -1055,7 +1066,10 @@ mod tests {
             "amount must serialise as decimal string, got: {json}",
         );
         let parsed: AppDataDoc = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.metadata.flashloan.expect("flashloan preserved"), flashloan);
+        assert_eq!(
+            parsed.metadata.flashloan.expect("flashloan preserved"),
+            flashloan
+        );
     }
 
     /// `metadata.replacedOrder.uid` round-trips through the wire form.
@@ -1064,9 +1078,15 @@ mod tests {
         let uid = OrderUid([0x55; 56]);
         let doc = AppDataDoc::new("app").with_replaced_order(uid);
         let json = doc.canonical_json();
-        assert!(json.contains(r#""replacedOrder":{"uid":"0x"#), "got: {json}");
+        assert!(
+            json.contains(r#""replacedOrder":{"uid":"0x"#),
+            "got: {json}"
+        );
         let parsed: AppDataDoc = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.metadata.replaced_order.expect("replaced order").uid, uid);
+        assert_eq!(
+            parsed.metadata.replaced_order.expect("replaced order").uid,
+            uid
+        );
     }
 
     /// `metadata.wrappers[]` round-trips with hex-encoded call data, and

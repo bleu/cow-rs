@@ -8,6 +8,7 @@
 use alloy_primitives::{Address, B256, U256};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
+use std::collections::BTreeMap;
 
 use crate::app_data::AppDataHash;
 use crate::cancellation::{OrderCancellation, SignedOrderCancellations};
@@ -135,6 +136,41 @@ pub struct NativePrice {
 pub struct TotalSurplus {
     /// User's cumulative surplus across all settled orders.
     pub total_surplus: String,
+}
+
+/// Snapshot returned by `GET /api/v1/auction`.
+///
+/// The endpoint is permissioned (intended for solvers; CoW grants access on
+/// request), so most integrators will only see the unauthenticated 403 from
+/// the public proxy. We expose the top-level fields ourselves and keep the
+/// per-order array as opaque JSON: `AuctionOrder` carries solver-relevant
+/// fields that drift across CIP changes and that we have no way to lock
+/// byte-conformance for without solver access.
+#[serde_as]
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Auction {
+    /// Monotonically increasing auction identifier (absent during reorgs).
+    #[serde(default)]
+    pub id: Option<u64>,
+    /// Block the auction was anchored on; orders, prices and proposed
+    /// settlements are valid at this block.
+    #[serde(default)]
+    pub block: Option<u64>,
+    /// Solvable orders. Opaque JSON; deserialise into your own
+    /// `AuctionOrder` shape if you need typed fields (the schema is
+    /// volatile across CIP-67 / CIP-20).
+    #[serde(default)]
+    pub orders: Option<serde_json::Value>,
+    /// External prices indexed by token address (decimal-string atomic
+    /// units in the chain's native token).
+    #[serde_as(as = "Option<BTreeMap<_, DisplayFromStr>>")]
+    #[serde(default)]
+    pub prices: Option<BTreeMap<Address, U256>>,
+    /// JIT order owners whose surplus counts towards the solver's
+    /// objective value.
+    #[serde(default)]
+    pub surplus_capturing_jit_order_owners: Option<Vec<Address>>,
 }
 
 /// Per-token metadata returned by `GET /api/v1/token/{token}/metadata`.
@@ -746,10 +782,17 @@ impl OrderCreation {
                 reason: "owner address must be non-zero",
             });
         }
+        // `Some(Address::ZERO)` and `None` mean the same thing (use owner)
+        // but cow-sdk and cow-py emit `None` on the wire. Normalise so the
+        // wire payload, signed hash and contract decoding always agree.
+        let receiver = match order_data.receiver {
+            Some(addr) if addr == Address::ZERO => None,
+            other => other,
+        };
         Ok(Self {
             sell_token: order_data.sell_token,
             buy_token: order_data.buy_token,
-            receiver: order_data.receiver,
+            receiver,
             sell_amount: order_data.sell_amount,
             buy_amount: order_data.buy_amount,
             valid_to: order_data.valid_to,
@@ -965,6 +1008,18 @@ impl OrderBookApi {
     pub async fn orders_by_tx(&self, tx_hash: B256) -> Result<Vec<Order>> {
         self.get_json(&format!("api/v1/transactions/{tx_hash:?}/orders"))
             .await
+    }
+
+    /// `GET /api/v1/auction`: the current batch auction snapshot.
+    ///
+    /// Permissioned: the public-facing proxy returns `403 Forbidden` to
+    /// unauthenticated callers. The CoW autopilot exposes it to solvers
+    /// (access granted on request). The method is shipped here for parity
+    /// with cow-py and cow-sdk; the auction shape is solver-oriented and
+    /// changes across CIP-20 / CIP-67, so the per-order array is left as
+    /// raw JSON.
+    pub async fn get_auction(&self) -> Result<Auction> {
+        self.get_json("api/v1/auction").await
     }
 
     /// `GET /api/v1/users/{user}/total_surplus`: cumulative surplus the
