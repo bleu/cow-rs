@@ -16,6 +16,14 @@ categories = ["cryptography::cryptocurrencies", "api-bindings", "wasm"]
 [lints]
 workspace = true
 
+[features]
+default = ["subgraph"]
+# The CoW subgraph GraphQL client lives on its own URL and is only
+# useful for indexer / analytics integrations; size-sensitive consumers
+# (notably the wasm shim) build with `--no-default-features` to drop
+# the module entirely.
+subgraph = []
+
 [dependencies]
 alloy-primitives.workspace = true
 alloy-signer.workspace = true

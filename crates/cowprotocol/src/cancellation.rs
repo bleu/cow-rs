@@ -33,7 +33,8 @@ use {
 /// Signed cancellation of a single order. Mirrors `cowprotocol/services`
 /// `OrderCancellation` exactly so any future on-chain verification path
 /// stays interoperable.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OrderCancellation {
     /// UID of the order being cancelled.
     pub order_uid: OrderUid,
@@ -275,5 +276,26 @@ mod tests {
         assert!(body["orderUids"].is_array());
         assert_eq!(body["signingScheme"], "eip712");
         assert!(body["signature"].as_str().unwrap().starts_with("0x"));
+    }
+
+    /// `OrderCancellation` round-trips through JSON: serialise, deserialise,
+    /// compare. Lets wasm callers (and any other JSON consumer) hand the
+    /// type back and forth without losing fields.
+    #[test]
+    fn order_cancellation_json_round_trip() {
+        let original = OrderCancellation::sign(
+            OrderUid([0x77; 56]),
+            EcdsaSigningScheme::Eip712,
+            &DomainSeparator(B256::repeat_byte(0xab).into()),
+            &fixed_signer(),
+        )
+        .unwrap();
+        let json = serde_json::to_string(&original).unwrap();
+        let parsed: OrderCancellation = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, original);
+        // Wire keys are camelCase, matching the orderbook OpenAPI.
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(value.get("orderUid").is_some());
+        assert!(value.get("signingScheme").is_some());
     }
 }

@@ -88,7 +88,7 @@ println!("https://explorer.cow.fi/orders/{uid}");
 # Ok(()) }
 ```
 
-See [`examples/post_order.rs`](crates/cow-rs/examples/post_order.rs)
+See [`examples/post_order.rs`](crates/cowprotocol/examples/post_order.rs)
 for the same flow on Sepolia, runnable with a private key in the
 environment.
 
@@ -151,10 +151,51 @@ cow-rs targets `wasm32-unknown-unknown`:
   non-wasm only.
 - CI gates `cargo check --target wasm32-unknown-unknown` on every
   push.
-- `crates/cow-rs-wasm/` ships a `#[wasm_bindgen]` shim and
+- `crates/cow-sdk-wasm/` ships a `#[wasm_bindgen]` shim and
   `test-harness/index.html` drives `get_quote` and `compute_order_uid`
   against the live orderbook from a real browser. Run with
   `just wasm-harness`.
+
+### Build targets and bundle size
+
+`wasm-pack` produces a different JS glue per target, with the same
+underlying `.wasm` binary. The release recipes are:
+
+| Target  | Recipe                    | Output dir   | Consumers                |
+| ------- | ------------------------- | ------------ | ------------------------ |
+| web     | `just wasm-build-web`     | `pkg-web/`   | Browser ES modules.      |
+| bundler | `just wasm-build-bundler` | `pkg-bundler/` | webpack / Vite / Rollup. |
+| nodejs  | `just wasm-build-nodejs`  | `pkg-nodejs/` | Node 18+, CommonJS.      |
+
+`just wasm-build-all` builds all three; `just wasm-size` reports the
+post-`wasm-opt` `.wasm` byte counts. The wasm binary is byte-identical
+across targets, so an eventual npm package can ship one `.wasm` plus
+three JS glues with an `exports` map.
+
+Size knobs applied (`crates/cow-sdk-wasm/Cargo.toml` +
+workspace `[profile.release]`):
+
+- `wasm-opt -Oz` over the default `-O`: binaryen biases for binary
+  size (~30% smaller).
+- `[profile.release]`: `lto = "fat"`, `opt-level = "z"`,
+  `panic = "abort"`, `strip = true`. Workspace-only — crates.io
+  consumers use their own profile.
+- `cowprotocol = { default-features = false }`: drops the `subgraph`
+  GraphQL client; not reachable from JS.
+- `lol_alloc` global allocator (~5 KB vs dlmalloc's ~10 KB); enable
+  by adding `mod allocator;` to the wasm crate's `lib.rs`.
+- `in_shim_signing` cargo feature, default-off: gates
+  `alloy-signer` + `alloy-signer-local` so the default build ships
+  hash builders only. Saves ~68 KB; integrators sign with
+  viem / ethers / Safe and submit the (r, s, v) bag back through
+  `build_order_creation`.
+
+Current `.wasm` after `wasm-opt -Oz`:
+
+```
+default features              652 KB
++ --features in_shim_signing  720 KB
+```
 
 ## Conformance
 
@@ -200,16 +241,16 @@ just test         # cargo test --all-targets --all-features --workspace
 just clippy       # cargo clippy ... -- -Dwarnings
 just fmt-check
 just wasm-check   # cargo check --target wasm32-unknown-unknown ...
-just wasm-harness # build cow-rs-wasm and serve test-harness/ on :8765
+just wasm-harness # build cow-sdk-wasm and serve test-harness/ on :8765
 just doc          # cargo doc with -D warnings
 ```
 
 ## Layout
 
 ```
-crates/cow-rs/                # Library crate; everything re-exported from the root
-crates/cow-rs/examples/       # get_quote.rs, post_order.rs
-crates/cow-rs-wasm/           # #[wasm_bindgen] shim driving the in-browser harness (unpublished)
+crates/cowprotocol/                # Library crate; everything re-exported from the root
+crates/cowprotocol/examples/       # get_quote.rs, post_order.rs
+crates/cow-sdk-wasm/           # #[wasm_bindgen] shim driving the in-browser harness (unpublished)
 test-harness/                 # Static HTML harness; `just wasm-harness` to run
 tools/vector-gen/             # Node.js golden-vector generator (ethers reference)
 ```

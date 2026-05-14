@@ -20,7 +20,7 @@
 <body>
   <h1>cow-rs · wasm end-to-end harness</h1>
   <p class="meta">
-    Loads <code>crates/cow-rs-wasm/pkg/cow_rs_wasm.js</code> and exercises the
+    Loads <code>crates/cow-sdk-wasm/pkg/cow_sdk_wasm.js</code> and exercises the
     Rust SDK from the browser. Run with any static server in this repo's
     root, e.g.
     <code>python3 -m http.server 8000</code>, then open
@@ -32,7 +32,7 @@
     <p>
       Derives the order UID for a fixed sell-only order off mainnet. The
       expected value is taken from the equivalent Rust example (see
-      <code>crates/cow-rs/examples/get_quote.rs</code> downstream of
+      <code>crates/cowprotocol/examples/get_quote.rs</code> downstream of
       <code>OrderData::uid</code>).
     </p>
     <p id="uid-status" class="pending">⏳ waiting…</p>
@@ -53,7 +53,7 @@
   </section>
 
   <script type="module">
-    import init, { compute_order_uid, get_quote } from '../crates/cow-rs-wasm/pkg/cow_rs_wasm.js';
+    import init, { compute_order_uid, get_quote_simple } from '../crates/cow-sdk-wasm/pkg/cow_sdk_wasm.js';
 
     const USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
     const DAI  = '0x6B175474E89094C44Da98b954EedeAC495271d0F';
@@ -90,7 +90,7 @@
         quoteOutput.textContent = '';
         try {
           const t0 = performance.now();
-          const result = await get_quote(USDC, DAI, OWNER, '100000000');
+          const result = await get_quote_simple('mainnet', USDC, DAI, OWNER, '100000000');
           const ms = (performance.now() - t0).toFixed(0);
           quoteOutput.textContent = JSON.stringify(result, null, 2);
           if (!result?.response?.quote?.buyAmount) {

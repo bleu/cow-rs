@@ -27,7 +27,7 @@ use crate::signing_scheme::{EcdsaSigningScheme, SigningScheme};
 /// caller decides whether to commit to a digest or hand the orderbook
 /// the full document. Mirrors the `OrderCreationAppData::{Hash, Full}`
 /// variants in `cowprotocol/services/crates/model/src/quote.rs`.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum QuoteAppData {
     /// 32-byte digest only. Orderbook keeps the digest; the full
@@ -271,7 +271,7 @@ pub struct AuctionStatus {
 /// must be `Some` and it must agree with [`QuoteRequest::kind`].
 /// Use the constructors below to build a well-formed request.
 #[serde_as]
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuoteRequest {
     /// Address of the token being sold.
@@ -708,7 +708,7 @@ pub struct OrderQuoteResponse {
 /// Use [`OrderCreation::from_signed_order_data`] to assemble the body once
 /// the owner has signed [`OrderQuoteResponse::to_signed_order_data`].
 #[serde_as]
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderCreation {
     /// Token the owner is selling.
@@ -744,7 +744,10 @@ pub struct OrderCreation {
     /// Off-chain signing scheme used to authenticate the order.
     pub signing_scheme: SigningScheme,
     /// Signature bytes. Empty for [`SigningScheme::PreSign`].
-    #[serde(serialize_with = "serialise_signature_bytes")]
+    #[serde(
+        serialize_with = "serialise_signature_bytes",
+        deserialize_with = "deserialise_signature_bytes"
+    )]
     pub signature: Signature,
     /// Order owner. Required for `presign` / `eip1271`; recommended for
     /// ECDSA schemes so the server can reject malformed signatures early.
@@ -1555,6 +1558,52 @@ mod tests {
         // Sell-side adjustment is visible in the serialised body.
         let expected_sell = quote.quote.sell_amount + quote.quote.fee_amount;
         assert_eq!(body["sellAmount"], expected_sell.to_string());
+    }
+
+    /// JSON round-trip for [`OrderCreation`]. Deserialising what we
+    /// serialise lets wasm / JS consumers hand the type back across the
+    /// boundary without losing fields.
+    #[test]
+    fn order_creation_json_round_trip() {
+        let quote = load_mainnet_quote();
+        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
+        let signature = Signature::default_with(SigningScheme::Eip712);
+        let original = OrderCreation::from_signed_order_data(
+            signed,
+            signature,
+            quote.from,
+            EMPTY_APP_DATA_JSON.to_owned(),
+            Some(quote.id),
+        )
+        .unwrap();
+        let json = serde_json::to_string(&original).unwrap();
+        let parsed: OrderCreation = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.sell_token, original.sell_token);
+        assert_eq!(parsed.buy_token, original.buy_token);
+        assert_eq!(parsed.sell_amount, original.sell_amount);
+        assert_eq!(parsed.buy_amount, original.buy_amount);
+        assert_eq!(parsed.from, original.from);
+        assert_eq!(parsed.quote_id, original.quote_id);
+        assert_eq!(parsed.app_data, original.app_data);
+        assert_eq!(parsed.app_data_hash, original.app_data_hash);
+    }
+
+    /// JSON round-trip for [`QuoteRequest`]: serialise, deserialise,
+    /// serialise again, compare the JSON values. Locks the wire shape
+    /// against drift introduced by future serde-attribute tweaks.
+    #[test]
+    fn quote_request_json_round_trip() {
+        use alloy_primitives::address;
+        let original = QuoteRequest::sell_amount_before_fee(
+            address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
+            address!("6B175474E89094C44Da98b954EedeAC495271d0F"),
+            address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
+            U256::from(100_000_000_u64),
+        );
+        let first = serde_json::to_value(&original).unwrap();
+        let parsed: QuoteRequest = serde_json::from_value(first.clone()).unwrap();
+        let second = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(first, second);
     }
 
     /// `to_signed_order_data` rejects an overflowing sell-side adjustment

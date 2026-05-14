@@ -95,6 +95,7 @@ pub mod order;
 pub mod order_book;
 pub mod signature;
 pub mod signing_scheme;
+#[cfg(feature = "subgraph")]
 pub mod subgraph;
 
 pub use crate::{
@@ -130,8 +131,10 @@ pub use crate::{
     },
     signature::{EcdsaSignature, Recovered, Signature, SignatureError},
     signing_scheme::{EcdsaSigningScheme, SigningScheme},
-    subgraph::{
-        ChainSubgraphUnavailable, DailyTotal, GraphQlError, HourlyTotal, SubgraphClient,
-        SubgraphError, Totals,
-    },
+};
+
+#[cfg(feature = "subgraph")]
+pub use crate::subgraph::{
+    ChainSubgraphUnavailable, DailyTotal, GraphQlError, HourlyTotal, SubgraphClient, SubgraphError,
+    Totals,
 };

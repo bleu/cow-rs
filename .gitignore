@@ -26,4 +26,4 @@ tools/vector-gen/vectors.json
 # builds for the web / bundler / nodejs targets land in pkg-web/,
 # pkg-bundler/, pkg-nodejs/. Regenerate locally with `just wasm-build`
 # (dev) or `just wasm-build-all` (release).
-crates/cow-rs-wasm/pkg*
+crates/cow-sdk-wasm/pkg*

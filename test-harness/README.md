@@ -1,6 +1,6 @@
 # wasm end-to-end harness
 
-A static HTML page that loads the `cow-rs-wasm` crate and exercises the
+A static HTML page that loads the `cow-sdk-wasm` crate and exercises the
 cow-rs API surface from a browser. This goes one step beyond the
 `cargo check --target wasm32-unknown-unknown` gate in CI: it actually
 loads the wasm module, calls into it from JavaScript, and hits the live
@@ -22,7 +22,7 @@ them manually:
 
 ```sh
 # 1. Build the wasm package (output is git-ignored).
-(cd crates/cow-rs-wasm && wasm-pack build --target web --dev)
+(cd crates/cow-sdk-wasm && wasm-pack build --target web --dev)
 # 2. Serve the workspace over HTTP so ES-module imports resolve.
 python3 -m http.server 8765
 ```

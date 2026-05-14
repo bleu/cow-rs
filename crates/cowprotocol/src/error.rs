@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use crate::{chain::UnsupportedChain, signature::SignatureError, subgraph::SubgraphError};
+#[cfg(feature = "subgraph")]
+use crate::subgraph::SubgraphError;
+use crate::{chain::UnsupportedChain, signature::SignatureError};
 
 /// Crate-wide `Result` alias.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -51,6 +53,7 @@ pub enum Error {
 
     /// The CoW Protocol subgraph returned GraphQL errors or an
     /// unrecognised envelope.
+    #[cfg(feature = "subgraph")]
     #[error(transparent)]
     Subgraph(#[from] SubgraphError),
 
