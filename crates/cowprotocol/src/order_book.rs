@@ -624,7 +624,24 @@ impl OrderQuoteResponse {
             }
             OrderKind::Buy => (q.sell_amount, q.buy_amount),
         };
-        Ok(OrderData {
+        Ok(self.project_into_order_data(sell_amount, buy_amount, app_data))
+    }
+
+    /// Build [`OrderData`] from the response, taking the amounts and
+    /// `app_data` digest from the caller and the other ten signed fields
+    /// from `self.quote`. `fee_amount` is always zeroed: solvers price
+    /// gas at settlement time, and the caller has already folded the
+    /// quote's fee into `sell_amount` (sell-side) or accepted it
+    /// (buy-side). Private because every public projection method
+    /// must first run [`Self::check_response_matches_request`].
+    const fn project_into_order_data(
+        &self,
+        sell_amount: U256,
+        buy_amount: U256,
+        app_data: AppDataHash,
+    ) -> OrderData {
+        let q = &self.quote;
+        OrderData {
             sell_token: q.sell_token,
             buy_token: q.buy_token,
             receiver: q.receiver,
@@ -637,7 +654,7 @@ impl OrderQuoteResponse {
             partially_fillable: q.partially_fillable,
             sell_token_balance: q.sell_token_balance,
             buy_token_balance: q.buy_token_balance,
-        })
+        }
     }
 
     /// Project this quote into [`crate::quote_amounts::QuoteAmountsAndCosts`],
@@ -692,21 +709,11 @@ impl OrderQuoteResponse {
         self.check_response_matches_request(request, app_data)?;
         let amounts =
             self.amounts_with_costs(partner_fee_bps, slippage_bps, protocol_fee_bps_override)?;
-        let q = &self.quote;
-        Ok(OrderData {
-            sell_token: q.sell_token,
-            buy_token: q.buy_token,
-            receiver: q.receiver,
-            sell_amount: amounts.amounts_to_sign.sell_amount,
-            buy_amount: amounts.amounts_to_sign.buy_amount,
-            valid_to: q.valid_to,
+        Ok(self.project_into_order_data(
+            amounts.amounts_to_sign.sell_amount,
+            amounts.amounts_to_sign.buy_amount,
             app_data,
-            fee_amount: U256::ZERO,
-            kind: q.kind,
-            partially_fillable: q.partially_fillable,
-            sell_token_balance: q.sell_token_balance,
-            buy_token_balance: q.buy_token_balance,
-        })
+        ))
     }
 
     fn check_response_matches_request(
