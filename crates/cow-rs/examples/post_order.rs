@@ -43,7 +43,7 @@ use {
     alloy_signer_local::PrivateKeySigner,
     cow_rs::{
         Chain, DomainSeparator, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON, EcdsaSigningScheme,
-        OrderBookApi, OrderCreation, QuoteRequest,
+        GPV2_SETTLEMENT, OrderBookApi, OrderCreation, QuoteRequest,
     },
     std::str::FromStr,
 };
@@ -52,9 +52,6 @@ use {
 const WETH_SEPOLIA: Address = address!("fFf9976782d46CC05630D1f6eBAb18b2324d6B14");
 /// Sepolia COW. Source: `cowprotocol/contracts/networks.json`.
 const COW_SEPOLIA: Address = address!("0625aFB445C3B6B7B929342a04A22599fd5dBB59");
-/// Canonical GPv2Settlement deployment, identical on every CoW chain via
-/// CREATE2. Source: `cowprotocol/contracts/networks.json`.
-const GPV2_SETTLEMENT: Address = address!("9008D19f58AAbD9eD0D60971565AA8510560ab41");
 /// Sell amount: 0.01 WETH expressed in 18-decimal atomic units. Small
 /// enough that the orderbook will quote without bumping into liquidity
 /// floors, large enough that the quote response is meaningful.

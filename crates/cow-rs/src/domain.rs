@@ -81,19 +81,19 @@ pub fn hashed_ethsign_message(domain_separator: &DomainSeparator, struct_hash: &
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::address;
     use hex_literal::hex;
 
     use super::*;
+    use crate::contracts::GPV2_SETTLEMENT;
 
     #[test]
     fn domain_separator_sepolia() {
-        // Sepolia GPv2Settlement deployment.
+        // Locks the EIP-712 domain separator against the canonical
+        // GPv2Settlement deployment on Sepolia chain 11_155_111.
         // https://sepolia.etherscan.io/address/0x9008d19f58aabd9ed0d60971565aa8510560ab41
-        let contract = address!("9008D19f58AAbD9eD0D60971565AA8510560ab41");
         let chain_id: u64 = 11_155_111;
 
-        let computed = DomainSeparator::new(chain_id, contract);
+        let computed = DomainSeparator::new(chain_id, GPV2_SETTLEMENT);
         let expected = DomainSeparator(hex!(
             "daee378bd0eb30ddf479272accf91761e697bc00e067a268f95f1d2732ed230b"
         ));
