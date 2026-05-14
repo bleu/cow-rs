@@ -32,6 +32,9 @@
 //!   `ComposableCoW` conditional-order primitives, plus the
 //!   [`COMPOSABLE_COW`], [`EXTENSIBLE_FALLBACK_HANDLER`] and
 //!   [`CURRENT_BLOCK_TIMESTAMP_FACTORY`] address constants.
+//! - [`handlers::twap`] for the `TWAP` (time-weighted average) handler's
+//!   `staticInput` payload, with [`handlers::twap::TWAP_HANDLER`] the
+//!   deployment address.
 //!
 //! ## Quote example
 //!
@@ -80,6 +83,7 @@ pub mod contracts;
 pub mod domain;
 pub mod error;
 pub mod eth_flow;
+pub mod handlers;
 pub mod order;
 pub mod order_book;
 pub mod signature;
