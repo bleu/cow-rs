@@ -430,7 +430,10 @@ async fn version_endpoint_returns_plain_text() {
 #[tokio::test]
 async fn get_app_data_decodes_full_app_data_envelope() {
     let server = MockServer::start().await;
-    let hash = AppDataHash([0xab; 32]);
+    let document = AppDataDocument {
+        full_app_data: "{}".into(),
+    };
+    let hash = document.computed_hash();
     Mock::given(method("GET"))
         .and(path(format!(
             "/api/v1/app_data/0x{}",
@@ -444,10 +447,40 @@ async fn get_app_data_decodes_full_app_data_envelope() {
     assert_eq!(doc.full_app_data, "{}");
 }
 
+/// A hostile orderbook serves a body whose `keccak256` disagrees with
+/// the requested digest. The SDK must reject the response rather than
+/// pass it through: the signed order commits only to the hash, and a
+/// caller that trusted the body would display or validate metadata
+/// different from what the order actually commits to.
+#[tokio::test]
+async fn get_app_data_rejects_response_with_wrong_hash() {
+    use cowprotocol::Error;
+
+    let server = MockServer::start().await;
+    let requested = AppDataHash([0xab; 32]);
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/api/v1/app_data/0x{}",
+            const_hex::encode(requested.0)
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "fullAppData": "{}" })))
+        .mount(&server)
+        .await;
+
+    let err = api(&server).get_app_data(&requested).await.unwrap_err();
+    assert!(
+        matches!(err, Error::AppDataHashMismatch { .. }),
+        "expected AppDataHashMismatch, got {err:?}"
+    );
+}
+
 #[tokio::test]
 async fn put_app_data_accepts_200_with_no_body() {
     let server = MockServer::start().await;
-    let hash = AppDataHash([0xab; 32]);
+    let document = AppDataDocument {
+        full_app_data: "{\"appCode\":\"cow-rs\"}".into(),
+    };
+    let hash = document.computed_hash();
     Mock::given(method("PUT"))
         .and(path(format!(
             "/api/v1/app_data/0x{}",
@@ -460,15 +493,32 @@ async fn put_app_data_accepts_200_with_no_body() {
         .mount(&server)
         .await;
 
-    api(&server)
-        .put_app_data(
-            &hash,
-            &AppDataDocument {
-                full_app_data: "{\"appCode\":\"cow-rs\"}".into(),
-            },
-        )
+    api(&server).put_app_data(&hash, &document).await.unwrap();
+}
+
+/// The caller paired a document with the wrong digest. The SDK must
+/// refuse the PUT locally instead of relying on the orderbook to
+/// surface the bug as an opaque 4xx, since the same mismatch would
+/// otherwise leave the index pointing at metadata that diverges from
+/// the signed order's commitment.
+#[tokio::test]
+async fn put_app_data_rejects_document_with_wrong_hash() {
+    use cowprotocol::Error;
+
+    let server = MockServer::start().await;
+    let document = AppDataDocument {
+        full_app_data: "{\"appCode\":\"cow-rs\"}".into(),
+    };
+    let wrong_hash = AppDataHash([0xab; 32]);
+
+    let err = api(&server)
+        .put_app_data(&wrong_hash, &document)
         .await
-        .unwrap();
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::AppDataHashMismatch { .. }),
+        "expected AppDataHashMismatch, got {err:?}"
+    );
 }
 
 #[tokio::test]
@@ -557,6 +607,80 @@ async fn poll_until_runs_with_caller_supplied_sleep() {
         2,
         "should have slept between the two open polls"
     );
+}
+
+/// An end-to-end response over `MAX_RESPONSE_BYTES` is rejected
+/// through the same client / decoder path that production callers
+/// traverse. wiremock auto-derives `Content-Length` from the body, so
+/// this exercises both the header-driven early reject and the
+/// post-read backstop in `read_capped_text`. A response above the cap
+/// must always surface [`Error::ResponseTooLarge`] rather than
+/// allocate the body into memory.
+#[tokio::test]
+async fn response_too_large_is_rejected_end_to_end() {
+    let server = MockServer::start().await;
+    let oversize_body = "a".repeat(cowprotocol::order_book::MAX_RESPONSE_BYTES + 1);
+    Mock::given(method("GET"))
+        .and(path("/api/v1/version"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(oversize_body))
+        .mount(&server)
+        .await;
+
+    let err = api(&server).version().await.unwrap_err();
+    match err {
+        cowprotocol::Error::ResponseTooLarge { max } => {
+            assert_eq!(max, cowprotocol::order_book::MAX_RESPONSE_BYTES);
+        }
+        other => panic!("expected ResponseTooLarge, got {other:?}"),
+    }
+}
+
+/// A server that does not respond within the configured client
+/// timeout produces a transport error rather than hanging the
+/// caller. Uses an explicit short-timeout client so the test does not
+/// have to wait the production [`DEFAULT_HTTP_TIMEOUT`].
+#[tokio::test]
+async fn slow_server_trips_client_timeout() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/version"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(std::time::Duration::from_secs(2))
+                .set_body_string("ok"),
+        )
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(100))
+        .build()
+        .unwrap();
+    let api = OrderBookApi::with_client(server.uri().parse().unwrap(), client);
+
+    let err = api.version().await.unwrap_err();
+    match err {
+        cowprotocol::Error::Transport(e) => {
+            assert!(
+                e.is_timeout(),
+                "expected reqwest::Error::is_timeout(), got {e}"
+            );
+        }
+        other => panic!("expected Transport timeout error, got {other:?}"),
+    }
+}
+
+/// `OrderBookApi::new_with_base_url` must hand back a client with
+/// `DEFAULT_HTTP_TIMEOUT` set. Without this, default-config callers
+/// would be back to an unbounded-wait regime if a server stalls.
+/// Reqwest does not expose the configured timeout for inspection, so
+/// we rely on the constants being present (compile-time check) plus
+/// `slow_server_trips_client_timeout` locking the live behaviour.
+#[test]
+fn default_client_constants_are_sane() {
+    let _ = OrderBookApi::new(Chain::Mainnet);
+    assert!(cowprotocol::order_book::DEFAULT_HTTP_TIMEOUT > std::time::Duration::ZERO);
+    const _: () = assert!(cowprotocol::order_book::MAX_RESPONSE_BYTES >= 1 << 20);
 }
 
 #[tokio::test]

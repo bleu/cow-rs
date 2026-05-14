@@ -9,14 +9,22 @@
 //!
 //! Two signing flows are supported:
 //!
-//! 1. **In-shim signing**: pass a 0x-prefixed 32-byte private-key hex
-//!    string to [`sign_eip712`] / [`sign_ethsign`]. The signer never
-//!    leaves wasm linear memory but is in-process; suitable for tests
-//!    and scripts.
-//! 2. **External signing**: build the EIP-712 hash with
-//!    [`order_struct_hash`] + [`hashed_eip712_message`], have the
-//!    caller's wallet (viem, ethers, Safe, WalletConnect) sign it, then
-//!    feed the (r, s, v) back through [`build_order_creation`].
+//! 1. **In-shim signing** (gated behind the `in_shim_signing` cargo
+//!    feature; *test- and script-only*): pass a 0x-prefixed 32-byte
+//!    private-key hex string to [`sign_eip712`] / [`sign_ethsign`].
+//!    The signer stays in wasm linear memory rather than crossing
+//!    the JS boundary, but the **hex string itself is owned by JS**
+//!    and is not zeroised after it crosses into wasm. Any other code
+//!    running in the same JS realm (extensions, ad scripts,
+//!    third-party libraries) can read it. **Never hand a production
+//!    key to this path.** Treat it the same as `console.log`-ing
+//!    the key. Production integrations sign with viem / ethers /
+//!    Safe and never pass a raw private key to wasm.
+//! 2. **External signing** (recommended for production): build the
+//!    EIP-712 hash with [`order_struct_hash`] +
+//!    [`hashed_eip712_message`], have the caller's wallet (viem,
+//!    ethers, Safe, WalletConnect) sign it, then feed the (r, s, v)
+//!    back through [`build_order_creation`].
 
 mod allocator;
 mod transport;
