@@ -5,15 +5,18 @@ on:
     paths:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
+      - ".github/workflows/audit.yml"
   pull_request:
     paths:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
+      - ".github/workflows/audit.yml"
   schedule:
     # Daily at 06:00 UTC. Catches RUSTSEC advisories published after the
     # last push so a vulnerability landing today is flagged tomorrow at
     # the latest, not at the next dependency bump.
     - cron: "0 6 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
