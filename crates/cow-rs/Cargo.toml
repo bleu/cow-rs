@@ -7,7 +7,11 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 readme.workspace = true
-description = "Rust SDK for the CoW Protocol — order types, signing, and orderbook client."
+description = "Rust SDK for CoW Protocol: orderbook client, EIP-712 order types, signing, and composable-order primitives."
+homepage = "https://github.com/cowdao-grants/cow-rs"
+documentation = "https://docs.rs/cow-rs"
+keywords = ["cow-protocol", "ethereum", "defi", "alloy", "sdk"]
+categories = ["cryptography::cryptocurrencies", "api-bindings", "wasm"]
 
 [lints]
 workspace = true
