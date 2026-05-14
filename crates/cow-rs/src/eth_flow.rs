@@ -138,16 +138,11 @@ mod tests {
     /// A non-zero, easy-to-eyeball receiver address reused across tests.
     const SAMPLE_RECEIVER: Address = address!("70997970C51812dc3A010C7d01b50e0d17dc79C8");
 
-    /// The two EthFlow deployment addresses parse as valid 20-byte
-    /// addresses, are not the zero address, and are distinct from each
-    /// other. The `address!` macro already enforces well-formed hex at
-    /// compile time, so this guards against accidental copy-paste
-    /// regressions (e.g. the staging address overwriting production).
+    /// Pin the EthFlow deployment hex literals so a copy-paste regression
+    /// on the constants (e.g. staging overwriting production) breaks the
+    /// build instead of silently shipping orders to the wrong contract.
     #[test]
-    fn deployment_addresses_are_distinct_and_non_zero() {
-        assert_ne!(ETH_FLOW_PRODUCTION, Address::ZERO);
-        assert_ne!(ETH_FLOW_STAGING, Address::ZERO);
-        assert_ne!(ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING);
+    fn deployment_addresses_match_canonical_hex_literals() {
         assert_eq!(
             ETH_FLOW_PRODUCTION,
             address!("bA3cB449bD2B4ADddBc894D8697F5170800EAdeC")
@@ -156,6 +151,7 @@ mod tests {
             ETH_FLOW_STAGING,
             address!("04501b9b1D52e67f6862d157E00D13419D2D6E95")
         );
+        assert_ne!(ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING);
     }
 
     /// `to_order_data` should pin `sell_token` to the supplied wrapped-native

@@ -111,10 +111,13 @@ pub use crate::{
         OrderUid, SellTokenSource,
     },
     order_book::{
-        AuctionStatus, AuctionStatusType, OrderBookApi, OrderCreation, OrderQuote,
-        OrderQuoteResponse, QuoteRequest,
+        AppDataDocument, AuctionStatus, AuctionStatusType, NativePrice, OrderBookApi,
+        OrderCreation, OrderQuote, OrderQuoteResponse, QuoteRequest, TotalSurplus, Trade,
     },
     signature::{EcdsaSignature, Recovered, Signature, SignatureError},
     signing_scheme::{EcdsaSigningScheme, SigningScheme},
-    subgraph::{DailyTotal, GraphQlError, HourlyTotal, SubgraphClient, SubgraphError, Totals},
+    subgraph::{
+        ChainSubgraphUnavailable, DailyTotal, GraphQlError, HourlyTotal, SubgraphClient,
+        SubgraphError, Totals,
+    },
 };

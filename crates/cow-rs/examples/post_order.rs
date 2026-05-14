@@ -67,10 +67,10 @@ async fn main() -> cow_rs::Result<()> {
         return Ok(());
     };
 
-    // The key is user-supplied at runtime, so a parse error is a
-    // configuration problem we surface immediately rather than smuggling
-    // through `cow_rs::Error` (which has no signer-error variant: see
-    // TODO below).
+    // Configuration error: the env-supplied key must be valid hex. We
+    // surface this immediately rather than smuggling it through
+    // `cow_rs::Error`, whose variants describe wire-format / signing /
+    // orderbook failures, not user-input parsing.
     let signer = PrivateKeySigner::from_str(raw_key.trim())
         .expect("SEPOLIA_PRIVATE_KEY must be a 0x-prefixed 32-byte hex string");
     let owner = signer.address();
@@ -95,16 +95,8 @@ async fn main() -> cow_rs::Result<()> {
     let order_data = quote.to_signed_order_data(EMPTY_APP_DATA_HASH);
 
     // Step 3: sign under the Sepolia GPv2Settlement domain.
-    //
-    // TODO: `cow_rs::Error` does not yet carry a `SignatureError` variant,
-    // so the `?` shorthand cannot be used here. ECDSA signing of a
-    // 32-byte digest with a `PrivateKeySigner` is infallible in practice,
-    // so panicking is acceptable for an example; production callers
-    // should propagate this through their own error type.
     let domain = DomainSeparator::new(Chain::Sepolia.id(), GPV2_SETTLEMENT);
-    let signature = order_data
-        .sign(EcdsaSigningScheme::Eip712, &domain, &signer)
-        .expect("ECDSA signing of a 32-byte digest with a PrivateKeySigner is infallible");
+    let signature = order_data.sign(EcdsaSigningScheme::Eip712, &domain, &signer)?;
 
     // Step 4: assemble the submission body and POST it.
     let creation = OrderCreation::from_signed_order_data(

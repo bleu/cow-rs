@@ -182,7 +182,7 @@ pub struct SubgraphClient {
 }
 
 impl SubgraphClient {
-    /// Build a client against an explicit subgraph URL. No authorization
+    /// Build a client against an explicit subgraph URL. No authorisation
     /// header is attached: use [`SubgraphClient::with_bearer_token`] for
     /// the production gateway.
     pub fn new(url: url::Url) -> Self {

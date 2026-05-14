@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use std::fmt;
 
-use crate::{chain::UnsupportedChain, subgraph::SubgraphError};
+use crate::{chain::UnsupportedChain, signature::SignatureError, subgraph::SubgraphError};
 
 /// Crate-wide `Result` alias.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -53,6 +53,10 @@ pub enum Error {
     /// unrecognised envelope.
     #[error(transparent)]
     Subgraph(#[from] SubgraphError),
+
+    /// Signature parsing, signing, or recovery failed.
+    #[error(transparent)]
+    Signature(#[from] SignatureError),
 }
 
 /// Structured error envelope returned by the CoW orderbook for 4xx / 5xx

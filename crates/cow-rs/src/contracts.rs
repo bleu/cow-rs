@@ -410,16 +410,11 @@ mod tests {
         assert_eq!(decoded.5, event.orderUid);
     }
 
-    /// The two singleton addresses must be non-zero, distinct and parse as
-    /// proper 20-byte addresses. The `address!` macro already enforces
-    /// well-formed hex at compile time, so this guards against copy-paste
-    /// regressions (e.g. the relayer address overwriting the settlement
-    /// address).
+    /// Pin the GPv2 deployment hex literals so a copy-paste regression
+    /// on the constants (e.g. relayer overwriting settlement) breaks the
+    /// build instead of silently shipping orders to the wrong contract.
     #[test]
-    fn deployment_addresses_are_distinct_and_non_zero() {
-        assert_ne!(GPV2_SETTLEMENT, Address::ZERO);
-        assert_ne!(GPV2_VAULT_RELAYER, Address::ZERO);
-        assert_ne!(GPV2_SETTLEMENT, GPV2_VAULT_RELAYER);
+    fn deployment_addresses_match_canonical_hex_literals() {
         assert_eq!(
             GPV2_SETTLEMENT,
             address!("9008D19f58AAbD9eD0D60971565AA8510560ab41")
@@ -428,5 +423,6 @@ mod tests {
             GPV2_VAULT_RELAYER,
             address!("C92E8bdf79f0507f65a392b0ab4667716BFE0110")
         );
+        assert_ne!(GPV2_SETTLEMENT, GPV2_VAULT_RELAYER);
     }
 }

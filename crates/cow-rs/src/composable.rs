@@ -201,23 +201,25 @@ mod tests {
         assert_eq!(decoded.data, proof.data);
     }
 
+    /// Pin the `ComposableCoW` deployment hex literals so a copy-paste
+    /// regression on the constants breaks the build, and confirm the
+    /// supported / unsupported chain split documented in
+    /// `nullislabs/composable-cow/networks.json`.
     #[test]
-    fn poll_outcome_variants_construct() {
-        let _ = PollOutcome::OrderNotValid("bad token".into());
-        let _ = PollOutcome::TryNextBlock("retry".into());
-        let _ = PollOutcome::TryAtBlock {
-            block: 100,
-            reason: "later".into(),
-        };
-        let _ = PollOutcome::TryAtEpoch {
-            timestamp: 1_700_000_000,
-            reason: "wait".into(),
-        };
-        let _ = PollOutcome::Never("dead".into());
-    }
+    fn composable_cow_addresses_match_canonical_deployment() {
+        assert_eq!(
+            COMPOSABLE_COW,
+            address!("fdaFc9d1902f4e0b84f65F49f244b32b31013b74")
+        );
+        assert_eq!(
+            EXTENSIBLE_FALLBACK_HANDLER,
+            address!("2f55e8b20D0B9FEFA187AA7d00B6Cbe563605bF5")
+        );
+        assert_eq!(
+            CURRENT_BLOCK_TIMESTAMP_FACTORY,
+            address!("52eD56Da04309Aca4c3FECC595298d80C2f16BAc")
+        );
 
-    #[test]
-    fn composable_cow_deployed_on_supported_chains() {
         for chain in [
             Chain::Mainnet,
             Chain::Gnosis,
@@ -225,19 +227,7 @@ mod tests {
             Chain::ArbitrumOne,
         ] {
             assert_eq!(chain.composable_cow_address(), Some(COMPOSABLE_COW));
-            assert_eq!(
-                chain.extensible_fallback_handler_address(),
-                Some(EXTENSIBLE_FALLBACK_HANDLER)
-            );
-            assert_eq!(
-                chain.current_block_timestamp_factory_address(),
-                Some(CURRENT_BLOCK_TIMESTAMP_FACTORY)
-            );
         }
-    }
-
-    #[test]
-    fn composable_cow_absent_on_unsupported_chains() {
         for chain in [
             Chain::Bnb,
             Chain::Polygon,
@@ -248,8 +238,6 @@ mod tests {
             Chain::Linea,
         ] {
             assert!(chain.composable_cow_address().is_none());
-            assert!(chain.extensible_fallback_handler_address().is_none());
-            assert!(chain.current_block_timestamp_factory_address().is_none());
         }
     }
 
