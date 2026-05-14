@@ -7,6 +7,11 @@
 //! deterministic, sorted-keys, whitespace-free JSON string so the
 //! resulting [`AppDataHash`] is stable across runs and matches the digest
 //! the orderbook pins to IPFS.
+//!
+//! [`AppDataCid`] derives the IPFS CID under which the orderbook pins the
+//! document. The derivation is pure: it concatenates a 4-byte CIDv1 prefix
+//! with the existing 32-byte digest and emits the bytes in base32 lower-case
+//! (RFC 4648, no padding) with the `b` multibase tag.
 
 use alloy_primitives::{Address, keccak256};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
@@ -18,8 +23,9 @@ use crate::order::OrderClass;
 ///
 /// The digest is the keccak256 of the deterministically-stringified JSON
 /// document and is embedded directly in the signed order payload. It is
-/// **not** an IPFS CID: derive the multihash off the same digest when one
-/// is needed.
+/// **not** itself an IPFS CID: call [`AppDataHash::to_cid`] (or
+/// [`AppDataCid::from_hash`]) to derive the CID the orderbook pins the
+/// document under.
 ///
 /// [app-data]: https://docs.cow.fi/cow-protocol/reference/core/intents/app-data
 #[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -44,6 +50,16 @@ impl From<[u8; 32]> for AppDataHash {
 impl AsRef<[u8]> for AppDataHash {
     fn as_ref(&self) -> &[u8] {
         &self.0
+    }
+}
+
+impl AppDataHash {
+    /// Derive the IPFS CID the orderbook pins this document under.
+    ///
+    /// Shortcut for [`AppDataCid::from_hash`]; see that type for the wire
+    /// format.
+    pub fn to_cid(&self) -> AppDataCid {
+        AppDataCid::from_hash(*self)
     }
 }
 
@@ -316,6 +332,212 @@ fn sort_value(value: serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// IPFS CID that the orderbook pins app-data documents under.
+///
+/// Format: `cidv1(raw codec 0x55, multihash keccak-256 0x1b 0x20 || hash)`,
+/// base32-encoded (RFC 4648 lower-case alphabet, no padding) and prefixed
+/// with the `b` multibase tag. The multihash hash function is **keccak-256**,
+/// matching the digest the orderbook stores in the signed order; the CID
+/// therefore round-trips with [`AppDataHash`] without any further hashing.
+///
+/// This matches the derivation in `cowprotocol/services` (`crates/app-data`,
+/// `create_ipfs_cid`) and the legacy-free path in cow-sdk's
+/// `appDataHexToCid` and cow-py's `AppDataHex.to_cid`.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct AppDataCid(String);
+
+/// CIDv1 version byte: `0x01`.
+const CID_V1: u8 = 0x01;
+/// IPFS multicodec for raw bytes: `0x55`.
+const CID_CODEC_RAW: u8 = 0x55;
+/// Multihash code for keccak-256: `0x1b`.
+const MULTIHASH_KECCAK_256: u8 = 0x1b;
+/// Multihash digest length for 32-byte hashes.
+const MULTIHASH_LEN_32: u8 = 0x20;
+/// Total size of the binary CID before multibase encoding.
+const CID_BYTES_LEN: usize = 4 + 32;
+
+impl AppDataCid {
+    /// Derive the CID a 32-byte app-data digest pins to.
+    ///
+    /// Pure offline derivation: builds the 36-byte CID
+    /// `[0x01, 0x55, 0x1b, 0x20, ..hash]` and base32-encodes it with the
+    /// `b` multibase prefix.
+    pub fn from_hash(hash: AppDataHash) -> Self {
+        let mut bytes = [0u8; CID_BYTES_LEN];
+        bytes[0] = CID_V1;
+        bytes[1] = CID_CODEC_RAW;
+        bytes[2] = MULTIHASH_KECCAK_256;
+        bytes[3] = MULTIHASH_LEN_32;
+        bytes[4..].copy_from_slice(&hash.0);
+
+        let mut out = String::with_capacity(1 + base32_encoded_len(CID_BYTES_LEN));
+        out.push('b');
+        base32_encode_into(&bytes, &mut out);
+        Self(out)
+    }
+
+    /// Borrow the canonical `b...` string representation.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Extract the embedded [`AppDataHash`] back out of the CID.
+    ///
+    /// Validates the multibase prefix, version, codec, multihash code, and
+    /// digest length before returning the trailing 32 bytes.
+    pub fn to_hash(&self) -> Result<AppDataHash, AppDataCidError> {
+        let body = self
+            .0
+            .strip_prefix('b')
+            .ok_or(AppDataCidError::MissingMultibasePrefix)?;
+        let bytes = base32_decode(body)?;
+        if bytes.len() != CID_BYTES_LEN {
+            return Err(AppDataCidError::InvalidLength {
+                expected: CID_BYTES_LEN,
+                actual: bytes.len(),
+            });
+        }
+        if bytes[0] != CID_V1 {
+            return Err(AppDataCidError::UnexpectedVersion(bytes[0]));
+        }
+        if bytes[1] != CID_CODEC_RAW {
+            return Err(AppDataCidError::UnexpectedCodec(bytes[1]));
+        }
+        if bytes[2] != MULTIHASH_KECCAK_256 {
+            return Err(AppDataCidError::UnexpectedMultihashCode(bytes[2]));
+        }
+        if bytes[3] != MULTIHASH_LEN_32 {
+            return Err(AppDataCidError::UnexpectedDigestLength(bytes[3]));
+        }
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&bytes[4..]);
+        Ok(AppDataHash(digest))
+    }
+}
+
+impl fmt::Display for AppDataCid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for AppDataCid {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Errors raised while parsing an [`AppDataCid`] back into an
+/// [`AppDataHash`].
+#[derive(Debug, thiserror::Error, Eq, PartialEq)]
+pub enum AppDataCidError {
+    /// The CID string was not multibase base32 (no `b` prefix).
+    #[error("expected multibase `b` (base32) prefix")]
+    MissingMultibasePrefix,
+    /// A character outside the RFC 4648 lower-case alphabet was found.
+    #[error("invalid base32 character {0:?}")]
+    InvalidBase32Char(char),
+    /// The decoded CID body had the wrong length.
+    #[error("expected {expected}-byte CID body, got {actual}")]
+    InvalidLength {
+        /// Number of bytes we expect (`36`).
+        expected: usize,
+        /// Number of bytes actually decoded.
+        actual: usize,
+    },
+    /// The version byte was not `0x01`.
+    #[error("expected CIDv1 (0x01), got 0x{0:02x}")]
+    UnexpectedVersion(u8),
+    /// The codec byte was not the raw codec `0x55`.
+    #[error("expected raw codec (0x55), got 0x{0:02x}")]
+    UnexpectedCodec(u8),
+    /// The multihash code was not keccak-256 (`0x1b`).
+    #[error("expected keccak-256 multihash (0x1b), got 0x{0:02x}")]
+    UnexpectedMultihashCode(u8),
+    /// The multihash length byte was not `0x20`.
+    #[error("expected 32-byte digest (0x20), got 0x{0:02x}")]
+    UnexpectedDigestLength(u8),
+}
+
+/// RFC 4648 base32 lower-case alphabet, no padding.
+const BASE32_ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+
+/// Output length of base32 encoding without padding.
+const fn base32_encoded_len(input_len: usize) -> usize {
+    input_len.div_ceil(5) * 8
+}
+
+/// Encode `input` as RFC 4648 base32 lower-case (no padding) into `out`.
+fn base32_encode_into(input: &[u8], out: &mut String) {
+    // Walk 5-byte groups, pack into 40 bits, slice off the high 5-bit chunks.
+    // The final partial group emits only the bytes its bits actually cover,
+    // which matches "no padding" by simply stopping early.
+    let mut chunks = input.chunks_exact(5);
+    for chunk in chunks.by_ref() {
+        let buf: u64 = (u64::from(chunk[0]) << 32)
+            | (u64::from(chunk[1]) << 24)
+            | (u64::from(chunk[2]) << 16)
+            | (u64::from(chunk[3]) << 8)
+            | u64::from(chunk[4]);
+        for shift in (0..8).rev() {
+            let idx = ((buf >> (shift * 5)) & 0x1f) as usize;
+            out.push(BASE32_ALPHABET[idx] as char);
+        }
+    }
+    let tail = chunks.remainder();
+    if !tail.is_empty() {
+        let mut buf: u64 = 0;
+        for (i, b) in tail.iter().enumerate() {
+            buf |= u64::from(*b) << ((4 - i) * 8);
+        }
+        // Bytes per remainder length: 1->2, 2->4, 3->5, 4->7.
+        let out_chars = match tail.len() {
+            1 => 2,
+            2 => 4,
+            3 => 5,
+            4 => 7,
+            _ => unreachable!("chunks_exact remainder is < 5"),
+        };
+        for i in 0..out_chars {
+            let idx = ((buf >> ((7 - i) * 5)) & 0x1f) as usize;
+            out.push(BASE32_ALPHABET[idx] as char);
+        }
+    }
+}
+
+/// Decode an RFC 4648 base32 lower-case string (no padding).
+///
+/// Accepts the encoding produced by [`base32_encode_into`] and rejects any
+/// character outside the lower-case alphabet. Upper-case input is rejected
+/// to keep the round-trip canonical.
+fn base32_decode(input: &str) -> Result<Vec<u8>, AppDataCidError> {
+    let bytes = input.as_bytes();
+    // Strip any trailing `=` padding tolerantly: the canonical form has none,
+    // but accepting it costs nothing and survives copy-paste of padded CIDs.
+    let len = bytes.iter().rposition(|b| *b != b'=').map_or(0, |p| p + 1);
+    let trimmed = &bytes[..len];
+
+    let mut out = Vec::with_capacity(trimmed.len() * 5 / 8);
+    let mut buf: u64 = 0;
+    let mut bits: u32 = 0;
+    for &b in trimmed {
+        let value = match b {
+            b'a'..=b'z' => b - b'a',
+            b'2'..=b'7' => b - b'2' + 26,
+            _ => return Err(AppDataCidError::InvalidBase32Char(b as char)),
+        };
+        buf = (buf << 5) | u64::from(value);
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            let byte = ((buf >> bits) & 0xff) as u8;
+            out.push(byte);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use {super::*, alloy_primitives::address};
@@ -484,5 +706,212 @@ mod tests {
         let hooks = parsed.metadata.hooks.expect("hooks preserved");
         assert_eq!(hooks["version"], "0.1.0");
         assert_eq!(hooks["pre"][0]["target"], "0xabc");
+    }
+
+    /// Round-trip every byte position so any off-by-one in the base32 packer
+    /// or in the `to_hash` slice arithmetic shows up immediately.
+    #[test]
+    fn cid_round_trip_default_and_walking_bytes() {
+        let default = AppDataHash::default();
+        assert_eq!(default.to_cid().to_hash().unwrap(), default);
+
+        for i in 0..32 {
+            let mut bytes = [0u8; 32];
+            bytes[i] = 0xff;
+            let hash = AppDataHash(bytes);
+            let cid = hash.to_cid();
+            assert_eq!(
+                cid.to_hash().unwrap(),
+                hash,
+                "round-trip failed at byte {i}"
+            );
+            // Multibase tag is always `b`, body is always lower-case alpha
+            // or `234567`, never any other character.
+            assert!(cid.as_str().starts_with('b'));
+            assert!(
+                cid.as_str()
+                    .chars()
+                    .skip(1)
+                    .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c))
+            );
+        }
+    }
+
+    /// `bafkrw` is the base32 multibase rendering of the constant CID prefix
+    /// `01 55 1b 20` (CIDv1, raw codec, keccak-256, 32 bytes). Any digest
+    /// that uses this prefix must encode to a string starting with
+    /// `bafkrw`. The legacy sha2-256 path that gives `bafkrei` is **not**
+    /// what the orderbook pins under.
+    #[test]
+    fn cid_for_empty_app_data_hash_starts_with_bafkrw() {
+        let cid = EMPTY_APP_DATA_HASH.to_cid();
+        assert!(
+            cid.as_str().starts_with("bafkrw"),
+            "expected bafkrw prefix, got {}",
+            cid.as_str()
+        );
+    }
+
+    /// Golden vector lifted from `cowprotocol/services`
+    /// (`crates/app-data/src/app_data_hash.rs::tests::known_good`). The
+    /// services repo additionally cites the equivalent `ipfs cid format
+    /// -b base16` and `-b base32` strings, both of which we lock here.
+    #[test]
+    fn cid_matches_services_known_good_vector() {
+        let hash = AppDataHash(hex_literal::hex!(
+            "8af4e8c9973577b08ac21d17d331aade86c11ebcc5124744d621ca8365ec9424"
+        ));
+        let cid = hash.to_cid();
+        assert_eq!(
+            cid.as_str(),
+            "bafkrwiek6tumtfzvo6yivqq5c7jtdkw6q3ar5pgfcjdujvrbzkbwl3eueq"
+        );
+        assert_eq!(cid.to_hash().unwrap(), hash);
+    }
+
+    /// Lock the canonical CID for the default-empty document
+    /// (`keccak256("{}")`), independently computed via Python's `base32`
+    /// over `01 55 1b 20 || EMPTY_APP_DATA_HASH`.
+    #[test]
+    fn cid_for_empty_doc_golden() {
+        let cid = EMPTY_APP_DATA_HASH.to_cid();
+        assert_eq!(
+            cid.as_str(),
+            "bafkrwifuru4pspvkbbadh7czoc7znzkzym6ezxah3ce2wafu2y7zledttu"
+        );
+    }
+
+    #[test]
+    fn cid_parse_rejects_missing_multibase_prefix() {
+        // Drop the leading `b`.
+        let cid =
+            AppDataCid("afkrwifuru4pspvkbbadh7czoc7znzkzym6ezxah3ce2wafu2y7zledttu".to_string());
+        assert_eq!(
+            cid.to_hash().unwrap_err(),
+            AppDataCidError::MissingMultibasePrefix
+        );
+    }
+
+    #[test]
+    fn cid_parse_rejects_wrong_codec() {
+        // Build a CID where the codec byte is `0x70` (dag-pb) instead of
+        // raw. Keccak code stays at `0x1b`, length stays at `0x20`.
+        let mut bytes = [0u8; CID_BYTES_LEN];
+        bytes[0] = 0x01;
+        bytes[1] = 0x70; // dag-pb, not raw
+        bytes[2] = 0x1b;
+        bytes[3] = 0x20;
+        bytes[4..].copy_from_slice(&EMPTY_APP_DATA_HASH.0);
+        let mut s = String::from("b");
+        base32_encode_into(&bytes, &mut s);
+        let cid = AppDataCid(s);
+        assert_eq!(
+            cid.to_hash().unwrap_err(),
+            AppDataCidError::UnexpectedCodec(0x70)
+        );
+    }
+
+    #[test]
+    fn cid_parse_rejects_wrong_multihash() {
+        // sha2-256 (0x12) instead of keccak-256 (0x1b): this is the
+        // distinct "legacy" CID family that cow-sdk's `appDataHexToCidLegacy`
+        // emits. We do **not** want to silently accept it as our CID since
+        // its digest semantics are different.
+        let mut bytes = [0u8; CID_BYTES_LEN];
+        bytes[0] = 0x01;
+        bytes[1] = 0x55;
+        bytes[2] = 0x12; // sha2-256
+        bytes[3] = 0x20;
+        bytes[4..].copy_from_slice(&EMPTY_APP_DATA_HASH.0);
+        let mut s = String::from("b");
+        base32_encode_into(&bytes, &mut s);
+        let cid = AppDataCid(s);
+        assert_eq!(
+            cid.to_hash().unwrap_err(),
+            AppDataCidError::UnexpectedMultihashCode(0x12)
+        );
+    }
+
+    #[test]
+    fn cid_parse_rejects_wrong_length() {
+        // Truncate the base32 body so the decoded byte length is wrong.
+        let cid = AppDataCid("babcdefgh".to_string());
+        match cid.to_hash() {
+            Err(AppDataCidError::InvalidLength { expected, actual }) => {
+                assert_eq!(expected, CID_BYTES_LEN);
+                assert_ne!(actual, CID_BYTES_LEN);
+            }
+            other => panic!("expected InvalidLength, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cid_parse_rejects_wrong_version() {
+        // Version byte `0x00` (CIDv0 marker) is invalid in this raw form.
+        let mut bytes = [0u8; CID_BYTES_LEN];
+        bytes[0] = 0x00;
+        bytes[1] = 0x55;
+        bytes[2] = 0x1b;
+        bytes[3] = 0x20;
+        bytes[4..].copy_from_slice(&EMPTY_APP_DATA_HASH.0);
+        let mut s = String::from("b");
+        base32_encode_into(&bytes, &mut s);
+        let cid = AppDataCid(s);
+        assert_eq!(
+            cid.to_hash().unwrap_err(),
+            AppDataCidError::UnexpectedVersion(0x00)
+        );
+    }
+
+    #[test]
+    fn cid_parse_rejects_wrong_digest_length() {
+        // Multihash length `0x10` (16 bytes) instead of `0x20` (32). Pad
+        // with the digest so the overall body length matches the constant.
+        let mut bytes = [0u8; CID_BYTES_LEN];
+        bytes[0] = 0x01;
+        bytes[1] = 0x55;
+        bytes[2] = 0x1b;
+        bytes[3] = 0x10; // 16, not 32
+        bytes[4..].copy_from_slice(&EMPTY_APP_DATA_HASH.0);
+        let mut s = String::from("b");
+        base32_encode_into(&bytes, &mut s);
+        let cid = AppDataCid(s);
+        assert_eq!(
+            cid.to_hash().unwrap_err(),
+            AppDataCidError::UnexpectedDigestLength(0x10)
+        );
+    }
+
+    #[test]
+    fn cid_parse_rejects_invalid_base32_char() {
+        // `8` is outside RFC 4648's lower-case 32-char alphabet.
+        let cid = AppDataCid("b8".to_string());
+        assert_eq!(
+            cid.to_hash().unwrap_err(),
+            AppDataCidError::InvalidBase32Char('8')
+        );
+    }
+
+    /// Cover base32 encoding for every remainder length so a fix to one
+    /// branch does not silently corrupt another. Vectors are RFC 4648
+    /// §10 ("Test vectors"), lower-cased and stripped of padding.
+    #[test]
+    fn base32_encode_rfc4648_vectors() {
+        let cases: &[(&[u8], &str)] = &[
+            (b"", ""),
+            (b"f", "my"),
+            (b"fo", "mzxq"),
+            (b"foo", "mzxw6"),
+            (b"foob", "mzxw6yq"),
+            (b"fooba", "mzxw6ytb"),
+            (b"foobar", "mzxw6ytboi"),
+        ];
+        for (input, expected) in cases {
+            let mut out = String::new();
+            base32_encode_into(input, &mut out);
+            assert_eq!(&out, expected, "encode mismatch for {input:?}");
+            let decoded = base32_decode(expected).unwrap();
+            assert_eq!(&decoded, input, "decode mismatch for {expected:?}");
+        }
     }
 }

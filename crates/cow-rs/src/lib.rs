@@ -82,9 +82,9 @@ pub mod signing_scheme;
 
 pub use crate::{
     app_data::{
-        AppDataDoc, AppDataHash, AppDataMetadata, AppDataOrderClass, AppDataPartnerFee,
-        AppDataQuote, AppDataReferrer, AppDataUtm, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON,
-        LATEST_APP_DATA_VERSION,
+        AppDataCid, AppDataCidError, AppDataDoc, AppDataHash, AppDataMetadata, AppDataOrderClass,
+        AppDataPartnerFee, AppDataQuote, AppDataReferrer, AppDataUtm, EMPTY_APP_DATA_HASH,
+        EMPTY_APP_DATA_JSON, LATEST_APP_DATA_VERSION,
     },
     cancellation::{OrderCancellation, OrderCancellations, SignedOrderCancellations},
     chain::{Chain, UnsupportedChain},
