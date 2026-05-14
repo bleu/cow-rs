@@ -18,6 +18,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 cowprotocol = { path = "../cow-rs", version = "1.0.0-alpha" }
 alloy-primitives.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

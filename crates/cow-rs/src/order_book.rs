@@ -1607,7 +1607,13 @@ mod tests {
             .to_signed_order_data_for(&request, EMPTY_APP_DATA_HASH)
             .unwrap_err();
         assert!(
-            matches!(&err, Error::QuoteFieldMismatch { field: "buyToken", .. }),
+            matches!(
+                &err,
+                Error::QuoteFieldMismatch {
+                    field: "buyToken",
+                    ..
+                }
+            ),
             "got: {err}"
         );
     }
@@ -1649,7 +1655,13 @@ mod tests {
             .to_signed_order_data_for(&request, EMPTY_APP_DATA_HASH)
             .unwrap_err();
         assert!(
-            matches!(&err, Error::QuoteFieldMismatch { field: "appData", .. }),
+            matches!(
+                &err,
+                Error::QuoteFieldMismatch {
+                    field: "appData",
+                    ..
+                }
+            ),
             "got: {err}"
         );
     }
@@ -1671,7 +1683,13 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            matches!(err, Error::OrderCreationInvalid { field: "app_data", .. }),
+            matches!(
+                err,
+                Error::OrderCreationInvalid {
+                    field: "app_data",
+                    ..
+                }
+            ),
             "got: {err}"
         );
     }

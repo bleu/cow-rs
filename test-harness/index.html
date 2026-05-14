@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>cow-rs · wasm end-to-end harness</title>
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+    .meta { color: #666; font-size: 0.85rem; margin-bottom: 1.5rem; }
+    section { border: 1px solid #ddd; border-radius: 6px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+    section h2 { margin-top: 0; font-size: 1.05rem; }
+    pre { background: #f5f5f5; padding: 0.75rem; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; line-height: 1.4; }
+    .pass { color: #138a36; font-weight: 600; }
+    .fail { color: #c4262e; font-weight: 600; }
+    .pending { color: #888; }
+    button { padding: 0.5rem 1rem; font-size: 0.95rem; cursor: pointer; }
+    code { background: #f5f5f5; padding: 0 0.25rem; border-radius: 2px; }
+  </style>
+</head>
+<body>
+  <h1>cow-rs · wasm end-to-end harness</h1>
+  <p class="meta">
+    Loads <code>crates/cow-rs-wasm/pkg/cow_rs_wasm.js</code> and exercises the
+    Rust SDK from the browser. Run with any static server in this repo's
+    root, e.g.
+    <code>python3 -m http.server 8000</code>, then open
+    <code>http://localhost:8000/test-harness/</code>.
+  </p>
+
+  <section>
+    <h2>1. UID parity (pure compute, no network)</h2>
+    <p>
+      Derives the order UID for a fixed sell-only order off mainnet. The
+      expected value is taken from the equivalent Rust example (see
+      <code>crates/cow-rs/examples/get_quote.rs</code> downstream of
+      <code>OrderData::uid</code>).
+    </p>
+    <p id="uid-status" class="pending">⏳ waiting…</p>
+    <pre id="uid-output"></pre>
+  </section>
+
+  <section>
+    <h2>2. <code>get_quote</code> against api.cow.fi mainnet</h2>
+    <p>
+      Hits the live orderbook. Demonstrates reqwest's browser-fetch backend,
+      CORS, JSON deserialisation across the wasm boundary, and UID derivation
+      from the quote response. <strong>Network call</strong>: results depend
+      on api.cow.fi being reachable from the browser.
+    </p>
+    <button id="run-quote">Run get_quote (USDC → DAI, 100 USDC)</button>
+    <p id="quote-status" class="pending">click the button to run</p>
+    <pre id="quote-output"></pre>
+  </section>
+
+  <script type="module">
+    import init, { compute_order_uid, get_quote } from '../crates/cow-rs-wasm/pkg/cow_rs_wasm.js';
+
+    const USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+    const DAI  = '0x6B175474E89094C44Da98b954EedeAC495271d0F';
+    const OWNER = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
+
+    function setStatus(el, ok, msg) {
+      el.className = ok ? 'pass' : 'fail';
+      el.textContent = msg;
+    }
+
+    async function main() {
+      await init();
+
+      const uidStatus = document.getElementById('uid-status');
+      const uidOutput = document.getElementById('uid-output');
+      try {
+        const uid = compute_order_uid(USDC, DAI, OWNER, '100000000', '99000000000000000000', 4294967295);
+        uidOutput.textContent = uid;
+        // Sanity check shape: 56 bytes => 0x + 112 hex chars.
+        if (typeof uid !== 'string' || !uid.startsWith('0x') || uid.length !== 114) {
+          throw new Error(`unexpected UID shape: length=${uid.length}, head=${uid.slice(0, 4)}`);
+        }
+        setStatus(uidStatus, true, `✅ derived 56-byte UID`);
+      } catch (err) {
+        setStatus(uidStatus, false, `❌ ${err.message ?? err}`);
+        uidOutput.textContent = String(err);
+      }
+
+      const button = document.getElementById('run-quote');
+      const quoteStatus = document.getElementById('quote-status');
+      const quoteOutput = document.getElementById('quote-output');
+      button.addEventListener('click', async () => {
+        setStatus(quoteStatus, true, '⏳ fetching…');
+        quoteOutput.textContent = '';
+        try {
+          const t0 = performance.now();
+          const result = await get_quote(USDC, DAI, OWNER, '100000000');
+          const ms = (performance.now() - t0).toFixed(0);
+          quoteOutput.textContent = JSON.stringify(result, null, 2);
+          if (!result?.response?.quote?.buyAmount) {
+            throw new Error('response missing quote.buyAmount');
+          }
+          if (typeof result.uid !== 'string' || result.uid.length !== 114) {
+            throw new Error('response missing derived 56-byte uid');
+          }
+          setStatus(quoteStatus, true, `✅ buy ${result.response.quote.buyAmount} DAI atomic units (${ms} ms)`);
+        } catch (err) {
+          setStatus(quoteStatus, false, `❌ ${err.message ?? err}`);
+          quoteOutput.textContent = String(err);
+        }
+      });
+    }
+
+    main().catch((err) => {
+      document.body.insertAdjacentHTML(
+        'beforeend',
+        `<pre class="fail">init() failed: ${String(err)}</pre>`
+      );
+    });
+  </script>
+</body>
+</html>

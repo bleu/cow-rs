@@ -16,6 +16,7 @@ use {
         Chain, DomainSeparator, EMPTY_APP_DATA_HASH, OrderBookApi, OrderBuilder, OrderKind,
         QuoteRequest,
     },
+    serde::Serialize,
     wasm_bindgen::prelude::*,
 };
 
@@ -66,7 +67,11 @@ pub async fn get_quote(
         "response": response,
         "uid": uid.to_string(),
     });
-    serde_wasm_bindgen::to_value(&payload)
+    // Default serializer emits JS `Map`; force plain objects so JS code can
+    // do `result.response.quote.buyAmount` rather than `result.get("response").get(...)`.
+    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+    payload
+        .serialize(&serializer)
         .map_err(|err| JsValue::from_str(&format!("serialise failed: {err}")))
 }
 
