@@ -24,8 +24,8 @@ every protocol-critical path byte-for-byte against
 - **All eleven chains**: Mainnet, BNB, Gnosis, Polygon, Base, Plasma,
   Arbitrum One, Avalanche, Ink, Linea, Sepolia, plus their barn
   staging endpoints where the orderbook team publishes them.
-- **Conformance-locked**: 218 native tests (179 lib + 26 wiremock + 5
-  schema-drift + 3 source-lock + 1 trading-mock + 4 doctests) plus 10
+- **Conformance-locked**: 219 native tests (180 lib + 26 wiremock + 5
+  schema-drift + 3 source-lock + 1 trading-mock + 4 doctests) plus 12
   headless-Firefox wasm-bindgen cases, with byte-exact goldens
   cross-checked against `cowprotocol/services`, `cowprotocol/contracts`,
   ethers, cow-sdk and cow-py.
