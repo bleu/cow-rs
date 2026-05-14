@@ -37,6 +37,16 @@ pub enum SignatureError {
     /// Underlying signer reported a `k256` error during signing.
     #[error("k256 signer error: {0}")]
     Signer(#[from] K256Error),
+    /// Recovered signer address did not match the address declared on
+    /// the order. Raised by
+    /// [`crate::OrderCreation::verify_owner`].
+    #[error("signer mismatch: declared {declared}, recovered {recovered}")]
+    SignerMismatch {
+        /// Address the caller said signed the order (`OrderCreation::from`).
+        declared: Address,
+        /// Address actually recovered from the signature.
+        recovered: Address,
+    },
 }
 
 /// Off-chain or on-chain signature over the EIP-712 order hash.

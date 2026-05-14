@@ -476,6 +476,23 @@ impl OrderUid {
         Self(uid)
     }
 
+    /// Build a UID with the first four bytes of the digest set to `i`
+    /// (big-endian) and every other byte zero.
+    ///
+    /// Test-only ergonomics: lets callers fabricate distinct order UIDs
+    /// without going through a full `hash_struct` /
+    /// `hashed_eip712_message` pipeline. Mirrors
+    /// `cowprotocol/services::OrderUid::from_integer`.
+    pub const fn from_integer(i: u32) -> Self {
+        let mut uid = [0u8; 56];
+        let bytes = i.to_be_bytes();
+        uid[0] = bytes[0];
+        uid[1] = bytes[1];
+        uid[2] = bytes[2];
+        uid[3] = bytes[3];
+        Self(uid)
+    }
+
     /// Split a UID into its three parts.
     pub fn parts(&self) -> (B256, Address, u32) {
         (

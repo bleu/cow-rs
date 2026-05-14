@@ -192,6 +192,11 @@ pub struct QuoteRequest {
     /// Optional explicit expiry timestamp; orderbook picks a default when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub valid_to: Option<u32>,
+    /// Relative expiry in seconds from "now" (server clock). Wire field
+    /// `validFor`. Mutually exclusive with [`QuoteRequest::valid_to`];
+    /// when both are absent the orderbook applies a 30-minute default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_for: Option<u32>,
     /// Optional pre-computed app-data digest.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_data: Option<AppDataHash>,
@@ -207,6 +212,18 @@ pub struct QuoteRequest {
     /// Intended signing scheme; the orderbook returns this in the response.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signing_scheme: Option<SigningScheme>,
+    /// Gas budget the orderbook should reserve for the on-chain
+    /// `isValidSignature` callback when quoting an [`SigningScheme::Eip1271`]
+    /// order. Defaults to `27_000` on the server side; smart-contract
+    /// wallets with expensive verification logic should override.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_gas_limit: Option<u64>,
+    /// `true` when the resulting order will be placed on chain instead
+    /// of via the off-chain orderbook (relevant for [`SigningScheme::Eip1271`]
+    /// and [`SigningScheme::PreSign`]). Lets the orderbook reserve the
+    /// right gas budget when simulating.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub onchain_order: Option<bool>,
     /// Latency-vs-depth trade-off the orderbook should apply when
     /// discovering a price. Defaults to [`PriceQuality::Optimal`] when
     /// absent.
@@ -260,11 +277,14 @@ impl QuoteRequest {
             sell_amount_after_fee: None,
             buy_amount_after_fee: None,
             valid_to: None,
+            valid_for: None,
             app_data: None,
             partially_fillable: None,
             sell_token_balance: None,
             buy_token_balance: None,
             signing_scheme: None,
+            verification_gas_limit: None,
+            onchain_order: None,
             price_quality: None,
         }
     }
@@ -299,6 +319,30 @@ impl QuoteRequest {
     /// Pin the order's expiry timestamp.
     pub const fn with_valid_to(mut self, valid_to: u32) -> Self {
         self.valid_to = Some(valid_to);
+        self
+    }
+
+    /// Pin the order's expiry as a relative offset (seconds from the
+    /// orderbook's clock). Mutually exclusive with
+    /// [`QuoteRequest::with_valid_to`]; the orderbook applies a
+    /// 30-minute default when both are absent.
+    pub const fn with_valid_for(mut self, valid_for: u32) -> Self {
+        self.valid_for = Some(valid_for);
+        self
+    }
+
+    /// Pin the gas budget for the on-chain `isValidSignature` callback
+    /// when the resulting order will use [`SigningScheme::Eip1271`].
+    pub const fn with_verification_gas_limit(mut self, gas: u64) -> Self {
+        self.verification_gas_limit = Some(gas);
+        self
+    }
+
+    /// Mark the resulting order as on-chain-placed (default: false).
+    /// Relevant for [`SigningScheme::Eip1271`] and
+    /// [`SigningScheme::PreSign`] flows.
+    pub const fn with_onchain_order(mut self, onchain: bool) -> Self {
+        self.onchain_order = Some(onchain);
         self
     }
 
@@ -542,6 +586,59 @@ where
 }
 
 impl OrderCreation {
+    /// Project the 12 signed fields back out of an [`OrderCreation`] as
+    /// the [`OrderData`] the EIP-712 hash and UID were computed against.
+    /// Useful for re-hashing the order during owner verification.
+    pub const fn order_data(&self) -> OrderData {
+        OrderData {
+            sell_token: self.sell_token,
+            buy_token: self.buy_token,
+            receiver: self.receiver,
+            sell_amount: self.sell_amount,
+            buy_amount: self.buy_amount,
+            valid_to: self.valid_to,
+            app_data: self.app_data_hash,
+            fee_amount: self.fee_amount,
+            kind: self.kind,
+            partially_fillable: self.partially_fillable,
+            sell_token_balance: self.sell_token_balance,
+            buy_token_balance: self.buy_token_balance,
+        }
+    }
+
+    /// Recover the signer of this order from its embedded signature and
+    /// assert it matches `self.from`. Returns `self.from` on success.
+    ///
+    /// - [`SigningScheme::Eip712`] and [`SigningScheme::EthSign`]:
+    ///   recovers via ECDSA and compares against `self.from`.
+    /// - [`SigningScheme::Eip1271`] and [`SigningScheme::PreSign`]:
+    ///   the signature does not carry a recoverable owner; the call
+    ///   short-circuits to `Ok(self.from)` because the orderbook (or
+    ///   `GPv2Signing.setPreSignature`) will validate the owner
+    ///   on-chain. Callers that need to verify the EIP-1271 path
+    ///   pre-submission must call the contract's `isValidSignature`
+    ///   themselves.
+    ///
+    /// Recommended belt-and-suspenders call site:
+    /// `creation.verify_owner(&DomainSeparator::new(chain.id(), chain.settlement()))?;`
+    /// before `OrderBookApi::post_order` to catch signing-key /
+    /// `from`-address divergence client-side.
+    pub fn verify_owner(
+        &self,
+        domain: &crate::domain::DomainSeparator,
+    ) -> std::result::Result<Address, crate::signature::SignatureError> {
+        let struct_hash = self.order_data().hash_struct();
+        match self.signature.recover(domain, &struct_hash)? {
+            Some(recovered) if recovered.signer == self.from => Ok(self.from),
+            Some(recovered) => Err(crate::signature::SignatureError::SignerMismatch {
+                declared: self.from,
+                recovered: recovered.signer,
+            }),
+            // EIP-1271 / PreSign: orderbook validates the owner on-chain.
+            None => Ok(self.from),
+        }
+    }
+
     /// Assemble a submission body from a signed [`OrderData`] plus the
     /// metadata required by the orderbook (`from`, signature, app-data
     /// document, optional quote id).
@@ -550,8 +647,8 @@ impl OrderCreation {
     /// scheme with `from = Address::ZERO`, and the contract-signed schemes
     /// `Eip1271` / `PreSign` carry the owner explicitly there). Callers
     /// who want to additionally cross-check that `from` matches the
-    /// recovered signer of an ECDSA signature can do so with
-    /// [`Signature::recover`] before calling.
+    /// recovered signer of an ECDSA signature can call
+    /// [`OrderCreation::verify_owner`] on the assembled body.
     pub fn from_signed_order_data(
         order_data: OrderData,
         signature: Signature,
@@ -966,6 +1063,25 @@ mod tests {
             serde_json::Value::String("1000".into())
         );
         assert!(body.get("sellAmountBeforeFee").is_none());
+    }
+
+    #[test]
+    fn quote_request_emits_valid_for_and_eip1271_extras() {
+        let request = fixture_quote_request()
+            .with_valid_for(1_800)
+            .with_signing_scheme(SigningScheme::Eip1271)
+            .with_verification_gas_limit(50_000)
+            .with_onchain_order(true);
+        let body = serde_json::to_value(request).unwrap();
+        assert_eq!(body["validFor"], serde_json::Value::from(1_800));
+        assert_eq!(
+            body["signingScheme"],
+            serde_json::Value::String("eip1271".into())
+        );
+        assert_eq!(body["verificationGasLimit"], serde_json::Value::from(50_000));
+        assert_eq!(body["onchainOrder"], serde_json::Value::from(true));
+        // validTo stays absent when only validFor is set.
+        assert!(body.get("validTo").is_none());
     }
 
     #[test]
