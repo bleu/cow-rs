@@ -40,6 +40,10 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 serde-wasm-bindgen = "0.6"
 console_error_panic_hook = "0.1"
+# Used to invoke the JS global `fetch` directly via Reflect, side-stepping
+# `reqwest` (~150 KB on the wire). `web-sys` is intentionally avoided to
+# keep the binding overhead minimal.
+js-sys = "0.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Tiny global allocator (~5 KB) to replace dlmalloc on wasm32. The shim

@@ -9,51 +9,102 @@
     .meta { color: #666; font-size: 0.85rem; margin-bottom: 1.5rem; }
     section { border: 1px solid #ddd; border-radius: 6px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
     section h2 { margin-top: 0; font-size: 1.05rem; }
-    pre { background: #f5f5f5; padding: 0.75rem; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; line-height: 1.4; }
+    pre { background: #f5f5f5; padding: 0.75rem; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; line-height: 1.4; max-height: 300px; }
     .pass { color: #138a36; font-weight: 600; }
     .fail { color: #c4262e; font-weight: 600; }
     .pending { color: #888; }
-    button { padding: 0.5rem 1rem; font-size: 0.95rem; cursor: pointer; }
+    .group { color: #666; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin: 1.5rem 0 0.5rem; }
+    button { padding: 0.5rem 1rem; font-size: 0.95rem; cursor: pointer; margin-right: 0.5rem; }
     code { background: #f5f5f5; padding: 0 0.25rem; border-radius: 2px; }
+    input[type="text"] { padding: 0.4rem 0.6rem; font-size: 0.9rem; font-family: ui-monospace, monospace; width: 28rem; max-width: 100%; margin-bottom: 0.5rem; }
+    label { font-size: 0.85rem; color: #444; display: inline-block; margin-right: 0.5rem; }
   </style>
 </head>
 <body>
   <h1>cow-rs · wasm end-to-end harness</h1>
   <p class="meta">
     Loads <code>crates/cow-sdk-wasm/pkg/cow_sdk_wasm.js</code> and exercises the
-    Rust SDK from the browser. Run with any static server in this repo's
-    root, e.g.
-    <code>python3 -m http.server 8000</code>, then open
-    <code>http://localhost:8000/test-harness/</code>.
+    Rust SDK from the browser. Built with <code>--features in_shim_signing</code>
+    so the ECDSA panels work. Start with <code>just wasm-harness</code> then
+    open <code>http://localhost:8765/test-harness/</code>.
   </p>
 
+  <p class="group">Pure compute (no network)</p>
+
   <section>
-    <h2>1. UID parity (pure compute, no network)</h2>
+    <h2>1. <code>compute_order_uid</code> — UID parity</h2>
     <p>
-      Derives the order UID for a fixed sell-only order off mainnet. The
-      expected value is taken from the equivalent Rust example (see
-      <code>crates/cowprotocol/examples/get_quote.rs</code> downstream of
-      <code>OrderData::uid</code>).
+      Derives the 56-byte order UID for a fixed sell-only order against the
+      mainnet GPv2Settlement domain. Sanity-checks the byte length so
+      regressions in <code>OrderData::uid</code> surface immediately.
     </p>
     <p id="uid-status" class="pending">⏳ waiting…</p>
     <pre id="uid-output"></pre>
   </section>
 
   <section>
-    <h2>2. <code>get_quote</code> against api.cow.fi mainnet</h2>
+    <h2>2. <code>chain_info</code> — eleven networks</h2>
+    <p>
+      Per-chain config (settlement address, orderbook URLs, ComposableCoW
+      support). Exercises the JSON-out path for nested objects.
+    </p>
+    <button id="run-chain-info">Lookup chain_info("mainnet")</button>
+    <p id="chain-info-status" class="pending">click the button to run</p>
+    <pre id="chain-info-output"></pre>
+  </section>
+
+  <section>
+    <h2>3. <code>sign_eip712</code> — in-shim ECDSA signing</h2>
+    <p>
+      Signs the same fixed order with a hardhat-test private key (anvil
+      account #1). Pure compute; proves <code>k256</code> works inside
+      wasm linear memory. The signing scheme, owner, and (r, s, v) come
+      out byte-exact.
+    </p>
+    <label for="signer-pk">Private key (32-byte hex)</label>
+    <br />
+    <input id="signer-pk" type="text" value="0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d">
+    <br />
+    <button id="run-sign">Sign EIP-712</button>
+    <p id="sign-status" class="pending">click the button to run</p>
+    <pre id="sign-output"></pre>
+  </section>
+
+  <p class="group">Live orderbook (network)</p>
+
+  <section>
+    <h2>4. <code>get_quote_simple</code> — quote against api.cow.fi mainnet</h2>
     <p>
       Hits the live orderbook. Demonstrates reqwest's browser-fetch backend,
       CORS, JSON deserialisation across the wasm boundary, and UID derivation
       from the quote response. <strong>Network call</strong>: results depend
       on api.cow.fi being reachable from the browser.
     </p>
-    <button id="run-quote">Run get_quote (USDC → DAI, 100 USDC)</button>
+    <button id="run-quote">Run get_quote_simple (USDC → DAI, 100 USDC)</button>
     <p id="quote-status" class="pending">click the button to run</p>
     <pre id="quote-output"></pre>
   </section>
 
+  <section>
+    <h2>5. <code>version</code> — orderbook git revision</h2>
+    <p>
+      Calls <code>GET /api/v1/version</code> against
+      <code>api.cow.fi/mainnet</code>. Smallest possible network test;
+      surfaces the orderbook's deployed git revision.
+    </p>
+    <button id="run-version">Get version</button>
+    <p id="version-status" class="pending">click the button to run</p>
+    <pre id="version-output"></pre>
+  </section>
+
   <script type="module">
-    import init, { compute_order_uid, get_quote_simple } from '../crates/cow-sdk-wasm/pkg/cow_sdk_wasm.js';
+    import init, {
+      chain_info,
+      compute_order_uid,
+      get_quote_simple,
+      sign_eip712,
+      version,
+    } from '../crates/cow-sdk-wasm/pkg/cow_sdk_wasm.js';
 
     const USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
     const DAI  = '0x6B175474E89094C44Da98b954EedeAC495271d0F';
@@ -64,15 +115,37 @@
       el.textContent = msg;
     }
 
+    function runOnClick(buttonId, statusId, outputId, run) {
+      const button = document.getElementById(buttonId);
+      const status = document.getElementById(statusId);
+      const output = document.getElementById(outputId);
+      button.addEventListener('click', async () => {
+        setStatus(status, true, '⏳ running…');
+        output.textContent = '';
+        try {
+          const t0 = performance.now();
+          const result = await run();
+          const ms = (performance.now() - t0).toFixed(0);
+          output.textContent = typeof result.body === 'string'
+            ? result.body
+            : JSON.stringify(result.body, null, 2);
+          setStatus(status, true, `✅ ${result.summary} (${ms} ms)`);
+        } catch (err) {
+          setStatus(status, false, `❌ ${err.message ?? err}`);
+          output.textContent = String(err);
+        }
+      });
+    }
+
     async function main() {
       await init();
 
+      // Panel 1: UID parity (runs immediately, no input).
       const uidStatus = document.getElementById('uid-status');
       const uidOutput = document.getElementById('uid-output');
       try {
         const uid = compute_order_uid(USDC, DAI, OWNER, '100000000', '99000000000000000000', 4294967295);
         uidOutput.textContent = uid;
-        // Sanity check shape: 56 bytes => 0x + 112 hex chars.
         if (typeof uid !== 'string' || !uid.startsWith('0x') || uid.length !== 114) {
           throw new Error(`unexpected UID shape: length=${uid.length}, head=${uid.slice(0, 4)}`);
         }
@@ -82,28 +155,61 @@
         uidOutput.textContent = String(err);
       }
 
-      const button = document.getElementById('run-quote');
-      const quoteStatus = document.getElementById('quote-status');
-      const quoteOutput = document.getElementById('quote-output');
-      button.addEventListener('click', async () => {
-        setStatus(quoteStatus, true, '⏳ fetching…');
-        quoteOutput.textContent = '';
-        try {
-          const t0 = performance.now();
-          const result = await get_quote_simple('mainnet', USDC, DAI, OWNER, '100000000');
-          const ms = (performance.now() - t0).toFixed(0);
-          quoteOutput.textContent = JSON.stringify(result, null, 2);
-          if (!result?.response?.quote?.buyAmount) {
-            throw new Error('response missing quote.buyAmount');
-          }
-          if (typeof result.uid !== 'string' || result.uid.length !== 114) {
-            throw new Error('response missing derived 56-byte uid');
-          }
-          setStatus(quoteStatus, true, `✅ buy ${result.response.quote.buyAmount} DAI atomic units (${ms} ms)`);
-        } catch (err) {
-          setStatus(quoteStatus, false, `❌ ${err.message ?? err}`);
-          quoteOutput.textContent = String(err);
+      // Panel 2: chain_info.
+      runOnClick('run-chain-info', 'chain-info-status', 'chain-info-output', async () => {
+        const info = chain_info('mainnet');
+        if (info.id !== 1 || !info.settlement?.startsWith('0x')) {
+          throw new Error('chain_info missing id or settlement');
         }
+        return { body: info, summary: `id=${info.id}, settlement=${info.settlement.slice(0, 10)}…` };
+      });
+
+      // Panel 3: sign_eip712.
+      runOnClick('run-sign', 'sign-status', 'sign-output', async () => {
+        const pk = document.getElementById('signer-pk').value.trim();
+        const orderData = {
+          sellToken: USDC,
+          buyToken: DAI,
+          receiver: null,
+          sellAmount: '100000000',
+          buyAmount: '99000000000000000000',
+          validTo: 4294967295,
+          appData: '0xb48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d',
+          feeAmount: '0',
+          kind: 'sell',
+          partiallyFillable: false,
+          sellTokenBalance: 'erc20',
+          buyTokenBalance: 'erc20',
+        };
+        const sig = sign_eip712(orderData, 'mainnet', pk);
+        if (!sig.r?.startsWith('0x') || !sig.s?.startsWith('0x') || typeof sig.v !== 'number') {
+          throw new Error('signature missing r/s/v fields');
+        }
+        if (!sig.owner?.startsWith('0x') || sig.owner.length !== 42) {
+          throw new Error('signature missing recovered owner');
+        }
+        return { body: sig, summary: `owner=${sig.owner.slice(0, 10)}…, scheme=${sig.signingScheme}` };
+      });
+
+      // Panel 4: get_quote_simple.
+      runOnClick('run-quote', 'quote-status', 'quote-output', async () => {
+        const result = await get_quote_simple('mainnet', USDC, DAI, OWNER, '100000000');
+        if (!result?.response?.quote?.buyAmount) {
+          throw new Error('response missing quote.buyAmount');
+        }
+        if (typeof result.uid !== 'string' || result.uid.length !== 114) {
+          throw new Error('response missing derived 56-byte uid');
+        }
+        return { body: result, summary: `buy ${result.response.quote.buyAmount} DAI` };
+      });
+
+      // Panel 5: version.
+      runOnClick('run-version', 'version-status', 'version-output', async () => {
+        const v = await version('mainnet');
+        if (typeof v !== 'string' || v.length === 0) {
+          throw new Error('empty version response');
+        }
+        return { body: v, summary: v.slice(0, 32) };
       });
     }
 

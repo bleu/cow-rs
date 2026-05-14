@@ -18,12 +18,15 @@
 //!    caller's wallet (viem, ethers, Safe, WalletConnect) sign it, then
 //!    feed the (r, s, v) back through [`build_order_creation`].
 
+mod allocator;
+mod transport;
+
 use {
     alloy_primitives::{Address, B256, U256},
     cowprotocol::{
         AppDataCid, AppDataDoc, AppDataHash, Chain, DomainSeparator, EMPTY_APP_DATA_HASH,
-        EcdsaSignature, EcdsaSigningScheme, OrderBookApi, OrderBuilder, OrderCancellation,
-        OrderData, OrderKind, OrderUid, QuoteRequest, Signature, hashed_eip712_message,
+        EcdsaSignature, EcdsaSigningScheme, OrderBuilder, OrderCancellation, OrderData, OrderKind,
+        OrderUid, QuoteRequest, Signature, hashed_eip712_message,
     },
     serde::{Deserialize, Serialize},
     wasm_bindgen::prelude::*,
@@ -112,8 +115,18 @@ fn parse_scheme(value: &str) -> Result<EcdsaSigningScheme, JsValue> {
     }
 }
 
-fn api(chain: &str) -> Result<OrderBookApi, JsValue> {
-    Ok(OrderBookApi::new(parse_chain(chain)?))
+/// Build an `api/v1/...` URL against the given chain's orderbook base.
+/// Used by every networked endpoint below. Replaces the prior
+/// `OrderBookApi::new(...)` path so the wasm output does not need to
+/// link reqwest.
+fn endpoint(chain: Chain, path: &str) -> String {
+    let base = chain.orderbook_base_url();
+    let base = base.as_str();
+    if base.ends_with('/') {
+        format!("{base}{path}")
+    } else {
+        format!("{base}/{path}")
+    }
 }
 
 // ===== Pure-compute helpers ============================================
@@ -351,15 +364,20 @@ pub fn empty_app_data_hash() -> String {
 }
 
 // ===== Networked endpoints =============================================
+//
+// All requests go through `transport::*` (a thin wrapper over the JS
+// `fetch` global) rather than through `cowprotocol::OrderBookApi`. This
+// keeps reqwest out of the wasm output: with `lto = "fat"`, any
+// reqwest-using code in `cowprotocol` that is not reached from a
+// wasm-bindgen export gets pruned during linking.
 
 /// `GET /api/v1/quote`. Accepts a `QuoteRequest` JSON object.
 #[wasm_bindgen]
 pub async fn get_quote(chain: &str, request: JsValue) -> Result<JsValue, JsValue> {
     let request: QuoteRequest = from_js(request)?;
-    let response = api(chain)?
-        .get_quote(&request)
-        .await
-        .map_err(|err| JsValue::from_str(&format!("get_quote failed: {err}")))?;
+    let url = endpoint(parse_chain(chain)?, "api/v1/quote");
+    let response: cowprotocol::OrderQuoteResponse =
+        transport::post_json(&url, &request).await?;
     to_js(&response)
 }
 
@@ -382,10 +400,9 @@ pub async fn get_quote_simple(
         parse_u256(sell_amount_before_fee)?,
     );
     let c = parse_chain(chain)?;
-    let response = OrderBookApi::new(c)
-        .get_quote(&request)
-        .await
-        .map_err(|err| JsValue::from_str(&format!("get_quote failed: {err}")))?;
+    let url = endpoint(c, "api/v1/quote");
+    let response: cowprotocol::OrderQuoteResponse =
+        transport::post_json(&url, &request).await?;
     let order_data = response.quote.to_order_data();
     let domain = DomainSeparator::new(c.id(), c.settlement());
     let uid = order_data.uid(&domain, response.from);
@@ -400,30 +417,25 @@ pub async fn get_quote_simple(
 #[wasm_bindgen]
 pub async fn post_order(chain: &str, creation: JsValue) -> Result<String, JsValue> {
     let creation: cowprotocol::OrderCreation = from_js(creation)?;
-    let uid = api(chain)?
-        .post_order(&creation)
-        .await
-        .map_err(|err| JsValue::from_str(&format!("post_order failed: {err}")))?;
-    Ok(uid.to_string())
+    let url = endpoint(parse_chain(chain)?, "api/v1/orders");
+    transport::post_json_string(&url, &creation).await
 }
 
 /// `GET /api/v1/orders/{uid}`.
 #[wasm_bindgen]
 pub async fn get_order(chain: &str, uid: &str) -> Result<JsValue, JsValue> {
-    let order = api(chain)?
-        .get_order(&parse_uid(uid)?)
-        .await
-        .map_err(|err| JsValue::from_str(&format!("get_order failed: {err}")))?;
+    let uid = parse_uid(uid)?;
+    let url = endpoint(parse_chain(chain)?, &format!("api/v1/orders/{uid}"));
+    let order: cowprotocol::Order = transport::get(&url).await?;
     to_js(&order)
 }
 
 /// `GET /api/v1/orders/{uid}/status`.
 #[wasm_bindgen]
 pub async fn get_order_status(chain: &str, uid: &str) -> Result<JsValue, JsValue> {
-    let status = api(chain)?
-        .get_order_status(&parse_uid(uid)?)
-        .await
-        .map_err(|err| JsValue::from_str(&format!("get_order_status failed: {err}")))?;
+    let uid = parse_uid(uid)?;
+    let url = endpoint(parse_chain(chain)?, &format!("api/v1/orders/{uid}/status"));
+    let status: cowprotocol::AuctionStatus = transport::get(&url).await?;
     to_js(&status)
 }
 
@@ -435,50 +447,65 @@ pub async fn account_orders(
     offset: Option<u32>,
     limit: Option<u32>,
 ) -> Result<JsValue, JsValue> {
-    let orders = api(chain)?
-        .account_orders(parse_address(owner)?, offset, limit)
-        .await
-        .map_err(|err| JsValue::from_str(&format!("account_orders failed: {err}")))?;
+    let owner = parse_address(owner)?;
+    let mut path = format!("api/v1/account/{owner:?}/orders");
+    let mut query = Vec::with_capacity(2);
+    if let Some(offset) = offset {
+        query.push(format!("offset={offset}"));
+    }
+    if let Some(limit) = limit {
+        query.push(format!("limit={limit}"));
+    }
+    if !query.is_empty() {
+        path.push('?');
+        path.push_str(&query.join("&"));
+    }
+    let url = endpoint(parse_chain(chain)?, &path);
+    let orders: Vec<cowprotocol::Order> = transport::get(&url).await?;
     to_js(&orders)
 }
 
 /// `GET /api/v1/trades?owner=...`.
 #[wasm_bindgen]
 pub async fn trades_by_owner(chain: &str, owner: &str) -> Result<JsValue, JsValue> {
-    let trades = api(chain)?
-        .trades_by_owner(parse_address(owner)?)
-        .await
-        .map_err(|err| JsValue::from_str(&format!("trades_by_owner failed: {err}")))?;
+    let owner = parse_address(owner)?;
+    let url = endpoint(
+        parse_chain(chain)?,
+        &format!("api/v1/trades?owner={owner:?}"),
+    );
+    let trades: Vec<cowprotocol::Trade> = transport::get(&url).await?;
     to_js(&trades)
 }
 
 /// `GET /api/v1/trades?orderUid=...`.
 #[wasm_bindgen]
 pub async fn trades_by_order_uid(chain: &str, uid: &str) -> Result<JsValue, JsValue> {
-    let trades = api(chain)?
-        .trades_by_order_uid(&parse_uid(uid)?)
-        .await
-        .map_err(|err| JsValue::from_str(&format!("trades_by_order_uid failed: {err}")))?;
+    let uid = parse_uid(uid)?;
+    let url = endpoint(
+        parse_chain(chain)?,
+        &format!("api/v1/trades?orderUid={uid}"),
+    );
+    let trades: Vec<cowprotocol::Trade> = transport::get(&url).await?;
     to_js(&trades)
 }
 
 /// `GET /api/v1/token/{token}/native_price`.
 #[wasm_bindgen]
 pub async fn native_price(chain: &str, token: &str) -> Result<JsValue, JsValue> {
-    let price = api(chain)?
-        .native_price(parse_address(token)?)
-        .await
-        .map_err(|err| JsValue::from_str(&format!("native_price failed: {err}")))?;
+    let token = parse_address(token)?;
+    let url = endpoint(
+        parse_chain(chain)?,
+        &format!("api/v1/token/{token:?}/native_price"),
+    );
+    let price: cowprotocol::NativePrice = transport::get(&url).await?;
     to_js(&price)
 }
 
 /// `GET /api/v1/version`.
 #[wasm_bindgen]
 pub async fn version(chain: &str) -> Result<String, JsValue> {
-    api(chain)?
-        .version()
-        .await
-        .map_err(|err| JsValue::from_str(&format!("version failed: {err}")))
+    let url = endpoint(parse_chain(chain)?, "api/v1/version");
+    transport::get_text(&url).await
 }
 
 /// `DELETE /api/v1/orders/{uid}`. Caller must construct the signed
@@ -486,10 +513,11 @@ pub async fn version(chain: &str) -> Result<String, JsValue> {
 #[wasm_bindgen]
 pub async fn cancel_order(chain: &str, cancellation: JsValue) -> Result<(), JsValue> {
     let cancellation: OrderCancellation = from_js(cancellation)?;
-    api(chain)?
-        .cancel_order(&cancellation)
-        .await
-        .map_err(|err| JsValue::from_str(&format!("cancel_order failed: {err}")))
+    let url = endpoint(
+        parse_chain(chain)?,
+        &format!("api/v1/orders/{}", cancellation.order_uid),
+    );
+    transport::delete_json(&url, &cancellation).await
 }
 
 /// Pure-compute helper: sign a single-order cancellation in-shim and

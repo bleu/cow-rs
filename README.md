@@ -24,7 +24,7 @@ every protocol-critical path byte-for-byte against
 - **All eleven chains**: Mainnet, BNB, Gnosis, Polygon, Base, Plasma,
   Arbitrum One, Avalanche, Ink, Linea, Sepolia, plus their barn
   staging endpoints where the orderbook team publishes them.
-- **Conformance-locked**: 164 tests, with byte-exact goldens
+- **Conformance-locked**: 170 tests, with byte-exact goldens
   cross-checked against `cowprotocol/services`, `cowprotocol/contracts`,
   ethers, cow-sdk and cow-py.
 - **Sync core, async client**: hashing, signing and contract decoding
@@ -140,7 +140,7 @@ assert_eq!(uid.0.len(), 56);
 
 Everything is re-exported at the crate root: `use cowprotocol::...`.
 
-## WASM
+## WASM and JavaScript
 
 cow-rs targets `wasm32-unknown-unknown`:
 
@@ -151,10 +151,132 @@ cow-rs targets `wasm32-unknown-unknown`:
   non-wasm only.
 - CI gates `cargo check --target wasm32-unknown-unknown` on every
   push.
-- `crates/cow-sdk-wasm/` ships a `#[wasm_bindgen]` shim and
-  `test-harness/index.html` drives `get_quote` and `compute_order_uid`
-  against the live orderbook from a real browser. Run with
-  `just wasm-harness`.
+- `crates/cow-sdk-wasm/` ships a `#[wasm_bindgen]` shim published to
+  npm as
+  [`@cowdao-grants/cow-sdk-wasm`](crates/cow-sdk-wasm/README.md);
+  `test-harness/index.html` exercises it end-to-end against the live
+  orderbook from a real browser. Run with `just wasm-harness`.
+
+### JavaScript quick-start
+
+Two signing flows. Pick one.
+
+**In-shim signing** (tests, scripts, fast iteration): the wasm crate
+holds the private key and signs inside linear memory. Requires the
+`in_shim_signing` cargo feature at build time (off by default).
+
+```js
+import init, {
+  get_quote_simple,
+  sign_eip712,
+  build_order_creation,
+  post_order,
+} from '@cowdao-grants/cow-sdk-wasm';
+
+await init();
+
+// 1. Quote (network).
+const { response } = await get_quote_simple(
+  'mainnet',
+  '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // USDC
+  '0x6B175474E89094C44Da98b954EedeAC495271d0F', // DAI
+  '0x70997970C51812dc3A010C7d01b50e0d17dc79C8', // owner
+  '100000000', // 100 USDC, 6 decimals
+);
+
+// 2. Sign in-shim.
+const sig = sign_eip712(response.quote, 'mainnet', PRIVATE_KEY_HEX);
+
+// 3. Submit (network).
+const creation = build_order_creation(
+  response.quote, sig, response.from, '{}', response.id,
+);
+const uid = await post_order('mainnet', creation);
+console.log(`https://explorer.cow.fi/orders/${uid}`);
+```
+
+**External signing** (production, Safe / WalletConnect / browser
+wallets): the wasm crate never sees the private key. The caller's
+wallet signs the EIP-712 typed data with viem / ethers / Safe, then
+hands the `(r, s, v)` bag back. Works against the default
+(no-feature) build.
+
+```js
+import init, {
+  chain_info,
+  get_quote_simple,
+  build_order_creation,
+  post_order,
+} from '@cowdao-grants/cow-sdk-wasm';
+import { createWalletClient, custom, hexToBytes } from 'viem';
+import { mainnet } from 'viem/chains';
+
+await init();
+
+const wallet = createWalletClient({ chain: mainnet, transport: custom(window.ethereum) });
+const [account] = await wallet.getAddresses();
+
+const { response } = await get_quote_simple(
+  'mainnet',
+  '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+  '0x6B175474E89094C44Da98b954EedeAC495271d0F',
+  account,
+  '100000000',
+);
+
+// Wallet signs the canonical GPv2Order typed data. Define the domain
+// + types once (see https://docs.cow.fi/cow-protocol/reference/core/signing-schemes).
+const info = chain_info('mainnet');
+const signatureHex = await wallet.signTypedData({
+  account,
+  domain: {
+    name: 'Gnosis Protocol',
+    version: 'v2',
+    chainId: info.id,
+    verifyingContract: info.settlement,
+  },
+  types: {
+    Order: [
+      { name: 'sellToken',          type: 'address' },
+      { name: 'buyToken',           type: 'address' },
+      { name: 'receiver',           type: 'address' },
+      { name: 'sellAmount',         type: 'uint256' },
+      { name: 'buyAmount',          type: 'uint256' },
+      { name: 'validTo',            type: 'uint32'  },
+      { name: 'appData',            type: 'bytes32' },
+      { name: 'feeAmount',          type: 'uint256' },
+      { name: 'kind',               type: 'string'  },
+      { name: 'partiallyFillable',  type: 'bool'    },
+      { name: 'sellTokenBalance',   type: 'string'  },
+      { name: 'buyTokenBalance',    type: 'string'  },
+    ],
+  },
+  primaryType: 'Order',
+  // The orderbook serialises `receiver: null` as the zero address inside
+  // the EIP-712 struct hash; mirror that on the JS side.
+  message: { ...response.quote, receiver: response.quote.receiver ?? '0x0000000000000000000000000000000000000000' },
+});
+
+// Split the 65-byte signature into (r, s, v) for build_order_creation.
+const bytes = hexToBytes(signatureHex);
+const sig = {
+  signingScheme: 'eip712',
+  r: '0x' + Buffer.from(bytes.slice(0, 32)).toString('hex'),
+  s: '0x' + Buffer.from(bytes.slice(32, 64)).toString('hex'),
+  v: bytes[64],
+};
+
+const creation = build_order_creation(response.quote, sig, account, '{}', response.id);
+const uid = await post_order('mainnet', creation);
+```
+
+For Safe wallets, replace `signTypedData` with the Safe SDK's
+`signTransaction` flow and use [`build_order_creation_eip1271`] instead;
+the shim wraps the bytes into a `Signature::Eip1271` envelope.
+
+See [`crates/cow-sdk-wasm/README.md`](crates/cow-sdk-wasm/README.md)
+for the full exported surface, the `in_shim_signing` feature trade-off,
+and the npm publish flow for maintainers.
 
 ### Build targets and bundle size
 
@@ -182,20 +304,30 @@ workspace `[profile.release]`):
   consumers use their own profile.
 - `cowprotocol = { default-features = false }`: drops the `subgraph`
   GraphQL client; not reachable from JS.
-- `lol_alloc` global allocator (~5 KB vs dlmalloc's ~10 KB); enable
-  by adding `mod allocator;` to the wasm crate's `lib.rs`.
+- `lol_alloc` global allocator (~5 KB vs dlmalloc's ~10 KB). Active by
+  default — `mod allocator;` is wired in at the top of the wasm crate's
+  `lib.rs`.
 - `in_shim_signing` cargo feature, default-off: gates
   `alloy-signer` + `alloy-signer-local` so the default build ships
   hash builders only. Saves ~68 KB; integrators sign with
   viem / ethers / Safe and submit the (r, s, v) bag back through
   `build_order_creation`.
+- **No reqwest in the wasm output**: HTTP-touching exports
+  (`get_quote`, `post_order`, etc.) call the JS `fetch` global directly
+  via `js_sys::Reflect`, side-stepping reqwest's 150 KB bundle. With
+  `lto = "fat"` the linker drops reqwest from the wasm binary because
+  no wasm-bindgen export reaches it. Cowprotocol stays unchanged — the
+  same crate continues to ship reqwest-backed `OrderBookApi` for
+  native consumers.
 
 Current `.wasm` after `wasm-opt -Oz`:
 
 ```
-default features              652 KB
-+ --features in_shim_signing  720 KB
+default features              584 KB
++ --features in_shim_signing  ~650 KB
 ```
+
+(Down from 652 KB / 720 KB before lever 1.)
 
 ## Conformance
 
