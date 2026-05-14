@@ -184,3 +184,58 @@ jobs:
           key: deny
       - run: cargo install --locked cargo-deny
       - run: cargo deny check
+
+  semver-checks:
+    name: semver-checks
+    runs-on: ubuntu-latest
+    # Gates against accidental SemVer breakage on the published
+    # `cowprotocol` crate. Non-blocking (`continue-on-error: true`) until
+    # the first crates.io publish establishes a baseline; flip to
+    # blocking and add to `ci-success.needs` once 1.0.0-alpha is up.
+    continue-on-error: true
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-04
+        with:
+          toolchain: "1.91.1"
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          key: semver-checks
+      # TODO: pin to a full SHA once we settle on a version; the action's
+      # author keeps the `@v2` tag stable across minor bumps.
+      - uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          package: cowprotocol
+
+  ci-success:
+    name: ci-success
+    # Aggregator job: single status check for branch protection so the
+    # required-check list does not need to change every time a job is
+    # added or renamed. `semver-checks` is intentionally not listed
+    # while it is still non-blocking.
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - rustfmt
+      - clippy
+      - test
+      - msrv
+      - wasm
+      - wasm-size
+      - wasm-test
+      - wasm-test-signing
+      - docs
+      - deny
+    steps:
+      - name: Verify all required jobs succeeded
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "needs.*.result: $results"
+          for r in $results; do
+            if [ "$r" != "success" ]; then
+              echo "::error::At least one required job did not succeed (saw '$r')"
+              exit 1
+            fi
+          done

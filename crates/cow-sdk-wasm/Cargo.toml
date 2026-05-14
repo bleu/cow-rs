@@ -17,13 +17,15 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
-# In-shim signing pulls in `alloy-signer` and `alloy-signer-local` so
-# the wasm crate can accept a private-key hex string and produce
-# signatures inside linear memory. Off by default: production
-# integrations sign with viem / ethers / Safe and only need this crate
-# to compute the EIP-712 typed-data hash. Enabling this feature adds
-# ~80-120 KB of crypto code to the wasm binary.
-in_shim_signing = ["dep:alloy-signer", "dep:alloy-signer-local"]
+# In-shim signing pulls in `alloy-signer-local` so the wasm crate can
+# accept a private-key hex string and produce signatures inside linear
+# memory. Off by default: production integrations sign with viem /
+# ethers / Safe and only need this crate to compute the EIP-712
+# typed-data hash. Enabling this feature adds ~80-120 KB of crypto
+# code to the wasm binary. `alloy-signer`'s `Signer` trait is reached
+# transitively through `alloy-signer-local`'s re-exports, so it does
+# not need its own `dep:` entry here.
+in_shim_signing = ["dep:alloy-signer-local"]
 
 [dependencies]
 # `default-features = false` drops the `subgraph` GraphQL client from
@@ -31,7 +33,6 @@ in_shim_signing = ["dep:alloy-signer", "dep:alloy-signer-local"]
 # in the wasm binary.
 cowprotocol = { path = "../cowprotocol", version = "1.0.0-alpha", default-features = false }
 alloy-primitives.workspace = true
-alloy-signer = { workspace = true, optional = true }
 alloy-signer-local = { workspace = true, optional = true }
 const-hex.workspace = true
 serde.workspace = true

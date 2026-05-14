@@ -26,6 +26,10 @@
 //!    ethers, Safe, WalletConnect) sign it, then feed the (r, s, v)
 //!    back through [`build_order_creation`].
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+#![deny(unsafe_code)]
+#![warn(missing_docs, rustdoc::missing_crate_level_docs)]
+
 mod allocator;
 mod transport;
 

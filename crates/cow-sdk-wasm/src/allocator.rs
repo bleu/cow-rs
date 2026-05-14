@@ -11,5 +11,6 @@
 
 #[cfg(target_arch = "wasm32")]
 #[global_allocator]
+#[allow(unsafe_code)]
 static ALLOC: lol_alloc::AssumeSingleThreaded<lol_alloc::FreeListAllocator> =
     unsafe { lol_alloc::AssumeSingleThreaded::new(lol_alloc::FreeListAllocator::new()) };

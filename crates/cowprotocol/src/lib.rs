@@ -79,7 +79,17 @@
 //!
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+#![forbid(unsafe_code)]
+#![warn(missing_docs, rustdoc::missing_crate_level_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
+
+// `getrandom` is a wasm-only build-time dep that wires alloy's PRNG
+// into the browser's `crypto.getRandomValues` via its `js` feature.
+// Nothing in this crate references the crate directly; this `as _`
+// import keeps `unused_crate_dependencies` quiet on the wasm32 target.
+#[cfg(target_arch = "wasm32")]
+use getrandom as _;
 
 pub mod app_data;
 pub mod bytes_hex;
