@@ -13,5 +13,8 @@ build:
 test:
 	cargo test --all-targets --all-features --workspace
 
+wasm-check:
+	cargo check --target wasm32-unknown-unknown --all-features --workspace
+
 doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace --all-features
