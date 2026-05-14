@@ -95,9 +95,10 @@ pub mod subgraph;
 
 pub use crate::{
     app_data::{
-        AppDataCid, AppDataCidError, AppDataDoc, AppDataHash, AppDataMetadata, AppDataOrderClass,
-        AppDataPartnerFee, AppDataQuote, AppDataReferrer, AppDataUtm, EMPTY_APP_DATA_HASH,
-        EMPTY_APP_DATA_JSON, LATEST_APP_DATA_VERSION,
+        AppDataCid, AppDataCidError, AppDataDoc, AppDataFlashloan, AppDataHash, AppDataMetadata,
+        AppDataOrderClass, AppDataPartnerFee, AppDataQuote, AppDataReferrer, AppDataReplacedOrder,
+        AppDataUtm, AppDataWrapperCall, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON, FeePolicy,
+        LATEST_APP_DATA_VERSION,
     },
     cancellation::{OrderCancellation, OrderCancellations, SignedOrderCancellations},
     chain::{Chain, UnsupportedChain},

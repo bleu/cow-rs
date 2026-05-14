@@ -13,11 +13,13 @@
 //! with the existing 32-byte digest and emits the bytes in base32 lower-case
 //! (RFC 4648, no padding) with the `b` multibase tag.
 
-use alloy_primitives::{Address, keccak256};
+use alloy_primitives::{Address, U256, keccak256};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+use serde_with::{DisplayFromStr, serde_as};
 use std::fmt;
 
-use crate::order::OrderClass;
+use crate::bytes_hex::BytesHex;
+use crate::order::{OrderClass, OrderUid};
 
 /// 32-byte digest of an [app-data] document.
 ///
@@ -40,10 +42,7 @@ impl fmt::Debug for AppDataHash {
 impl fmt::Display for AppDataHash {
     /// `0x`-prefixed lower-case hex, matching the wire form.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut bytes = [0u8; 2 + 64];
-        bytes[..2].copy_from_slice(b"0x");
-        const_hex::encode_to_slice(self.0, &mut bytes[2..]).unwrap();
-        f.write_str(std::str::from_utf8(&bytes).unwrap())
+        f.write_str(&const_hex::encode_prefixed(self.0))
     }
 }
 
@@ -179,6 +178,20 @@ pub struct AppDataMetadata {
     /// `cow-protocol/reference/core/intents/hooks` for the structure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hooks: Option<serde_json::Value>,
+    /// Flashloan attached to this order. Mirrors the upstream
+    /// `ProtocolAppData.flashloan` field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flashloan: Option<AppDataFlashloan>,
+    /// UID of the order this one replaces. Solvers cancel the prior
+    /// order when settling the replacement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced_order: Option<AppDataReplacedOrder>,
+    /// Wrapper-contract calls that wrap the order's settlement.
+    ///
+    /// Skipped when empty so a wrapper-free document still hashes to the
+    /// same digest it did before this field was added.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wrappers: Vec<AppDataWrapperCall>,
 }
 
 /// Quote metadata: only the slippage hint is modelled explicitly.
@@ -205,15 +218,211 @@ pub struct AppDataOrderClass {
 
 /// `metadata.partnerFee` sub-document.
 ///
-/// Solvers route the configured basis-point cut of order surplus to
-/// `recipient`. See `cow-protocol/reference/core/intents/app-data.mdx`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// Solvers route the configured cut of order surplus / volume to
+/// `recipient` according to the policy carried in [`Self::policy`]. The
+/// policy fields are *flattened* into the same JSON object as
+/// `recipient`, matching the wire shape used by
+/// `cowprotocol/services::app_data::PartnerFee`.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppDataPartnerFee {
-    /// Basis points (`100 == 1 %`).
-    pub bps: u32,
+    /// Policy describing how the fee is computed.
+    pub policy: FeePolicy,
     /// Address that receives the partner fee.
     pub recipient: Address,
+}
+
+impl Serialize for AppDataPartnerFee {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeMap as _;
+
+        let entry_count = match self.policy {
+            FeePolicy::Volume { .. } => 2,
+            FeePolicy::Surplus { .. } | FeePolicy::PriceImprovement { .. } => 3,
+        };
+        let mut map = serializer.serialize_map(Some(entry_count))?;
+        match self.policy {
+            FeePolicy::Volume { bps } => {
+                // Legacy `bps` key: preserves existing app-data hashes
+                // and is still accepted by the upstream deserializer.
+                map.serialize_entry("bps", &bps)?;
+            }
+            FeePolicy::Surplus { bps, max_volume_bps } => {
+                map.serialize_entry("surplusBps", &bps)?;
+                map.serialize_entry("maxVolumeBps", &max_volume_bps)?;
+            }
+            FeePolicy::PriceImprovement { bps, max_volume_bps } => {
+                map.serialize_entry("priceImprovementBps", &bps)?;
+                map.serialize_entry("maxVolumeBps", &max_volume_bps)?;
+            }
+        }
+        map.serialize_entry("recipient", &self.recipient)?;
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for AppDataPartnerFee {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Helper {
+            recipient: Address,
+            #[serde(default)]
+            bps: Option<u64>,
+            #[serde(default)]
+            volume_bps: Option<u64>,
+            #[serde(default)]
+            surplus_bps: Option<u64>,
+            #[serde(default)]
+            price_improvement_bps: Option<u64>,
+            #[serde(default)]
+            max_volume_bps: Option<u64>,
+        }
+
+        let h = Helper::deserialize(deserializer)?;
+        let policy = match h {
+            Helper {
+                surplus_bps: Some(bps),
+                max_volume_bps: Some(max_volume_bps),
+                price_improvement_bps: None,
+                volume_bps: None,
+                bps: None,
+                ..
+            } => FeePolicy::Surplus { bps, max_volume_bps },
+            Helper {
+                surplus_bps: None,
+                max_volume_bps: Some(max_volume_bps),
+                price_improvement_bps: Some(bps),
+                volume_bps: None,
+                bps: None,
+                ..
+            } => FeePolicy::PriceImprovement { bps, max_volume_bps },
+            Helper {
+                surplus_bps: None,
+                max_volume_bps: None,
+                price_improvement_bps: None,
+                volume_bps: Some(bps),
+                bps: None,
+                ..
+            }
+            | Helper {
+                surplus_bps: None,
+                max_volume_bps: None,
+                price_improvement_bps: None,
+                volume_bps: None,
+                bps: Some(bps),
+                ..
+            } => FeePolicy::Volume { bps },
+            _ => {
+                return Err(D::Error::custom("unknown partner-fee policy shape"));
+            }
+        };
+        Ok(Self {
+            policy,
+            recipient: h.recipient,
+        })
+    }
+}
+
+/// Fee-policy variant used inside [`AppDataPartnerFee`].
+///
+/// The policy is *flattened* alongside `recipient` in the wire JSON,
+/// matching the upstream `FeePolicy` deserializer in
+/// `cowprotocol/services::app_data`. Mirroring it:
+///
+/// - [`FeePolicy::Surplus`] emits `surplusBps` + `maxVolumeBps`.
+/// - [`FeePolicy::PriceImprovement`] emits `priceImprovementBps` +
+///   `maxVolumeBps`.
+/// - [`FeePolicy::Volume`] emits the legacy `bps` field (rather than
+///   the equivalent `volumeBps`) so docs hashed with previous SDK
+///   versions keep their digests stable.
+///
+/// Deserialisation accepts either `bps` or `volumeBps` for the volume
+/// variant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FeePolicy {
+    /// Volume fee: `bps` charged on the swap volume.
+    Volume {
+        /// Basis-point fee (`100 == 1 %`).
+        bps: u64,
+    },
+    /// Surplus fee: `bps` of the captured surplus, capped at
+    /// `max_volume_bps` of the swap volume.
+    Surplus {
+        /// Basis-point cut of the surplus.
+        bps: u64,
+        /// Maximum cut as a basis-point fraction of swap volume.
+        max_volume_bps: u64,
+    },
+    /// Price-improvement fee: `bps` of the price improvement over the
+    /// reference quote, capped at `max_volume_bps` of the swap volume.
+    PriceImprovement {
+        /// Basis-point cut of the price improvement.
+        bps: u64,
+        /// Maximum cut as a basis-point fraction of swap volume.
+        max_volume_bps: u64,
+    },
+}
+
+/// `metadata.flashloan` sub-document.
+///
+/// Describes a flashloan attached to the order: the protocol that lends
+/// the funds, the adapter contract that bridges the loan to the
+/// settlement, the receiver of the loan, the borrowed `token`, and the
+/// `amount` in atomic units. Mirrors `ProtocolAppData::flashloan` in
+/// `cowprotocol/services`.
+#[serde_as]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppDataFlashloan {
+    /// Liquidity-providing protocol (e.g. Aave pool address).
+    pub liquidity_provider: Address,
+    /// Adapter that proxies the loan into the settlement.
+    pub protocol_adapter: Address,
+    /// Account that receives the borrowed funds for the duration of the
+    /// settlement.
+    pub receiver: Address,
+    /// Token being borrowed.
+    pub token: Address,
+    /// Atomic-unit amount of `token` to borrow.
+    #[serde_as(as = "DisplayFromStr")]
+    pub amount: U256,
+}
+
+/// `metadata.replacedOrder` sub-document.
+///
+/// The UID of the order this one replaces. Solvers cancel the prior
+/// order when settling the replacement. Mirrors
+/// `ProtocolAppData::replaced_order`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AppDataReplacedOrder {
+    /// UID of the order being replaced.
+    pub uid: OrderUid,
+}
+
+/// `metadata.wrappers[]` entry.
+///
+/// Wrapper-contract calls that wrap the order's settlement; solvers
+/// invoke them as part of the settlement transaction. Mirrors
+/// `ProtocolAppData::wrappers[*]`.
+#[serde_as]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppDataWrapperCall {
+    /// Wrapper contract address.
+    pub address: Address,
+    /// Call data passed to the wrapper. Serialised as `0x`-prefixed hex.
+    #[serde_as(as = "BytesHex")]
+    pub data: Vec<u8>,
+    /// If `true`, solvers may settle without invoking the wrapper when
+    /// it is uneconomical to do so.
+    #[serde(default)]
+    pub is_omittable: bool,
 }
 
 /// `metadata.referrer` sub-document.
@@ -273,9 +482,38 @@ impl AppDataDoc {
         self
     }
 
-    /// Builder: attach a partner fee.
+    /// Builder: attach a *volume* partner fee (`bps` of the swap value
+    /// to `recipient`). Shortcut for [`AppDataDoc::with_partner_fee_policy`]
+    /// with a [`FeePolicy::Volume`].
     pub const fn with_partner_fee(mut self, bps: u32, recipient: Address) -> Self {
-        self.metadata.partner_fee = Some(AppDataPartnerFee { bps, recipient });
+        self.metadata.partner_fee = Some(AppDataPartnerFee {
+            policy: FeePolicy::Volume { bps: bps as u64 },
+            recipient,
+        });
+        self
+    }
+
+    /// Builder: attach a partner fee with an explicit [`FeePolicy`].
+    pub const fn with_partner_fee_policy(mut self, policy: FeePolicy, recipient: Address) -> Self {
+        self.metadata.partner_fee = Some(AppDataPartnerFee { policy, recipient });
+        self
+    }
+
+    /// Builder: attach a typed [`AppDataFlashloan`].
+    pub const fn with_flashloan(mut self, flashloan: AppDataFlashloan) -> Self {
+        self.metadata.flashloan = Some(flashloan);
+        self
+    }
+
+    /// Builder: mark this order as replacing an earlier one.
+    pub const fn with_replaced_order(mut self, uid: OrderUid) -> Self {
+        self.metadata.replaced_order = Some(AppDataReplacedOrder { uid });
+        self
+    }
+
+    /// Builder: append a wrapper-contract call.
+    pub fn with_wrapper(mut self, wrapper: AppDataWrapperCall) -> Self {
+        self.metadata.wrappers.push(wrapper);
         self
     }
 
@@ -617,13 +855,16 @@ mod tests {
     #[test]
     fn empty_doc_matches_constant() {
         let doc = AppDataDoc::new("");
-        // Every metadata field is `None` by default.
+        // Every metadata field is `None` (or empty) by default.
         assert!(doc.metadata.quote.is_none());
         assert!(doc.metadata.order_class.is_none());
         assert!(doc.metadata.partner_fee.is_none());
         assert!(doc.metadata.referrer.is_none());
         assert!(doc.metadata.utm.is_none());
         assert!(doc.metadata.hooks.is_none());
+        assert!(doc.metadata.flashloan.is_none());
+        assert!(doc.metadata.replaced_order.is_none());
+        assert!(doc.metadata.wrappers.is_empty());
 
         let json = doc.canonical_json();
         assert_eq!(json, r#"{"appCode":"","metadata":{},"version":"1.6.0"}"#);
@@ -701,14 +942,154 @@ mod tests {
     }
 
     #[test]
-    fn partner_fee_round_trips() {
+    fn partner_fee_volume_round_trips_with_legacy_bps_key() {
         let recipient = address!("00000000219AB540356CBb839CbE05303D7705FA");
         let doc = AppDataDoc::new("app").with_partner_fee(75, recipient);
         let json = doc.canonical_json();
+        // Volume serialises with the legacy `"bps"` key so existing
+        // app-data hashes stay stable. The `recipient` is in the same
+        // flat object, not nested under `policy`.
+        assert!(
+            json.to_lowercase().contains(r#""partnerfee":{"bps":75,"recipient":"#),
+            "got: {json}",
+        );
         let parsed: AppDataDoc = serde_json::from_str(&json).unwrap();
         let fee = parsed.metadata.partner_fee.expect("partner fee preserved");
-        assert_eq!(fee.bps, 75);
+        assert!(matches!(fee.policy, FeePolicy::Volume { bps: 75 }));
         assert_eq!(fee.recipient, recipient);
+    }
+
+    /// Surplus policy emits `surplusBps` + `maxVolumeBps` flat alongside
+    /// `recipient`. Locks the wire shape against the upstream
+    /// `FeePolicy` deserializer.
+    #[test]
+    fn partner_fee_surplus_emits_typed_keys() {
+        let recipient = address!("00000000219AB540356CBb839CbE05303D7705FA");
+        let doc = AppDataDoc::new("app").with_partner_fee_policy(
+            FeePolicy::Surplus {
+                bps: 25,
+                max_volume_bps: 100,
+            },
+            recipient,
+        );
+        let json = doc.canonical_json();
+        assert!(json.contains(r#""maxVolumeBps":100"#), "got: {json}");
+        assert!(json.contains(r#""surplusBps":25"#), "got: {json}");
+
+        let parsed: AppDataDoc = serde_json::from_str(&json).unwrap();
+        let fee = parsed.metadata.partner_fee.expect("partner fee preserved");
+        assert!(matches!(
+            fee.policy,
+            FeePolicy::Surplus {
+                bps: 25,
+                max_volume_bps: 100,
+            }
+        ));
+    }
+
+    /// PriceImprovement policy emits `priceImprovementBps` +
+    /// `maxVolumeBps`.
+    #[test]
+    fn partner_fee_price_improvement_emits_typed_keys() {
+        let recipient = address!("00000000219AB540356CBb839CbE05303D7705FA");
+        let doc = AppDataDoc::new("app").with_partner_fee_policy(
+            FeePolicy::PriceImprovement {
+                bps: 30,
+                max_volume_bps: 150,
+            },
+            recipient,
+        );
+        let json = doc.canonical_json();
+        assert!(json.contains(r#""priceImprovementBps":30"#), "got: {json}");
+        assert!(json.contains(r#""maxVolumeBps":150"#), "got: {json}");
+
+        let parsed: AppDataDoc = serde_json::from_str(&json).unwrap();
+        let fee = parsed.metadata.partner_fee.expect("partner fee preserved");
+        assert!(matches!(
+            fee.policy,
+            FeePolicy::PriceImprovement {
+                bps: 30,
+                max_volume_bps: 150,
+            }
+        ));
+    }
+
+    /// Volume can also be expressed as `volumeBps` on the wire, which
+    /// the upstream deserializer accepts. We accept it too.
+    #[test]
+    fn partner_fee_deserialises_volume_bps_alias() {
+        let recipient = address!("00000000219AB540356CBb839CbE05303D7705FA");
+        let json = format!(
+            r#"{{"volumeBps":42,"recipient":"{recipient:?}"}}"#,
+        );
+        let fee: AppDataPartnerFee = serde_json::from_str(&json).unwrap();
+        assert!(matches!(fee.policy, FeePolicy::Volume { bps: 42 }));
+        assert_eq!(fee.recipient, recipient);
+    }
+
+    /// Ambiguous policy combinations are rejected outright.
+    #[test]
+    fn partner_fee_rejects_mixed_policy_fields() {
+        let recipient = address!("00000000219AB540356CBb839CbE05303D7705FA");
+        let json = format!(
+            r#"{{"surplusBps":10,"priceImprovementBps":20,"maxVolumeBps":50,"recipient":"{recipient:?}"}}"#,
+        );
+        let err = serde_json::from_str::<AppDataPartnerFee>(&json).unwrap_err();
+        assert!(err.to_string().contains("unknown partner-fee policy"));
+    }
+
+    /// Lock the wire shape and round-trip of `metadata.flashloan`.
+    #[test]
+    fn flashloan_round_trips() {
+        let flashloan = AppDataFlashloan {
+            liquidity_provider: address!("1111111111111111111111111111111111111111"),
+            protocol_adapter: address!("2222222222222222222222222222222222222222"),
+            receiver: address!("3333333333333333333333333333333333333333"),
+            token: address!("4444444444444444444444444444444444444444"),
+            amount: U256::from(1_000_000_u64),
+        };
+        let doc = AppDataDoc::new("app").with_flashloan(flashloan.clone());
+        let json = doc.canonical_json();
+        assert!(
+            json.contains(r#""amount":"1000000""#),
+            "amount must serialise as decimal string, got: {json}",
+        );
+        let parsed: AppDataDoc = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.metadata.flashloan.expect("flashloan preserved"), flashloan);
+    }
+
+    /// `metadata.replacedOrder.uid` round-trips through the wire form.
+    #[test]
+    fn replaced_order_round_trips() {
+        let uid = OrderUid([0x55; 56]);
+        let doc = AppDataDoc::new("app").with_replaced_order(uid);
+        let json = doc.canonical_json();
+        assert!(json.contains(r#""replacedOrder":{"uid":"0x"#), "got: {json}");
+        let parsed: AppDataDoc = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.metadata.replaced_order.expect("replaced order").uid, uid);
+    }
+
+    /// `metadata.wrappers[]` round-trips with hex-encoded call data, and
+    /// is skipped from the canonical JSON when empty (preserving the
+    /// digest of documents authored before this field existed).
+    #[test]
+    fn wrappers_round_trip_and_skip_when_empty() {
+        // Empty wrappers must not appear in canonical JSON, otherwise
+        // the document's hash drifts away from what older SDKs computed.
+        let doc = AppDataDoc::new("app");
+        assert!(!doc.canonical_json().contains("wrappers"));
+
+        let wrapper = AppDataWrapperCall {
+            address: address!("5555555555555555555555555555555555555555"),
+            data: vec![0xde, 0xad, 0xbe, 0xef],
+            is_omittable: true,
+        };
+        let doc = doc.with_wrapper(wrapper.clone());
+        let json = doc.canonical_json();
+        assert!(json.contains(r#""data":"0xdeadbeef""#), "got: {json}");
+        assert!(json.contains(r#""isOmittable":true"#), "got: {json}");
+        let parsed: AppDataDoc = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.metadata.wrappers, vec![wrapper]);
     }
 
     #[test]
