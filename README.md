@@ -46,7 +46,7 @@ every protocol-critical path byte-for-byte against
 
 ```toml
 [dependencies]
-cowprotocol = "1.0.0-alpha"
+cowprotocol = "1.0.0-alpha.1"
 ```
 
 The crate is published as `cowprotocol` on crates.io (the `cow-rs` name was already taken on
