@@ -95,10 +95,22 @@ name = "app-data"
 repo = "cowprotocol/app-data"
 url = "https://github.com/cowprotocol/app-data"
 sha = "31f130d1838ea5018facdfe240aef46ff0cc1881"
-why = "Canonical AppData JSON Schema. Every version we accept (1.0.0 — 1.6.0) must be expressible against these schema documents."
+why = "Canonical AppData JSON Schema. Every version we accept (1.0.0 to 1.6.0) must be expressible against these schema documents."
 producers = [
-    "schemas/v1.6.0.json",
-    "schemas/v1.5.0.json",
-    "schemas/v1.4.0.json",
-    "src/cleanAppData.ts",
+    "src/schemas/v1.6.0.json",
+    "src/schemas/v1.5.0.json",
+    "src/schemas/definitions.json",
+    "src/schemas/partnerFee/v1.0.0.json",
+    "src/schemas/quote/v1.1.0.json",
+    "src/schemas/referrer/v0.2.0.json",
+]
+
+[[source]]
+name = "subgraph"
+repo = "cowprotocol/subgraph"
+url = "https://github.com/cowprotocol/subgraph"
+sha = "ebab4ae0e75cada2628e937a1711ec0ea14b3fb1"
+why = "Subgraph GraphQL schema. Our `subgraph` module hand-codes queries against these entities; the schema_validation tests assert every entity we reference exists upstream."
+producers = [
+    "schema.graphql",
 ]

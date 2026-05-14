@@ -70,6 +70,13 @@ wasm-size-check: wasm-build-web
 npm-pack: wasm-build-all
 	bash scripts/wasm-npm-pack.sh
 
+# Re-fetch the upstream conformance specs at the shas pinned in
+# parity/source-lock.toml. Bump the shas in source-lock.toml first,
+# then run this to refresh specs/ and re-run `just test` to confirm
+# nothing in our wire types has drifted.
+fetch-specs:
+	bash scripts/fetch-specs.sh
+
 doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace --all-features
 
