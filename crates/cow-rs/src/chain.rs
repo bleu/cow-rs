@@ -4,9 +4,12 @@
 //! Each variant of [`Chain`] records both the canonical chain id and the
 //! URL slug used by that orderbook deployment.
 
+use alloy_primitives::Address;
 use serde::{Deserialize, Deserializer, de};
 use std::fmt;
 use std::str::FromStr;
+
+use crate::contracts::{GPV2_SETTLEMENT, GPV2_VAULT_RELAYER};
 
 /// A chain supported by the CoW Protocol orderbook.
 ///
@@ -61,6 +64,26 @@ impl Chain {
             Self::Linea => "linea",
             Self::Sepolia => "sepolia",
         }
+    }
+
+    /// Deployment address of `GPv2Settlement` on this chain. Identical on
+    /// every variant via CREATE2; the accessor exists for symmetry with
+    /// [`Chain::orderbook_base_url`] so call sites can write
+    /// `chain.settlement()` instead of reaching for the module-level
+    /// constant.
+    pub const fn settlement(self) -> Address {
+        // Suppress the unused-self warning on a method that intentionally
+        // returns the same address on every variant.
+        let _ = self;
+        GPV2_SETTLEMENT
+    }
+
+    /// Deployment address of `GPv2VaultRelayer` on this chain. This is
+    /// the spender ERC-20 `approve` calls should target before submitting
+    /// an order.
+    pub const fn vault_relayer(self) -> Address {
+        let _ = self;
+        GPV2_VAULT_RELAYER
     }
 
     /// Production orderbook base URL, e.g. `https://api.cow.fi/mainnet`.

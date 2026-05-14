@@ -17,6 +17,27 @@ use crate::order::{BuyTokenDestination, Order, OrderData, OrderKind, OrderUid, S
 use crate::signature::Signature;
 use crate::signing_scheme::SigningScheme;
 
+/// Quote price-quality knob the orderbook accepts on `POST
+/// /api/v1/quote`. Solvers honour the hint by trading off latency
+/// against the depth of price discovery they perform.
+///
+/// Source: `cow-protocol/reference/apis/orderbook.mdx` §"Price Quality".
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PriceQuality {
+    /// Fast: orderbook returns the first solver answer it gets.
+    Fast,
+    /// Optimal: orderbook waits for the best solver answer within the
+    /// quoting window. This is the default the orderbook applies when
+    /// the field is omitted.
+    #[default]
+    Optimal,
+    /// Verified: like `Optimal`, plus the orderbook simulates the order
+    /// against on-chain balances before answering. Slowest, but lets the
+    /// caller skip the allowance / balance pre-flight check.
+    Verified,
+}
+
 /// Settled trade as returned by `GET /api/v1/trades`.
 ///
 /// The orderbook emits one record per `GPv2Settlement.Trade` log. Optional
@@ -186,6 +207,11 @@ pub struct QuoteRequest {
     /// Intended signing scheme; the orderbook returns this in the response.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signing_scheme: Option<SigningScheme>,
+    /// Latency-vs-depth trade-off the orderbook should apply when
+    /// discovering a price. Defaults to [`PriceQuality::Optimal`] when
+    /// absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_quality: Option<PriceQuality>,
 }
 
 impl QuoteRequest {
@@ -239,6 +265,7 @@ impl QuoteRequest {
             sell_token_balance: None,
             buy_token_balance: None,
             signing_scheme: None,
+            price_quality: None,
         }
     }
 
@@ -272,6 +299,40 @@ impl QuoteRequest {
     /// Pin the order's expiry timestamp.
     pub const fn with_valid_to(mut self, valid_to: u32) -> Self {
         self.valid_to = Some(valid_to);
+        self
+    }
+
+    /// Ask the orderbook for a specific price-quality regime. Omitted by
+    /// default, in which case the orderbook applies [`PriceQuality::Optimal`].
+    pub const fn with_price_quality(mut self, quality: PriceQuality) -> Self {
+        self.price_quality = Some(quality);
+        self
+    }
+
+    /// Pin the signing scheme the resulting order will use. Lets the
+    /// orderbook reject a quote / order combo with an incompatible scheme
+    /// before signing.
+    pub const fn with_signing_scheme(mut self, scheme: SigningScheme) -> Self {
+        self.signing_scheme = Some(scheme);
+        self
+    }
+
+    /// Mark the resulting order as partially fillable (default: false for
+    /// market orders).
+    pub const fn with_partially_fillable(mut self, partially_fillable: bool) -> Self {
+        self.partially_fillable = Some(partially_fillable);
+        self
+    }
+
+    /// Set the sell-side token-balance source.
+    pub const fn with_sell_token_balance(mut self, balance: SellTokenSource) -> Self {
+        self.sell_token_balance = Some(balance);
+        self
+    }
+
+    /// Set the buy-side token-balance destination.
+    pub const fn with_buy_token_balance(mut self, balance: BuyTokenDestination) -> Self {
+        self.buy_token_balance = Some(balance);
         self
     }
 }
@@ -578,6 +639,73 @@ impl OrderBookApi {
         self.get_json(&format!("api/v1/orders/{uid}/status")).await
     }
 
+    /// Poll [`OrderBookApi::get_order`] until `should_stop` returns
+    /// `true`, sleeping between polls via the caller-supplied closure.
+    ///
+    /// Runtime-agnostic: works under tokio (`tokio::time::sleep`),
+    /// async-std, `gloo_timers::future::sleep` in browsers, or anything
+    /// else that exposes a `Future<Output = ()>`. The function does not
+    /// look at the wall clock; callers that want a deadline bake it into
+    /// `should_stop` (e.g. capture an `Instant` in the closure).
+    ///
+    /// Each iteration calls `should_stop(&order)` first; the helper
+    /// returns the latest [`Order`] as soon as the predicate is
+    /// satisfied. If the predicate never returns `true`, the loop
+    /// continues until a HTTP error from [`OrderBookApi::get_order`]
+    /// short-circuits it.
+    pub async fn poll_until<P, S, Fut>(
+        &self,
+        uid: &OrderUid,
+        mut should_stop: P,
+        mut sleep: S,
+    ) -> Result<Order>
+    where
+        P: FnMut(&Order) -> bool,
+        S: FnMut() -> Fut,
+        Fut: core::future::Future<Output = ()>,
+    {
+        loop {
+            let order = self.get_order(uid).await?;
+            if should_stop(&order) {
+                return Ok(order);
+            }
+            sleep().await;
+        }
+    }
+
+    /// Convenience wrapper around [`OrderBookApi::poll_until`] that uses
+    /// `tokio::time::sleep` and a wall-clock deadline. Stops when the
+    /// order reaches a terminal status ([`crate::OrderStatus::Fulfilled`],
+    /// [`crate::OrderStatus::Cancelled`], [`crate::OrderStatus::Expired`])
+    /// or `deadline` elapses, whichever comes first.
+    ///
+    /// Available on non-wasm targets only. WASM callers should compose
+    /// [`OrderBookApi::poll_until`] with `gloo_timers::future::sleep`
+    /// (or equivalent) directly.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn wait_for_order_fulfilled(
+        &self,
+        uid: &OrderUid,
+        poll_interval: std::time::Duration,
+        deadline: Option<std::time::Duration>,
+    ) -> Result<Order> {
+        let start = std::time::Instant::now();
+        let interval = poll_interval;
+        self.poll_until(
+            uid,
+            |order| {
+                matches!(
+                    order.status,
+                    crate::OrderStatus::Fulfilled
+                        | crate::OrderStatus::Cancelled
+                        | crate::OrderStatus::Expired
+                ) || deadline.is_some_and(|d| start.elapsed() >= d)
+            },
+            move || tokio::time::sleep(interval),
+        )
+        .await
+    }
+
     /// `GET /api/v1/account/{owner}/orders`: list every order the
     /// orderbook knows about for `owner`, most recent first. `offset` and
     /// `limit` page the result; pass `None` for both to use the orderbook
@@ -789,6 +917,28 @@ mod tests {
 
     fn fixture_quote_request() -> QuoteRequest {
         QuoteRequest::sell_amount_before_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64))
+    }
+
+    #[test]
+    fn quote_request_round_trips_price_quality_field() {
+        let request = QuoteRequest::sell_amount_before_fee(USDC, DAI, OWNER, U256::from(1_u64))
+            .with_price_quality(PriceQuality::Verified);
+        let body = serde_json::to_value(&request).unwrap();
+        assert_eq!(body["priceQuality"], "verified");
+    }
+
+    #[test]
+    fn price_quality_serialises_lowercase() {
+        for (variant, wire) in [
+            (PriceQuality::Fast, "\"fast\""),
+            (PriceQuality::Optimal, "\"optimal\""),
+            (PriceQuality::Verified, "\"verified\""),
+        ] {
+            let serialised = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialised, wire);
+            let parsed: PriceQuality = serde_json::from_str(wire).unwrap();
+            assert_eq!(parsed, variant);
+        }
     }
 
     #[test]

@@ -269,6 +269,63 @@ sol! {
         /// chain's native gas token.
         function withdraw(uint256 wad) external;
     }
+
+    /// On-chain signature scheme variants accepted by
+    /// [`CoWSwapOnchainOrders`]. Mirrors the `OnchainSigningScheme`
+    /// Solidity enum at
+    /// [`CoWSwapOnchainOrders.sol`](https://github.com/cowprotocol/ethflowcontract/blob/main/src/mixins/CoWSwapOnchainOrders.sol).
+    #[derive(Debug, Eq, PartialEq)]
+    enum OnchainSigningScheme {
+        /// EIP-1271 contract signature (the placer is a contract that
+        /// implements `isValidSignature`).
+        Eip1271,
+        /// Pre-signature recorded on the settlement contract via
+        /// `GPv2Signing::setPreSignature`.
+        PreSign,
+    }
+
+    /// Signature payload accompanying an on-chain order placement.
+    /// Mirrors `CoWSwapOnchainOrders.OnchainSignature`.
+    #[derive(Debug, Eq, PartialEq)]
+    struct OnchainSignature {
+        OnchainSigningScheme scheme;
+        bytes data;
+    }
+
+    /// Events emitted by `CoWSwapOnchainOrders`, the mixin every ETH-flow
+    /// or contract-placed-order entry point inherits. Off-chain indexers
+    /// watch [`OrderPlacement`] to learn that a new on-chain order has
+    /// been registered and [`OrderInvalidation`] to mark it cancelled.
+    ///
+    /// Source:
+    /// [`CoWSwapOnchainOrders.sol`](https://github.com/cowprotocol/ethflowcontract/blob/main/src/mixins/CoWSwapOnchainOrders.sol).
+    #[derive(Debug)]
+    interface CoWSwapOnchainOrders {
+        /// Emitted when a contract registers a new on-chain order. The
+        /// embedded `GPv2OrderData` is the exact 12-field payload the
+        /// settlement contract will verify; `signature` carries the
+        /// scheme (`PreSign` or `EIP-1271`) and any contract-specific
+        /// payload; `data` is opaque metadata the contract chose to
+        /// publish (e.g. ETH-flow's refund pointer).
+        event OrderPlacement(
+            address indexed sender,
+            GPv2OrderData order,
+            OnchainSignature signature,
+            bytes data
+        );
+
+        /// Emitted when a previously placed on-chain order is
+        /// invalidated, either by the placer or by an authorised
+        /// invalidator. The body is the 56-byte order UID.
+        ///
+        /// Note the naming overlap with [`GPv2Settlement::OrderInvalidated`]:
+        /// the two events live on different contracts (the settlement
+        /// singleton vs the ETH-flow / on-chain-orders mixin) and have
+        /// different topic hashes. Indexers should match on
+        /// `log.topics[0]` against the canonical signature hash of the
+        /// event they actually care about.
+        event OrderInvalidation(bytes orderUid);
+    }
 }
 
 #[cfg(test)]
@@ -408,6 +465,25 @@ mod tests {
         assert_eq!(decoded.3, event.buyAmount);
         assert_eq!(decoded.4, event.feeAmount);
         assert_eq!(decoded.5, event.orderUid);
+    }
+
+    /// Lock the `CoWSwapOnchainOrders` event topic hashes against the
+    /// canonical Solidity signatures so off-chain indexers matching
+    /// `log.topics[0]` against these Rust constants pick up every emitted
+    /// event from the ETH-flow and on-chain-orders mixin.
+    #[test]
+    fn cowswap_onchain_orders_event_topic_hashes_match_keccak() {
+        assert_eq!(
+            CoWSwapOnchainOrders::OrderPlacement::SIGNATURE_HASH,
+            keccak256(
+                "OrderPlacement(address,(address,address,address,uint256,uint256,\
+                 uint32,bytes32,uint256,bytes32,bool,bytes32,bytes32),(uint8,bytes),bytes)"
+            )
+        );
+        assert_eq!(
+            CoWSwapOnchainOrders::OrderInvalidation::SIGNATURE_HASH,
+            keccak256("OrderInvalidation(bytes)")
+        );
     }
 
     /// Pin the GPv2 deployment hex literals so a copy-paste regression

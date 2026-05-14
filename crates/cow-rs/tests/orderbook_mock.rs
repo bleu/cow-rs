@@ -367,6 +367,74 @@ async fn unexpected_5xx_with_non_json_body_surfaces_unexpected_status() {
 }
 
 #[tokio::test]
+async fn poll_until_runs_with_caller_supplied_sleep() {
+    use std::cell::Cell;
+
+    let server = MockServer::start().await;
+    let uid_hex = "0xb74844872ddbadb709629952eab02a9275c5c05426cb195e27029a353909404370997970c51812dc3a010c7d01b50e0d17dc79c86a0513b9";
+    let uid: OrderUid = uid_hex.parse().unwrap();
+    let make_body = |status: &str| {
+        json!({
+            "sellToken": format!("{USDC:?}"),
+            "buyToken": format!("{DAI:?}"),
+            "receiver": null,
+            "sellAmount": "1000000",
+            "buyAmount": "999000",
+            "validTo": 1_700_000_000,
+            "appData": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "feeAmount": "0",
+            "kind": "sell",
+            "partiallyFillable": false,
+            "sellTokenBalance": "erc20",
+            "buyTokenBalance": "erc20",
+            "uid": uid_hex,
+            "owner": format!("{OWNER:?}"),
+            "signingScheme": "eip712",
+            "signature": "0x00",
+            "creationDate": "2026-05-13T10:00:00.000Z",
+            "status": status,
+            "class": "market",
+            "executedBuyAmount": "0",
+            "executedSellAmount": "0",
+            "invalidated": false,
+            "isLiquidityOrder": false,
+        })
+    };
+
+    Mock::given(method("GET"))
+        .and(path(format!("/api/v1/orders/{uid_hex}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(make_body("open")))
+        .up_to_n_times(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/api/v1/orders/{uid_hex}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(make_body("fulfilled")))
+        .mount(&server)
+        .await;
+
+    let sleep_count = Cell::new(0u32);
+    let order = api(&server)
+        .poll_until(
+            &uid,
+            |order| matches!(order.status, cow_rs::OrderStatus::Fulfilled),
+            || {
+                sleep_count.set(sleep_count.get() + 1);
+                std::future::ready(())
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(order.status, cow_rs::OrderStatus::Fulfilled));
+    assert_eq!(
+        sleep_count.get(),
+        2,
+        "should have slept between the two open polls"
+    );
+}
+
+#[tokio::test]
 async fn unused_optional_quote_fields_are_omitted_from_request_body() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
