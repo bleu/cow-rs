@@ -181,12 +181,26 @@ pub struct SubgraphClient {
     bearer: Option<String>,
 }
 
-/// Manual `Debug` impl that redacts the bearer token. Logging the client
-/// (e.g. `tracing::debug!("{client:?}")`) must never leak the gateway API key.
+/// Manual `Debug` impl that redacts the bearer token *and* the URL
+/// path when a bearer is set. Gateway URLs published by The Graph
+/// embed the API key in the path itself
+/// (`https://gateway.thegraph.com/api/<key>/subgraphs/id/<id>`), so
+/// rendering the URL in full would still leak the credential even
+/// with `bearer` masked. Without a bearer the URL is a Studio
+/// endpoint and safe to print verbatim.
 impl std::fmt::Debug for SubgraphClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let url_view = if self.bearer.is_some() {
+            format!(
+                "{}://{}/<redacted>",
+                self.url.scheme(),
+                self.url.host_str().unwrap_or("")
+            )
+        } else {
+            self.url.to_string()
+        };
         f.debug_struct("SubgraphClient")
-            .field("url", &self.url)
+            .field("url", &url_view)
             .field("client", &self.client)
             .field("bearer", &self.bearer.as_ref().map(|_| "<redacted>"))
             .finish()
@@ -460,6 +474,21 @@ mod tests {
         assert!(
             rendered.contains("redacted"),
             "expected '<redacted>' marker in Debug output, got: {rendered}"
+        );
+
+        // Production gateway URLs embed the API key directly in the
+        // path. Debug must redact the path so the URL field alone
+        // cannot leak the credential a side-channel logger picks up.
+        let path_key = "API-KEY-IN-URL-DO-NOT-LEAK";
+        let gateway = url::Url::parse(&format!(
+            "https://gateway.thegraph.com/api/{path_key}/subgraphs/id/xyz",
+        ))
+        .unwrap();
+        let gw_client = SubgraphClient::with_bearer_token(gateway, "bearer-token");
+        let gw_rendered = format!("{gw_client:?}");
+        assert!(
+            !gw_rendered.contains(path_key),
+            "gateway URL path leaked through Debug: {gw_rendered}"
         );
 
         let no_token = SubgraphClient::new(url::Url::parse("https://example.test/").unwrap());
