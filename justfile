@@ -18,3 +18,9 @@ wasm-check:
 
 doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace --all-features
+
+deny:
+	cargo deny check
+
+audit:
+	cargo audit --deny warnings

@@ -351,8 +351,8 @@ impl OrderQuoteResponse {
     /// - `fee_amount` is always `0` at submission: solvers price gas at
     ///   settlement time.
     /// - `app_data` is the 32-byte digest of the canonical metadata JSON
-    ///   the caller will submit (use [`EMPTY_APP_DATA_HASH`] for the empty
-    ///   document `"{}"`).
+    ///   the caller will submit (use [`crate::EMPTY_APP_DATA_HASH`] for the
+    ///   empty document `"{}"`).
     ///
     /// [step3]: https://docs.cow.fi/cow-protocol/howto/integrate/api#step-3-compute-the-amounts-to-sign
     pub fn to_signed_order_data(&self, app_data: AppDataHash) -> Result<OrderData> {

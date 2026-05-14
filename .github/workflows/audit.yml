@@ -1,0 +1,38 @@
+name: audit
+
+on:
+  push:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+  schedule:
+    # Daily at 06:00 UTC. Catches RUSTSEC advisories published after the
+    # last push so a vulnerability landing today is flagged tomorrow at
+    # the latest, not at the next dependency bump.
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+
+jobs:
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-04
+        with:
+          toolchain: "1.91.1"
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          key: audit
+      - run: cargo install --locked cargo-audit
+      - run: cargo audit --deny warnings
