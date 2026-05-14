@@ -21,3 +21,7 @@ Cargo.lock.bak
 # Node generator artefacts
 tools/vector-gen/node_modules
 tools/vector-gen/vectors.json
+
+# Generated wasm-pack output for the in-browser harness; regenerate locally
+# with `wasm-pack build --target web --dev` inside `crates/cow-rs-wasm`.
+crates/cow-rs-wasm/pkg
