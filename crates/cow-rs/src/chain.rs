@@ -10,17 +10,32 @@ use {
 };
 
 /// A chain supported by the CoW Protocol orderbook.
+///
+/// Variants are ordered by chain id (ascending) to keep `match` arms and
+/// `TryFrom` impl in a single sensible order.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[repr(u64)]
 pub enum Chain {
     /// Ethereum mainnet (chain id 1).
     Mainnet = 1,
+    /// BNB Smart Chain (chain id 56).
+    Bnb = 56,
     /// Gnosis Chain — xDAI (chain id 100).
     Gnosis = 100,
+    /// Polygon PoS (chain id 137).
+    Polygon = 137,
     /// Base mainnet (chain id 8453).
     Base = 8453,
+    /// Plasma (chain id 9745).
+    Plasma = 9745,
     /// Arbitrum One (chain id 42161).
-    ArbitrumOne = 42161,
+    ArbitrumOne = 42_161,
+    /// Avalanche C-Chain (chain id 43114).
+    Avalanche = 43_114,
+    /// Ink (chain id 57073).
+    Ink = 57_073,
+    /// Linea (chain id 59144).
+    Linea = 59_144,
     /// Sepolia testnet (chain id 11155111).
     Sepolia = 11_155_111,
 }
@@ -36,9 +51,15 @@ impl Chain {
     pub const fn orderbook_slug(self) -> &'static str {
         match self {
             Self::Mainnet => "mainnet",
+            Self::Bnb => "bnb",
             Self::Gnosis => "xdai",
+            Self::Polygon => "polygon",
             Self::Base => "base",
+            Self::Plasma => "plasma",
             Self::ArbitrumOne => "arbitrum_one",
+            Self::Avalanche => "avalanche",
+            Self::Ink => "ink",
+            Self::Linea => "linea",
             Self::Sepolia => "sepolia",
         }
     }
@@ -58,9 +79,15 @@ impl TryFrom<u64> for Chain {
     fn try_from(value: u64) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::Mainnet),
+            56 => Ok(Self::Bnb),
             100 => Ok(Self::Gnosis),
+            137 => Ok(Self::Polygon),
             8453 => Ok(Self::Base),
+            9745 => Ok(Self::Plasma),
             42_161 => Ok(Self::ArbitrumOne),
+            43_114 => Ok(Self::Avalanche),
+            57_073 => Ok(Self::Ink),
+            59_144 => Ok(Self::Linea),
             11_155_111 => Ok(Self::Sepolia),
             other => Err(UnsupportedChain(other)),
         }
@@ -123,26 +150,41 @@ impl<'de> Deserialize<'de> for Chain {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {super::*, std::collections::HashSet};
+
+    /// Every chain currently supported by the CoW Protocol orderbook.
+    const ALL: &[Chain] = &[
+        Chain::Mainnet,
+        Chain::Bnb,
+        Chain::Gnosis,
+        Chain::Polygon,
+        Chain::Base,
+        Chain::Plasma,
+        Chain::ArbitrumOne,
+        Chain::Avalanche,
+        Chain::Ink,
+        Chain::Linea,
+        Chain::Sepolia,
+    ];
 
     #[test]
     fn ids_match_canonical_values() {
         assert_eq!(Chain::Mainnet.id(), 1);
+        assert_eq!(Chain::Bnb.id(), 56);
         assert_eq!(Chain::Gnosis.id(), 100);
+        assert_eq!(Chain::Polygon.id(), 137);
         assert_eq!(Chain::Base.id(), 8453);
+        assert_eq!(Chain::Plasma.id(), 9745);
         assert_eq!(Chain::ArbitrumOne.id(), 42_161);
+        assert_eq!(Chain::Avalanche.id(), 43_114);
+        assert_eq!(Chain::Ink.id(), 57_073);
+        assert_eq!(Chain::Linea.id(), 59_144);
         assert_eq!(Chain::Sepolia.id(), 11_155_111);
     }
 
     #[test]
     fn orderbook_base_urls_parse() {
-        for chain in [
-            Chain::Mainnet,
-            Chain::Gnosis,
-            Chain::Base,
-            Chain::ArbitrumOne,
-            Chain::Sepolia,
-        ] {
+        for chain in ALL {
             let url = chain.orderbook_base_url();
             assert_eq!(url.scheme(), "https");
             assert_eq!(url.host_str(), Some("api.cow.fi"));
@@ -151,21 +193,32 @@ mod tests {
     }
 
     #[test]
+    fn all_slugs_are_unique_and_parseable_urls() {
+        assert_eq!(ALL.len(), 11, "expected 11 supported chains");
+
+        let mut seen: HashSet<&'static str> = HashSet::new();
+        for chain in ALL {
+            let slug = chain.orderbook_slug();
+            assert!(!slug.is_empty(), "empty slug for {chain:?}");
+            assert!(seen.insert(slug), "duplicate slug {slug:?}");
+
+            let url = chain.orderbook_base_url();
+            assert_eq!(url.scheme(), "https");
+            assert_eq!(url.host_str(), Some("api.cow.fi"));
+        }
+        assert_eq!(seen.len(), 11);
+    }
+
+    #[test]
     fn try_from_round_trips_supported_ids() {
-        for chain in [
-            Chain::Mainnet,
-            Chain::Gnosis,
-            Chain::Base,
-            Chain::ArbitrumOne,
-            Chain::Sepolia,
-        ] {
-            assert_eq!(Chain::try_from(chain.id()), Ok(chain));
+        for chain in ALL {
+            assert_eq!(Chain::try_from(chain.id()), Ok(*chain));
         }
     }
 
     #[test]
     fn try_from_rejects_unsupported_id() {
-        assert_eq!(Chain::try_from(2), Err(UnsupportedChain(2)));
+        assert_eq!(Chain::try_from(999_999), Err(UnsupportedChain(999_999)));
     }
 
     #[test]
