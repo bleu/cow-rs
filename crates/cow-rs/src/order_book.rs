@@ -8,6 +8,7 @@
 use {
     crate::{
         app_data::AppDataHash,
+        cancellation::SignedOrderCancellations,
         chain::Chain,
         error::{ApiError, Error, Result},
         order::{BuyTokenDestination, Order, OrderData, OrderKind, OrderUid, SellTokenSource},
@@ -475,6 +476,30 @@ impl OrderBookApi {
     /// stage and any attached solver proposals.
     pub async fn get_order_status(&self, uid: &OrderUid) -> Result<AuctionStatus> {
         self.get_json(&format!("api/v1/orders/{uid}/status")).await
+    }
+
+    /// `DELETE /api/v1/orders` — submit a signed cancellation collection.
+    ///
+    /// Note that the endpoint is `/api/v1/orders` (collection), not
+    /// `/api/v1/orders/{uid}`; the orders to cancel are identified by the
+    /// `orderUids` array in the body. The cancellation is "soft" — orders
+    /// already in flight may still settle.
+    pub async fn cancel_orders(&self, signed: &SignedOrderCancellations) -> Result<()> {
+        let response = self
+            .client
+            .delete(self.base_url.join("api/v1/orders")?)
+            .json(signed)
+            .send()
+            .await?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let text = response.text().await?;
+        serde_json::from_str::<ApiError>(&text).map_or_else(
+            |_| Err(Error::UnexpectedStatus { status, body: text }),
+            |api| Err(Error::OrderbookApi { status, api }),
+        )
     }
 
     async fn post_json<TReq, TResp>(&self, path: &str, body: &TReq) -> Result<TResp>

@@ -52,6 +52,7 @@
 
 pub mod app_data;
 pub mod bytes_hex;
+pub mod cancellation;
 pub mod chain;
 pub mod domain;
 pub mod error;
@@ -62,6 +63,7 @@ pub mod signing_scheme;
 
 pub use crate::{
     app_data::{AppDataHash, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON},
+    cancellation::{OrderCancellation, OrderCancellations, SignedOrderCancellations},
     chain::{Chain, UnsupportedChain},
     domain::{DomainSeparator, hashed_eip712_message, hashed_ethsign_message},
     error::{ApiError, Error, Result},
