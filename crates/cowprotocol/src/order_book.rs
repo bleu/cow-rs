@@ -24,214 +24,136 @@ use crate::signing_scheme::{EcdsaSigningScheme, SigningScheme};
 mod orders;
 pub use orders::OrderCreation;
 
-/// Wall-clock cap applied to every request the default
-/// [`OrderBookApi`] client issues. A hostile or stuck orderbook cannot
-/// otherwise hold a caller's task open indefinitely. Override by
-/// constructing the client manually and passing
+/// Default per-request timeout. A stuck or hostile orderbook cannot
+/// hold a caller's task open longer; override via
 /// [`OrderBookApi::with_client`].
 pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Maximum byte length the SDK will accept for any single HTTP response
-/// body. Larger payloads are rejected with [`Error::ResponseTooLarge`]
-/// before they can exhaust process memory. Eight MiB is generous for
-/// every documented orderbook endpoint, including the solver-oriented
-/// `/api/v1/auction` snapshot. Bumping this constant is the right knob
-/// for callers who explicitly want to deserialise larger bodies.
+/// Maximum HTTP response body. Larger payloads return
+/// [`Error::ResponseTooLarge`] before allocating.
 pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
-/// App-data binding on a quote request.
-///
-/// The orderbook's `POST /api/v1/quote` accepts a single `appData`
-/// field whose content can be either the 32-byte digest (hex) or the
-/// canonical JSON document. Solvers price against the resulting
-/// `app_data` field of the [`OrderData`] they expect to sign, so the
-/// caller decides whether to commit to a digest or hand the orderbook
-/// the full document. Mirrors the `OrderCreationAppData::{Hash, Full}`
-/// variants in `cowprotocol/services/crates/model/src/quote.rs`.
+/// `appData` field on a quote request: 32-byte digest or canonical
+/// JSON document. Mirrors `OrderCreationAppData` in
+/// `cowprotocol/services::model::quote`.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum QuoteAppData {
-    /// 32-byte digest only. Orderbook keeps the digest; the full
-    /// document remains opaque until someone pins it via
-    /// [`OrderBookApi::put_app_data`]. Serialises directly as a
-    /// `0x`-prefixed hex string under the parent's `appData` key.
+    /// Pre-computed digest; serialises as `0x`-prefixed hex.
     Hash(AppDataHash),
-    /// Canonical JSON document; orderbook computes the digest itself
-    /// and serves it back on subsequent `GET /api/v1/app_data/{hash}`
-    /// queries. Serialises as a JSON string literal whose body is the
-    /// document JSON (not as a nested object).
+    /// Canonical JSON; orderbook computes and pins the digest.
     Full(String),
 }
 
 impl QuoteAppData {
-    /// Bind the quote to a pre-computed digest.
-    pub const fn hash(digest: AppDataHash) -> Self {
-        Self::Hash(digest)
-    }
-
-    /// Bind the quote to a canonical JSON document; orderbook computes
-    /// the digest.
-    pub const fn full(full: String) -> Self {
-        Self::Full(full)
-    }
+    pub const fn hash(digest: AppDataHash) -> Self { Self::Hash(digest) }
+    pub const fn full(full: String) -> Self { Self::Full(full) }
 }
 
 impl From<AppDataHash> for QuoteAppData {
-    fn from(digest: AppDataHash) -> Self {
-        Self::Hash(digest)
-    }
+    fn from(digest: AppDataHash) -> Self { Self::Hash(digest) }
 }
 
-/// Quote price-quality knob the orderbook accepts on `POST
-/// /api/v1/quote`. Solvers honour the hint by trading off latency
-/// against the depth of price discovery they perform.
-///
-/// Source: `cow-protocol/reference/apis/orderbook.mdx` §"Price Quality".
+/// Quote price-quality hint. Trades off solver latency against depth.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PriceQuality {
-    /// Fast: orderbook returns the first solver answer it gets.
     Fast,
-    /// Optimal: orderbook waits for the best solver answer within the
-    /// quoting window. This is the default the orderbook applies when
-    /// the field is omitted.
     #[default]
     Optimal,
-    /// Verified: like `Optimal`, plus the orderbook simulates the order
-    /// against on-chain balances before answering. Slowest, but lets the
-    /// caller skip the allowance / balance pre-flight check.
+    /// `Optimal` plus on-chain simulation against balances/allowances.
     Verified,
 }
 
-/// Settled trade as returned by `GET /api/v1/trades`.
-///
-/// The orderbook emits one record per `GPv2Settlement.Trade` log. Optional
-/// fields are populated only when the orderbook has enough context to
-/// surface them; callers should treat the absent state as informational.
+/// `GET /api/v1/trades` row: one per `GPv2Settlement.Trade` log.
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Trade {
-    /// Block in which the settlement transaction landed.
     pub block_number: u64,
-    /// Index of the `Trade` log within the settlement transaction.
     pub log_index: u32,
-    /// UID of the order that produced this trade.
     pub order_uid: OrderUid,
-    /// Address that signed the order.
     pub owner: Address,
-    /// Token the owner sold.
     pub sell_token: Address,
-    /// Token the owner received.
     pub buy_token: Address,
-    /// Sell amount, net of fee, in atomic units.
+    /// Sell amount net of fee.
     #[serde_as(as = "DisplayFromStr")]
     pub sell_amount: U256,
-    /// Sell amount before the orderbook's fee was deducted.
+    /// Sell amount before fee deduction.
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(default)]
     pub sell_amount_before_fees: Option<U256>,
-    /// Buy amount delivered to the receiver.
     #[serde_as(as = "DisplayFromStr")]
     pub buy_amount: U256,
-    /// Settlement transaction hash, hex-encoded.
     #[serde(default)]
     pub tx_hash: Option<String>,
 }
 
-/// Price of one atomic unit of `token` denominated in the chain's native
-/// token, as returned by `GET /api/v1/token/{token}/native_price`.
+/// Native-token-denominated price from
+/// `GET /api/v1/token/{token}/native_price`. JSON number, not string.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct NativePrice {
-    /// Price ratio. Note: the orderbook returns this as a JSON number, not
-    /// a decimal string.
     pub price: f64,
 }
 
-/// Cumulative user surplus reported by
-/// `GET /api/v1/users/{user}/total_surplus`. The field is a decimal string
-/// for precision; we keep it as-is and let callers feed it into their own
-/// big-number parser.
+/// Cumulative user surplus from
+/// `GET /api/v1/users/{user}/total_surplus`. Decimal string for
+/// precision.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TotalSurplus {
-    /// User's cumulative surplus across all settled orders.
     pub total_surplus: String,
 }
 
-/// Snapshot returned by `GET /api/v1/auction`.
-///
-/// The endpoint is permissioned (intended for solvers; CoW grants access on
-/// request), so most integrators will only see the unauthenticated 403 from
-/// the public proxy. We expose the top-level fields ourselves and keep the
-/// per-order array as opaque JSON: `AuctionOrder` carries solver-relevant
-/// fields that drift across CIP changes and that we have no way to lock
-/// byte-conformance for without solver access.
+/// `GET /api/v1/auction` snapshot. Permissioned (solver-only); the
+/// per-order array is left opaque because `AuctionOrder` drifts
+/// across CIPs.
 #[serde_as]
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Auction {
-    /// Monotonically increasing auction identifier (absent during reorgs).
     #[serde(default)]
     pub id: Option<u64>,
-    /// Block the auction was anchored on; orders, prices and proposed
-    /// settlements are valid at this block.
+    /// Anchor block; orders, prices and settlements apply here.
     #[serde(default)]
     pub block: Option<u64>,
-    /// Solvable orders. Opaque JSON; deserialise into your own
-    /// `AuctionOrder` shape if you need typed fields (the schema is
-    /// volatile across CIP-67 / CIP-20).
     #[serde(default)]
     pub orders: Option<serde_json::Value>,
-    /// External prices indexed by token address (decimal-string atomic
-    /// units in the chain's native token).
+    /// External prices, atomic native units per token.
     #[serde_as(as = "Option<BTreeMap<_, DisplayFromStr>>")]
     #[serde(default)]
     pub prices: Option<BTreeMap<Address, U256>>,
-    /// JIT order owners whose surplus counts towards the solver's
-    /// objective value.
+    /// JIT owners whose surplus counts toward solver objective.
     #[serde(default)]
     pub surplus_capturing_jit_order_owners: Option<Vec<Address>>,
 }
 
-/// Per-token metadata returned by `GET /api/v1/token/{token}/metadata`.
-///
-/// Both fields are absent for tokens the orderbook has never seen.
+/// `GET /api/v1/token/{token}/metadata`. Both fields are absent for
+/// tokens the orderbook has not indexed.
 #[serde_as]
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenMetadata {
-    /// Block at which the first trade of this token was indexed, or
-    /// `None` if the orderbook has not observed a trade for it.
     #[serde(default)]
     pub first_trade_block: Option<u32>,
-    /// Most recent native-price quote in atomic units of the chain's
-    /// native token. Encoded as a decimal-or-hex string on the wire.
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(default)]
     pub native_price: Option<U256>,
 }
 
-/// Response of `GET /api/v1/app_data/{hash}` and input to
-/// [`OrderBookApi::put_app_data`]. Carries the canonical JSON string of
-/// the document; when hashed with `keccak256` this yields the [`AppDataHash`]
-/// stored on the signed order.
+/// `GET /api/v1/app_data/{hash}` body and `put_app_data` input. The
+/// orderbook indexes the document under
+/// `keccak256(full_app_data.as_bytes())` byte-for-byte.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataDocument {
-    /// JSON string of the document. The orderbook does not re-format this
-    /// beyond verifying that it parses, so it round-trips byte-for-byte.
     pub full_app_data: String,
 }
 
 impl AppDataDocument {
-    /// `keccak256(full_app_data.as_bytes())`: the digest the orderbook
-    /// would index this document under, and the value the signed order's
-    /// `appData` field must equal for the document to be the canonical
-    /// pre-image. Bytes are hashed as-is; callers that need
-    /// deterministic key ordering should canonicalise via
-    /// [`crate::app_data::AppDataDoc::canonical_json`] before constructing
-    /// this struct.
+    /// `keccak256(full_app_data.as_bytes())`. Canonicalise via
+    /// [`crate::app_data::AppDataDoc::canonical_json`] first if
+    /// deterministic key order matters.
     pub fn computed_hash(&self) -> AppDataHash {
         AppDataHash(keccak256(self.full_app_data.as_bytes()).0)
     }
@@ -281,102 +203,74 @@ pub enum AuctionStatusType {
     Cancelled,
 }
 
-/// Auction-status payload returned by `GET /api/v1/orders/{uid}/status`.
-///
-/// `value` carries solver execution proposals when relevant
-/// (`solved`/`executing`), and is empty for `open`/`cancelled`. We surface
-/// it as opaque JSON to stay forward-compatible with solver-side schema
-/// additions.
+/// `GET /api/v1/orders/{uid}/status` payload. `value` carries solver
+/// proposals when relevant (`solved`/`executing`); opaque to stay
+/// forward-compatible across CIPs.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuctionStatus {
-    /// Stage of the auction lifecycle.
     #[serde(rename = "type")]
     pub status_type: AuctionStatusType,
-    /// Solver execution proposals attached to the current stage.
     #[serde(default)]
     pub value: Vec<serde_json::Value>,
 }
 
-/// Quote request body for `POST /api/v1/quote`.
-///
-/// Exactly one of the three amount fields
-/// (`sell_amount_before_fee`, `sell_amount_after_fee`, `buy_amount_after_fee`)
-/// must be `Some` and it must agree with [`QuoteRequest::kind`].
-/// Use the constructors below to build a well-formed request.
+/// `POST /api/v1/quote` request. Exactly one of `sell_amount_before_fee`,
+/// `sell_amount_after_fee`, `buy_amount_after_fee` must be `Some`, and
+/// must agree with [`Self::kind`]. Use the constructors below.
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuoteRequest {
-    /// Address of the token being sold.
     pub sell_token: Address,
-    /// Address of the token being bought.
     pub buy_token: Address,
-    /// Owner that will sign the resulting order.
+    /// Order owner.
     pub from: Address,
-    /// Optional buy-token recipient; defaults to `from` when omitted.
+    /// Defaults to `from` when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receiver: Option<Address>,
-    /// Whether the user is fixing the sell side or the buy side.
     pub kind: OrderKind,
-    /// Sell amount before the orderbook's fee is deducted.
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sell_amount_before_fee: Option<U256>,
-    /// Sell amount after the orderbook's fee is deducted.
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sell_amount_after_fee: Option<U256>,
-    /// Buy amount after the orderbook's fee is deducted.
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buy_amount_after_fee: Option<U256>,
-    /// Optional explicit expiry timestamp; orderbook picks a default when absent.
+    /// Absolute expiry; orderbook applies a default when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub valid_to: Option<u32>,
-    /// Relative expiry in seconds from "now" (server clock). Wire field
-    /// `validFor`. Mutually exclusive with [`QuoteRequest::valid_to`];
-    /// when both are absent the orderbook applies a 30-minute default.
+    /// Relative expiry (seconds from server clock; wire `validFor`).
+    /// Mutually exclusive with `valid_to`; default 30 min.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub valid_for: Option<u32>,
-    /// Optional pre-computed app-data digest.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_data: Option<QuoteAppData>,
-    /// Whether to allow partial fills.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub partially_fillable: Option<bool>,
-    /// Source from which the sell token is drawn.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sell_token_balance: Option<SellTokenSource>,
-    /// Destination to which the buy token is paid.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buy_token_balance: Option<BuyTokenDestination>,
-    /// Intended signing scheme; the orderbook returns this in the response.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signing_scheme: Option<SigningScheme>,
-    /// Gas budget the orderbook should reserve for the on-chain
-    /// `isValidSignature` callback when quoting an [`SigningScheme::Eip1271`]
-    /// order. Defaults to `27_000` on the server side; smart-contract
-    /// wallets with expensive verification logic should override.
+    /// Gas budget for the on-chain `isValidSignature` callback on
+    /// EIP-1271 quotes. Server default: 27_000.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verification_gas_limit: Option<u64>,
-    /// `true` when the resulting order will be placed on chain instead
-    /// of via the off-chain orderbook (relevant for [`SigningScheme::Eip1271`]
-    /// and [`SigningScheme::PreSign`]). Lets the orderbook reserve the
-    /// right gas budget when simulating.
+    /// `true` for orders placed on chain (EIP-1271 / PreSign).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub onchain_order: Option<bool>,
-    /// Latency-vs-depth trade-off the orderbook should apply when
-    /// discovering a price. Defaults to [`PriceQuality::Optimal`] when
-    /// absent.
+    /// Defaults to [`PriceQuality::Optimal`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub price_quality: Option<PriceQuality>,
 }
 
 impl QuoteRequest {
-    /// Build a sell-side quote where the input amount has NOT yet had the
-    /// orderbook fee subtracted. This mirrors the `getQuote` default in
-    /// `@cowprotocol/cow-sdk`'s trading package.
+    /// Sell-side quote with pre-fee input amount. Matches
+    /// `cow-sdk`'s `getQuote` default.
     pub const fn sell_amount_before_fee(
         sell_token: Address,
         buy_token: Address,
@@ -387,7 +281,7 @@ impl QuoteRequest {
             .with_sell_amount_before_fee(sell_amount)
     }
 
-    /// Build a sell-side quote where the input amount IS the post-fee amount.
+    /// Sell-side quote with post-fee input amount.
     pub const fn sell_amount_after_fee(
         sell_token: Address,
         buy_token: Address,
@@ -398,7 +292,7 @@ impl QuoteRequest {
             .with_sell_amount_after_fee(sell_amount)
     }
 
-    /// Build a buy-side quote.
+    /// Buy-side quote.
     pub const fn buy_amount_after_fee(
         sell_token: Address,
         buy_token: Address,
@@ -431,12 +325,24 @@ impl QuoteRequest {
         }
     }
 
-    const fn with_sell_amount_before_fee(mut self, a: U256) -> Self { self.sell_amount_before_fee = Some(a); self }
-    const fn with_sell_amount_after_fee(mut self, a: U256) -> Self { self.sell_amount_after_fee = Some(a); self }
-    const fn with_buy_amount_after_fee(mut self, a: U256) -> Self { self.buy_amount_after_fee = Some(a); self }
+    const fn with_sell_amount_before_fee(mut self, a: U256) -> Self {
+        self.sell_amount_before_fee = Some(a);
+        self
+    }
+    const fn with_sell_amount_after_fee(mut self, a: U256) -> Self {
+        self.sell_amount_after_fee = Some(a);
+        self
+    }
+    const fn with_buy_amount_after_fee(mut self, a: U256) -> Self {
+        self.buy_amount_after_fee = Some(a);
+        self
+    }
 
     /// Set a custom recipient for the buy token.
-    pub const fn with_receiver(mut self, receiver: Address) -> Self { self.receiver = Some(receiver); self }
+    pub const fn with_receiver(mut self, receiver: Address) -> Self {
+        self.receiver = Some(receiver);
+        self
+    }
 
     /// Set the order's app-data digest, wrapping it as
     /// [`QuoteAppData::Hash`]. Not `const fn` because the sibling
@@ -454,106 +360,106 @@ impl QuoteRequest {
     }
 
     /// Pin the order's absolute expiry timestamp.
-    pub const fn with_valid_to(mut self, valid_to: u32) -> Self { self.valid_to = Some(valid_to); self }
+    pub const fn with_valid_to(mut self, valid_to: u32) -> Self {
+        self.valid_to = Some(valid_to);
+        self
+    }
 
     /// Pin the expiry as seconds from the orderbook's clock. Mutually
     /// exclusive with [`Self::with_valid_to`]; 30-min default when
     /// both are absent.
-    pub const fn with_valid_for(mut self, valid_for: u32) -> Self { self.valid_for = Some(valid_for); self }
+    pub const fn with_valid_for(mut self, valid_for: u32) -> Self {
+        self.valid_for = Some(valid_for);
+        self
+    }
 
     /// Gas budget for the on-chain `isValidSignature` callback on
     /// [`SigningScheme::Eip1271`] quotes.
-    pub const fn with_verification_gas_limit(mut self, gas: u64) -> Self { self.verification_gas_limit = Some(gas); self }
+    pub const fn with_verification_gas_limit(mut self, gas: u64) -> Self {
+        self.verification_gas_limit = Some(gas);
+        self
+    }
 
     /// Mark the resulting order as on-chain-placed (EIP-1271 / PreSign
     /// flows). Lets the orderbook reserve the right simulation budget.
-    pub const fn with_onchain_order(mut self, onchain: bool) -> Self { self.onchain_order = Some(onchain); self }
+    pub const fn with_onchain_order(mut self, onchain: bool) -> Self {
+        self.onchain_order = Some(onchain);
+        self
+    }
 
     /// Pin the price-quality regime; defaults to
     /// [`PriceQuality::Optimal`] when absent.
-    pub const fn with_price_quality(mut self, quality: PriceQuality) -> Self { self.price_quality = Some(quality); self }
+    pub const fn with_price_quality(mut self, quality: PriceQuality) -> Self {
+        self.price_quality = Some(quality);
+        self
+    }
 
     /// Pin the signing scheme so the orderbook rejects incompatible
     /// quote / order combinations before signing.
-    pub const fn with_signing_scheme(mut self, scheme: SigningScheme) -> Self { self.signing_scheme = Some(scheme); self }
+    pub const fn with_signing_scheme(mut self, scheme: SigningScheme) -> Self {
+        self.signing_scheme = Some(scheme);
+        self
+    }
 
     /// Mark the resulting order as partially fillable.
-    pub const fn with_partially_fillable(mut self, partially_fillable: bool) -> Self { self.partially_fillable = Some(partially_fillable); self }
+    pub const fn with_partially_fillable(mut self, partially_fillable: bool) -> Self {
+        self.partially_fillable = Some(partially_fillable);
+        self
+    }
 
     /// Source the sell-side token balance is drawn from.
-    pub const fn with_sell_token_balance(mut self, balance: SellTokenSource) -> Self { self.sell_token_balance = Some(balance); self }
+    pub const fn with_sell_token_balance(mut self, balance: SellTokenSource) -> Self {
+        self.sell_token_balance = Some(balance);
+        self
+    }
 
     /// Destination the buy-side token balance is paid to.
-    pub const fn with_buy_token_balance(mut self, balance: BuyTokenDestination) -> Self { self.buy_token_balance = Some(balance); self }
+    pub const fn with_buy_token_balance(mut self, balance: BuyTokenDestination) -> Self {
+        self.buy_token_balance = Some(balance);
+        self
+    }
 }
 
-/// The order returned by the quote endpoint.
-///
-/// This is the 12-field signed payload ([`OrderData`]) plus the signing
-/// scheme the orderbook expects and the price metadata it surfaces back to
-/// the caller. Use [`OrderQuoteResponse::to_signed_order_data`] to project
-/// the response into the signable [`OrderData`] after binding it to the
+/// Quote response payload. The 12-field signed shape plus the
+/// orderbook's expected signing scheme and price metadata. Use
+/// [`OrderQuoteResponse::to_signed_order_data`] to project into a
+/// signable [`OrderData`] after binding the response to the
 /// originating [`QuoteRequest`].
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderQuote {
-    /// Address of the sold token.
     pub sell_token: Address,
-    /// Address of the bought token.
     pub buy_token: Address,
-    /// Optional buy-token recipient.
     #[serde(default)]
     pub receiver: Option<Address>,
-    /// Sell amount in atomic units.
     #[serde_as(as = "DisplayFromStr")]
     pub sell_amount: U256,
-    /// Buy amount in atomic units.
     #[serde_as(as = "DisplayFromStr")]
     pub buy_amount: U256,
-    /// Unix timestamp at which the quote stops being valid for signing.
     pub valid_to: u32,
-    /// App-data digest.
     pub app_data: AppDataHash,
-    /// Fee charged by the orderbook in `sell_token` atomic units.
+    /// Orderbook fee in `sell_token` atomic units.
     #[serde_as(as = "DisplayFromStr")]
     pub fee_amount: U256,
-    /// Direction of the order.
     pub kind: OrderKind,
-    /// Whether partial fills are allowed.
     pub partially_fillable: bool,
-    /// Source the sell amount is drawn from.
     #[serde(default)]
     pub sell_token_balance: SellTokenSource,
-    /// Destination the buy amount is paid to.
     #[serde(default)]
     pub buy_token_balance: BuyTokenDestination,
-    /// Signing scheme the orderbook expects.
     pub signing_scheme: SigningScheme,
 }
 
 impl OrderQuoteResponse {
-    /// Apply the submission adjustments documented at
-    /// [`api.mdx §"Step 3"`][step3] and return the [`OrderData`] that
-    /// must be hashed and signed by the order owner.
-    ///
-    /// Cross-checks every caller-authorised field of the response
-    /// against the originating [`QuoteRequest`] before projecting:
-    /// `sellToken`, `buyToken`, normalised `receiver`, `kind`, the
-    /// envelope's `from`, and (when the caller pinned them) `validTo`,
-    /// `partiallyFillable`, `sellTokenBalance`, `buyTokenBalance`,
-    /// `signingScheme`, and the `appData` digest. A hostile orderbook
-    /// that flips any of these between request and response is
-    /// rejected with [`Error::QuoteFieldMismatch`] before any
-    /// signable bytes leave the SDK.
-    ///
-    /// - For sell orders, `sell_amount` is the quoted `sellAmount +
-    ///   feeAmount`. For buy orders, the quote values pass through.
-    /// - `fee_amount` is always `0` at submission: solvers price gas at
-    ///   settlement time.
-    /// - `app_data` is the 32-byte digest of the canonical metadata JSON
-    ///   the caller will submit (use [`crate::EMPTY_APP_DATA_HASH`] for
-    ///   the empty document `"{}"`).
+    /// Project the response into the [`OrderData`] the owner signs,
+    /// applying the [step-3][step3] amount adjustments. Cross-checks
+    /// `sellToken`, `buyToken`, normalised `receiver`, `kind`, `from`
+    /// — plus any caller-pinned `validTo` / `partiallyFillable` /
+    /// balance / scheme / `appData` — against `request`; mismatches
+    /// fail closed with [`Error::QuoteFieldMismatch`]. Sell orders
+    /// fold `feeAmount` into `sellAmount`; `fee_amount` ships as `0`
+    /// (solvers price gas at settlement).
     ///
     /// [step3]: https://docs.cow.fi/cow-protocol/howto/integrate/api#step-3-compute-the-amounts-to-sign
     pub fn to_signed_order_data(
@@ -579,13 +485,10 @@ impl OrderQuoteResponse {
         Ok(self.project_into_order_data(sell_amount, buy_amount, app_data))
     }
 
-    /// Build [`OrderData`] from the response, taking the amounts and
-    /// `app_data` digest from the caller and the other ten signed fields
-    /// from `self.quote`. `fee_amount` is always zeroed: solvers price
-    /// gas at settlement time, and the caller has already folded the
-    /// quote's fee into `sell_amount` (sell-side) or accepted it
-    /// (buy-side). Private because every public projection method
-    /// must first run [`Self::check_response_matches_request`].
+    /// Project the response into [`OrderData`] with caller-supplied
+    /// amounts and `app_data`; `fee_amount` is always `0` at signing
+    /// time. Private because every public path must first run
+    /// [`Self::check_response_matches_request`].
     const fn project_into_order_data(
         &self,
         sell_amount: U256,
@@ -609,21 +512,15 @@ impl OrderQuoteResponse {
         }
     }
 
-    /// Project this quote into [`crate::quote_amounts::QuoteAmountsAndCosts`],
-    /// threading the caller's partner fee, slippage and any
-    /// `protocolFeeBps` echoed by the response through the same
-    /// arithmetic the TypeScript SDK uses (`getQuoteAmountsAndCosts`).
-    /// Use this when posting an order that combines a partner fee with
-    /// a quote that carries a protocol fee, otherwise the partner-fee
-    /// base is computed against the wrong spot price and the
-    /// orderbook receives an inflated `buyAmount` (see
-    /// [`cow-sdk` #867]).
+    /// Project the quote through `getQuoteAmountsAndCosts`-equivalent
+    /// arithmetic ([`crate::quote_amounts::compute`]). Required when
+    /// combining a partner fee with a quote that carries a protocol
+    /// fee — otherwise the partner-fee base is computed against the
+    /// wrong spot price (see [cow-sdk #867]). Pass
+    /// `protocol_fee_bps_override` to pin the value; `None` falls
+    /// back to [`Self::protocol_fee_bps`].
     ///
-    /// `protocol_fee_bps_override` lets the caller pin a specific value
-    /// instead of trusting [`Self::protocol_fee_bps`]; `None` falls
-    /// back to the on-wire field.
-    ///
-    /// [`cow-sdk` #867]: https://github.com/cowprotocol/cow-sdk/pull/867
+    /// [cow-sdk #867]: https://github.com/cowprotocol/cow-sdk/pull/867
     pub fn amounts_with_costs(
         &self,
         partner_fee_bps: u32,
@@ -643,13 +540,11 @@ impl OrderQuoteResponse {
         })
     }
 
-    /// Like [`Self::to_signed_order_data`] but applies the full
+    /// Like [`Self::to_signed_order_data`] but runs the full
     /// partner-fee + protocol-fee + slippage composition through
-    /// [`Self::amounts_with_costs`] before projecting into
-    /// [`OrderData`]. Use this whenever the order being submitted
-    /// carries an `AppDataPartnerFee`, or when the quote response
-    /// echoes a non-zero `protocolFeeBps`. Shares the same
-    /// request-binding guard.
+    /// [`Self::amounts_with_costs`] first. Use when the order carries
+    /// an `AppDataPartnerFee` or the quote echoes a non-zero
+    /// `protocolFeeBps`. Same request-binding guard.
     pub fn to_signed_order_data_with_costs(
         &self,
         request: &QuoteRequest,
@@ -787,22 +682,21 @@ impl OrderQuoteResponse {
     }
 }
 
-/// Full response body of `POST /api/v1/quote`.
+/// `POST /api/v1/quote` response body.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderQuoteResponse {
-    /// The order the orderbook is willing to settle.
     pub quote: OrderQuote,
-    /// Owner address echoed back.
+    /// Order owner; echoed from the request.
     pub from: Address,
-    /// ISO-8601 timestamp at which the quote stops being honoured.
+    /// ISO-8601 expiry of the quote.
     pub expiration: String,
-    /// Server-assigned quote identifier; pass back when posting the order
-    /// so the orderbook can reconcile fee/price.
+    /// Server-assigned quote id; pass back when posting so the
+    /// orderbook can reconcile fee/price.
     pub id: i64,
-    /// Whether the orderbook simulated the order against on-chain balances.
+    /// `true` if the orderbook simulated against on-chain balances.
     pub verified: bool,
-    /// Protocol fee in basis points (decimal string).
+    /// Protocol fee in bps, decimal string.
     #[serde(default)]
     pub protocol_fee_bps: Option<String>,
 }
@@ -815,82 +709,58 @@ pub struct OrderBookApi {
 }
 
 impl OrderBookApi {
-    /// Build a client targeting the production orderbook for the given chain.
+    /// Client for the production orderbook on `chain`.
     pub fn new(chain: Chain) -> Self {
         Self::new_with_base_url(ensure_trailing_slash(chain.orderbook_base_url()))
     }
 
-    /// Build a client against a custom base URL: useful for tests against
-    /// a recorded server or a staging deployment. The default reqwest
-    /// client carries a [`DEFAULT_HTTP_TIMEOUT`] cap so a stuck
-    /// orderbook cannot hold the caller open indefinitely.
+    /// Client against an arbitrary base URL (staging, recorded mock,
+    /// etc.). The default reqwest client enforces
+    /// [`DEFAULT_HTTP_TIMEOUT`].
     pub fn new_with_base_url(base_url: url::Url) -> Self {
-        // `ClientBuilder::timeout` only exists on non-wasm32 targets;
-        // reqwest's wasm32 backend delegates to the browser's fetch
-        // and inherits its timeout behaviour instead.
+        // `ClientBuilder::timeout` is non-wasm32 only; the wasm
+        // backend defers to the browser's fetch timeout.
         let builder = reqwest::Client::builder();
         #[cfg(not(target_arch = "wasm32"))]
         let builder = builder.timeout(DEFAULT_HTTP_TIMEOUT);
-        let client = builder
-            .build()
-            .expect("reqwest client builder cannot fail with default settings");
+        let client = builder.build().expect("reqwest defaults cannot fail");
         Self::with_client(base_url, client)
     }
 
-    /// Build a client around a pre-configured [`reqwest::Client`].
-    /// Use this when you need to override timeouts, install proxies,
-    /// pin TLS roots, or inject auth middleware.
+    /// Client around a pre-configured [`reqwest::Client`]. Use for
+    /// custom timeouts, proxies, TLS roots, or auth middleware.
     pub fn with_client(base_url: url::Url, client: reqwest::Client) -> Self {
-        Self {
-            base_url: ensure_trailing_slash(base_url),
-            client,
-        }
+        Self { base_url: ensure_trailing_slash(base_url), client }
     }
 
-    /// The base URL the client points at, with the trailing slash that path
-    /// joining relies on.
-    pub const fn base_url(&self) -> &url::Url {
-        &self.base_url
-    }
+    /// Base URL with the trailing slash path joining relies on.
+    pub const fn base_url(&self) -> &url::Url { &self.base_url }
 
-    /// `POST /api/v1/quote`: ask the orderbook for a quote that the
-    /// requester can sign and submit.
+    /// `POST /api/v1/quote`.
     pub async fn get_quote(&self, request: &QuoteRequest) -> Result<OrderQuoteResponse> {
         self.post_json("api/v1/quote", request).await
     }
 
-    /// `POST /api/v1/orders`: submit a signed order. Returns the
-    /// 56-byte UID assigned by the orderbook.
+    /// `POST /api/v1/orders`. Returns the assigned 56-byte UID.
     pub async fn post_order(&self, order: &OrderCreation) -> Result<OrderUid> {
         self.post_json("api/v1/orders", order).await
     }
 
-    /// `GET /api/v1/orders/{uid}`: fetch the full order record, including
-    /// execution counters and lifecycle status.
+    /// `GET /api/v1/orders/{uid}`.
     pub async fn get_order(&self, uid: &OrderUid) -> Result<Order> {
         self.get_json(&format!("api/v1/orders/{uid}")).await
     }
 
-    /// `GET /api/v1/orders/{uid}/status`: fetch the auction lifecycle
-    /// stage and any attached solver proposals.
+    /// `GET /api/v1/orders/{uid}/status`.
     pub async fn get_order_status(&self, uid: &OrderUid) -> Result<AuctionStatus> {
         self.get_json(&format!("api/v1/orders/{uid}/status")).await
     }
 
-    /// Poll [`OrderBookApi::get_order`] until `should_stop` returns
-    /// `true`, sleeping between polls via the caller-supplied closure.
-    ///
-    /// Runtime-agnostic: works under tokio (`tokio::time::sleep`),
-    /// async-std, `gloo_timers::future::sleep` in browsers, or anything
-    /// else that exposes a `Future<Output = ()>`. The function does not
-    /// look at the wall clock; callers that want a deadline bake it into
-    /// `should_stop` (e.g. capture an `Instant` in the closure).
-    ///
-    /// Each iteration calls `should_stop(&order)` first; the helper
-    /// returns the latest [`Order`] as soon as the predicate is
-    /// satisfied. If the predicate never returns `true`, the loop
-    /// continues until a HTTP error from [`OrderBookApi::get_order`]
-    /// short-circuits it.
+    /// Poll [`Self::get_order`] until `should_stop` returns `true`,
+    /// sleeping via the caller-supplied closure. Runtime-agnostic;
+    /// pass `tokio::time::sleep`, `gloo_timers::future::sleep`, or
+    /// any `Future<Output = ()>` producer. Callers wanting a deadline
+    /// bake it into `should_stop`.
     pub async fn poll_until<P, S, Fut>(
         &self,
         uid: &OrderUid,
@@ -911,15 +781,9 @@ impl OrderBookApi {
         }
     }
 
-    /// Convenience wrapper around [`OrderBookApi::poll_until`] that uses
-    /// `tokio::time::sleep` and a wall-clock deadline. Stops when the
-    /// order reaches a terminal status ([`crate::OrderStatus::Fulfilled`],
-    /// [`crate::OrderStatus::Cancelled`], [`crate::OrderStatus::Expired`])
-    /// or `deadline` elapses, whichever comes first.
-    ///
-    /// Available on non-wasm targets only. WASM callers should compose
-    /// [`OrderBookApi::poll_until`] with `gloo_timers::future::sleep`
-    /// (or equivalent) directly.
+    /// `tokio::time::sleep`-backed [`Self::poll_until`] that stops on
+    /// a terminal status or when `deadline` elapses. Non-wasm only;
+    /// wasm callers compose `poll_until` with their own sleep.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn wait_for_order_fulfilled(
         &self,
@@ -944,10 +808,8 @@ impl OrderBookApi {
         .await
     }
 
-    /// `GET /api/v1/account/{owner}/orders`: list every order the
-    /// orderbook knows about for `owner`, most recent first. `offset` and
-    /// `limit` page the result; pass `None` for both to use the orderbook
-    /// defaults.
+    /// `GET /api/v1/account/{owner}/orders`. Most recent first. Pass
+    /// `None` for both pagers to use the server defaults.
     pub async fn account_orders(
         &self,
         owner: Address,
@@ -970,9 +832,8 @@ impl OrderBookApi {
         Self::decode_response(response).await
     }
 
-    /// `POST /api/v1/orders/by_uids`: fetch many orders in a single round
-    /// trip. The orderbook returns them in the order requested, with
-    /// unknown UIDs omitted (not nulled).
+    /// `POST /api/v1/orders/by_uids`. Returns orders in request
+    /// order; unknown UIDs are omitted.
     pub async fn get_orders_by_uids(&self, uids: &[OrderUid]) -> Result<Vec<Order>> {
         self.post_json(
             "api/v1/orders/by_uids",
@@ -981,8 +842,7 @@ impl OrderBookApi {
         .await
     }
 
-    /// `GET /api/v1/trades?owner=...`: trades produced by orders signed
-    /// by `owner`.
+    /// `GET /api/v1/trades?owner=...`.
     pub async fn trades_by_owner(&self, owner: Address) -> Result<Vec<Trade>> {
         let mut url = self.base_url.join("api/v1/trades")?;
         url.query_pairs_mut()
@@ -991,8 +851,7 @@ impl OrderBookApi {
         Self::decode_response(response).await
     }
 
-    /// `GET /api/v1/trades?orderUid=...`: trades that filled a specific
-    /// order UID.
+    /// `GET /api/v1/trades?orderUid=...`.
     pub async fn trades_by_order_uid(&self, uid: &OrderUid) -> Result<Vec<Trade>> {
         let mut url = self.base_url.join("api/v1/trades")?;
         url.query_pairs_mut()
@@ -1001,60 +860,46 @@ impl OrderBookApi {
         Self::decode_response(response).await
     }
 
-    /// `GET /api/v1/token/{token}/native_price`: price of one atomic
-    /// unit of `token` in the chain's native gas token. Used by solvers
-    /// to denominate gas costs uniformly across pairs.
+    /// `GET /api/v1/token/{token}/native_price`. One atomic unit of
+    /// `token` in the chain's native gas token; solvers use this to
+    /// denominate gas uniformly across pairs.
     pub async fn native_price(&self, token: Address) -> Result<NativePrice> {
         self.get_json(&format!("api/v1/token/{token:?}/native_price"))
             .await
     }
 
-    /// `GET /api/v1/token/{token}/metadata`: first-trade block and the
-    /// most recent native-price quote the orderbook has cached.
+    /// `GET /api/v1/token/{token}/metadata`.
     pub async fn token_metadata(&self, token: Address) -> Result<TokenMetadata> {
         self.get_json(&format!("api/v1/token/{token:?}/metadata"))
             .await
     }
 
-    /// `GET /api/v1/transactions/{hash}/orders`: every order settled in
-    /// the given transaction. Returns an empty list if the hash does not
-    /// correspond to a known settlement.
+    /// `GET /api/v1/transactions/{hash}/orders`. Empty list for an
+    /// unknown settlement.
     pub async fn orders_by_tx(&self, tx_hash: B256) -> Result<Vec<Order>> {
         self.get_json(&format!("api/v1/transactions/{tx_hash:?}/orders"))
             .await
     }
 
-    /// `GET /api/v1/auction`: the current batch auction snapshot.
-    ///
-    /// Permissioned: the public-facing proxy returns `403 Forbidden` to
-    /// unauthenticated callers. The CoW autopilot exposes it to solvers
-    /// (access granted on request). The method is shipped here for parity
-    /// with cow-py and cow-sdk; the auction shape is solver-oriented and
-    /// changes across CIP-20 / CIP-67, so the per-order array is left as
-    /// raw JSON.
+    /// `GET /api/v1/auction`. Permissioned (solver-only); the
+    /// public-facing proxy returns 403. Shipped for parity with
+    /// cow-py / cow-sdk; per-order array is opaque JSON because the
+    /// auction shape drifts across CIPs.
     pub async fn get_auction(&self) -> Result<Auction> {
         self.get_json("api/v1/auction").await
     }
 
-    /// `GET /api/v1/users/{user}/total_surplus`: cumulative surplus the
-    /// user has captured across all of their orders.
+    /// `GET /api/v1/users/{user}/total_surplus`.
     pub async fn total_surplus(&self, user: Address) -> Result<TotalSurplus> {
         self.get_json(&format!("api/v1/users/{user:?}/total_surplus"))
             .await
     }
 
-    /// `GET /api/v1/app_data/{hash}`: retrieve the canonical JSON the
-    /// orderbook has on file for an app-data digest. Returns
-    /// [`Error::OrderbookApi`] with `NotFound` when the orderbook has not
-    /// seen the document.
-    ///
-    /// The decoded [`AppDataDocument`] is re-hashed locally and compared
-    /// against the requested digest before it is returned; a hostile or
-    /// buggy orderbook that serves a body which does not hash to `hash`
-    /// is rejected with [`Error::AppDataHashMismatch`]. The signed order
-    /// commits only to the digest, so this is what closes the loop
-    /// between what was signed and what downstream code displays or
-    /// validates.
+    /// `GET /api/v1/app_data/{hash}`. Re-hashes the returned body
+    /// locally and rejects with [`Error::AppDataHashMismatch`] when
+    /// the digest disagrees with `hash`; the signed order commits to
+    /// the digest, so this closes the loop between what was signed
+    /// and what downstream code displays.
     pub async fn get_app_data(&self, hash: &AppDataHash) -> Result<AppDataDocument> {
         let document: AppDataDocument = self
             .get_json(&format!("api/v1/app_data/{}", hex_string(hash.as_ref())))
@@ -1069,15 +914,9 @@ impl OrderBookApi {
         Ok(document)
     }
 
-    /// `PUT /api/v1/app_data/{hash}`: pre-pin a document so the orderbook
-    /// can serve it back for the matching hash. Used to bind an order to
-    /// specific metadata before the order itself is submitted, notably for
-    /// the EIP-1271 owner-pinning replay defence.
-    ///
-    /// Hashes `document.full_app_data` locally and refuses to issue the
-    /// PUT when the digest disagrees with `hash`. The orderbook applies
-    /// the same check server-side; failing fast surfaces the bug as
-    /// [`Error::AppDataHashMismatch`] instead of an opaque 4xx response.
+    /// `PUT /api/v1/app_data/{hash}`. Hashes `document.full_app_data`
+    /// locally first and refuses with [`Error::AppDataHashMismatch`]
+    /// on a digest disagreement.
     pub async fn put_app_data(&self, hash: &AppDataHash, document: &AppDataDocument) -> Result<()> {
         let computed = document.computed_hash();
         if computed != *hash {
@@ -1101,24 +940,14 @@ impl OrderBookApi {
         )
     }
 
-    /// `PUT /api/v1/app_data`: pin a document without committing to a
-    /// hash upfront; the orderbook computes the digest from the body and
-    /// returns it. Use this when the client wants the server to be the
-    /// source of truth for the canonical hash, or when porting code that
-    /// has the document but not its digest. The hashed variant
-    /// ([`OrderBookApi::put_app_data`]) is preferred when the caller has
+    /// `PUT /api/v1/app_data`. Lets the orderbook compute and return
+    /// the digest. Prefer [`Self::put_app_data`] when the caller has
     /// already pinned an [`AppDataHash`] in a signed order.
-    ///
-    /// Returns the digest the orderbook computed; status `201 Created`
-    /// for a fresh pin or `200 OK` if the orderbook already had it on
-    /// file.
     pub async fn upload_app_data(&self, document: &AppDataDocument) -> Result<AppDataHash> {
         self.put_json("api/v1/app_data", document).await
     }
 
-    /// `GET /api/v1/version`: the orderbook server's free-form version
-    /// string. Useful as a quick liveness probe; the format is plain text,
-    /// not JSON.
+    /// `GET /api/v1/version`. Plain-text liveness probe.
     pub async fn version(&self) -> Result<String> {
         let response = self
             .client
@@ -1136,12 +965,8 @@ impl OrderBookApi {
         }
     }
 
-    /// `DELETE /api/v1/orders`: submit a signed cancellation collection.
-    ///
-    /// Note that the endpoint is `/api/v1/orders` (collection), not
-    /// `/api/v1/orders/{uid}`; the orders to cancel are identified by the
-    /// `orderUids` array in the body. The cancellation is "soft": orders
-    /// already in flight may still settle.
+    /// `DELETE /api/v1/orders`. UIDs travel in the body, not the URL.
+    /// Soft-cancel: orders already in flight may still settle.
     pub async fn cancel_orders(&self, signed: &SignedOrderCancellations) -> Result<()> {
         let response = self
             .client
@@ -1160,15 +985,9 @@ impl OrderBookApi {
         )
     }
 
-    /// `DELETE /api/v1/orders/{uid}`: soft-cancel a single order. The
-    /// UID is taken from `cancellation.order_uid` and placed in the URL;
-    /// the body carries only the signature and signing scheme, matching
-    /// the upstream `CancellationPayload` wire shape.
-    ///
-    /// Like [`OrderBookApi::cancel_orders`], the cancellation is "soft":
-    /// orders that have already been picked up by a solver may still
-    /// settle. For pre-signed and EthFlow orders use the on-chain
-    /// invalidation path instead.
+    /// `DELETE /api/v1/orders/{uid}`. Soft-cancel: an order already
+    /// picked up by a solver may still settle. For pre-signed and
+    /// EthFlow orders, invalidate on-chain instead.
     pub async fn cancel_order(&self, cancellation: &OrderCancellation) -> Result<()> {
         let url = self
             .base_url
@@ -1241,11 +1060,9 @@ impl OrderBookApi {
     }
 }
 
-/// Read a response body as UTF-8 text, rejecting payloads larger than
-/// [`MAX_RESPONSE_BYTES`]. Honours the `Content-Length` header when
-/// present (early reject) and re-checks the materialised body
-/// afterwards as a backstop for servers that omit or under-declare the
-/// header.
+/// Read a response body as UTF-8 text, rejecting payloads above
+/// [`MAX_RESPONSE_BYTES`]. Early-rejects on `Content-Length` and
+/// re-checks the materialised body as a backstop.
 async fn read_capped_text(response: reqwest::Response) -> Result<String> {
     if let Some(declared_len) = response.content_length()
         && declared_len > MAX_RESPONSE_BYTES as u64

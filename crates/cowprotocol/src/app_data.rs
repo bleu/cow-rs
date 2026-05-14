@@ -21,12 +21,9 @@ use std::fmt;
 use crate::bytes_hex::BytesHex;
 use crate::order::{OrderClass, OrderUid};
 
-/// 32-byte digest of an [app-data] document.
-///
-/// The digest is the keccak256 of the deterministically-stringified JSON
-/// document and is embedded directly in the signed order payload. It is
-/// **not** itself an IPFS CID: call [`AppDataHash::to_cid`] (or
-/// [`AppDataCid::from_hash`]) to derive the CID the orderbook pins the
+/// 32-byte keccak256 digest of an [app-data] document, embedded
+/// directly in the signed order's `appData` field. Call
+/// [`Self::to_cid`] for the IPFS CID the orderbook pins the
 /// document under.
 ///
 /// [app-data]: https://docs.cow.fi/cow-protocol/reference/core/intents/app-data
@@ -47,70 +44,40 @@ impl fmt::Display for AppDataHash {
 }
 
 impl From<[u8; 32]> for AppDataHash {
-    fn from(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
+    fn from(bytes: [u8; 32]) -> Self { Self(bytes) }
 }
 
 impl AsRef<[u8]> for AppDataHash {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
+    fn as_ref(&self) -> &[u8] { &self.0 }
 }
 
 impl AppDataHash {
-    /// Derive the IPFS CID the orderbook pins this document under.
-    ///
-    /// Shortcut for [`AppDataCid::from_hash`]; see that type for the wire
-    /// format.
-    pub fn to_cid(&self) -> AppDataCid {
-        AppDataCid::from_hash(*self)
-    }
+    /// Shortcut for [`AppDataCid::from_hash`].
+    pub fn to_cid(&self) -> AppDataCid { AppDataCid::from_hash(*self) }
 }
 
-/// `keccak256("{}")`: the digest of the canonical empty app-data document.
-///
-/// The orderbook accepts an unset / empty app-data digest, but for fixtures
-/// and tests we mirror cow-sdk's convention of explicitly pinning the empty
-/// document.
+/// `keccak256("{}")`: digest of the canonical empty app-data document.
 pub const EMPTY_APP_DATA_HASH: AppDataHash = AppDataHash(hex_literal::hex!(
     "b48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d"
 ));
 
 /// JSON representation of the empty app-data document (`"{}"`).
-///
-/// Paired with [`EMPTY_APP_DATA_HASH`] when submitting orders without
-/// custom app-data metadata.
 pub const EMPTY_APP_DATA_JSON: &str = "{}";
 
-/// Current SemVer of the app-data schema this crate emits.
-///
-/// Matches the version tag the cow-sdk / cow-py canonical documents pin at
-/// the time of writing. Bump in lock-step with upstream when the schema
-/// changes; see `cow-protocol/reference/core/intents/app-data.mdx`.
+/// SemVer of the schema this crate emits. Bump in lock-step with
+/// upstream; see `cow-protocol/reference/core/intents/app-data.mdx`.
 pub const LATEST_APP_DATA_VERSION: &str = "1.6.0";
 
-/// Canonical `appCode` for orders built through the native Rust SDK
-/// (this crate, called directly from Rust). Mirrors the
-/// `appCode: "CoW Swap"` convention the frontend uses and the
-/// `appCode: "cow-py"` cow-py defaults to. Lets the orderbook indexer
-/// count how many orders flow through the Rust SDK vs other clients.
-/// Apply via [`AppDataDoc::sdk_attribution`].
+/// `appCode` tag for the native Rust SDK. Apply via
+/// [`AppDataDoc::sdk_attribution`].
 pub const COW_RS_APP_CODE: &str = "cow-rs";
 
-/// Canonical `appCode` for orders built through the wasm shim
-/// (`cow-sdk-wasm` published to npm). Distinct from
-/// [`COW_RS_APP_CODE`] so the orderbook indexer can tell native Rust
-/// callers and JS-via-wasm callers apart.
+/// `appCode` tag for the wasm shim (`cow-sdk-wasm` on npm).
 pub const COW_RS_WASM_APP_CODE: &str = "cow-rs-wasm";
 
-/// Maximum byte length of a `fullAppData` document the orderbook will
-/// accept on `PUT /api/v1/app_data/{hash}`. Mirrors the server-side
-/// `Validator::DEFAULT_SIZE_LIMIT` in `cowprotocol/services/crates/shared/
-/// src/app_data.rs`. Clients that build a document larger than this
-/// should refuse to sign an order against its hash; the orderbook will
-/// otherwise reject the document with `400 Bad Request` after the
-/// signature is already committed to the digest.
+/// Maximum `fullAppData` size the orderbook accepts on
+/// `PUT /api/v1/app_data/{hash}`. Mirrors
+/// `Validator::DEFAULT_SIZE_LIMIT` in `cowprotocol/services`.
 pub const APP_DATA_SIZE_LIMIT: usize = 8192;
 
 impl Serialize for AppDataHash {
@@ -136,106 +103,75 @@ impl<'de> Deserialize<'de> for AppDataHash {
     }
 }
 
-/// Canonical app-data JSON document.
-///
-/// Mirrors the v1.x schema family used by cow-sdk's `@cowprotocol/app-data`
-/// and cow-py's `AppDataDoc`. Only the fields most integrations need are
-/// modelled explicitly; involved nested structures (notably hooks) fall
-/// through as opaque JSON so callers can pass them as-is.
-///
-/// The struct is deliberately additive: every field except `version` is
-/// optional and is skipped from the serialised JSON when unset, so the
-/// minimal document mirrors what cow-py emits for an empty `AppDataDoc`.
+/// Canonical app-data JSON document. Mirrors cow-sdk's
+/// `@cowprotocol/app-data` v1.x schema and cow-py's `AppDataDoc`.
+/// Common fields are typed; hooks remain opaque JSON. Every field
+/// except `version` is optional and skipped when unset.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataDoc {
-    /// SemVer of the schema, e.g. `"1.6.0"`.
+    /// Schema SemVer, e.g. `"1.6.0"`.
     pub version: String,
-    /// Who built the integration. Freeform; cow-sdk recommends a stable,
-    /// human-readable identifier per integration.
+    /// Integration identifier (freeform).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_code: Option<String>,
-    /// Optional environment marker (`"prod"`, `"staging"`, …).
+    /// `"prod"`, `"staging"`, etc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<String>,
-    /// Application metadata. Always present in the serialised JSON; an
-    /// all-`None` value renders as `{}`.
     #[serde(default)]
     pub metadata: AppDataMetadata,
 }
 
-/// `metadata` sub-document of [`AppDataDoc`].
-///
-/// All fields are optional and skipped when unset. The more involved
-/// sub-types ([`AppDataHooks`]) are modelled as opaque JSON so callers can
-/// thread arbitrary pre- / post-hook arrays through without this crate
-/// needing to track every schema tweak.
+/// `metadata` sub-document of [`AppDataDoc`]. Hooks stay opaque so
+/// callers can thread arbitrary pre/post arrays without this crate
+/// chasing schema tweaks.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataMetadata {
-    /// Quote-time metadata (slippage hint and version tag).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quote: Option<AppDataQuote>,
-    /// Order classification (market / limit / liquidity).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order_class: Option<AppDataOrderClass>,
-    /// Partner-fee instructions (basis-point cut + recipient).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partner_fee: Option<AppDataPartnerFee>,
-    /// Referrer attribution (wallet address).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub referrer: Option<AppDataReferrer>,
-    /// UTM campaign tracking parameters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm: Option<AppDataUtm>,
-    /// Pre- and post-trade hooks. Opaque JSON: see the cow-hooks SDK and
-    /// `cow-protocol/reference/core/intents/hooks` for the structure.
+    /// Pre- and post-trade hooks; opaque JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hooks: Option<serde_json::Value>,
-    /// Flashloan attached to this order. Mirrors the upstream
-    /// `ProtocolAppData.flashloan` field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flashloan: Option<AppDataFlashloan>,
-    /// UID of the order this one replaces. Solvers cancel the prior
-    /// order when settling the replacement.
+    /// UID of the order this one replaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaced_order: Option<AppDataReplacedOrder>,
-    /// Wrapper-contract calls that wrap the order's settlement.
-    ///
-    /// Skipped when empty so a wrapper-free document still hashes to the
-    /// same digest it did before this field was added.
+    /// Skipped when empty so a wrapper-free document hashes the same
+    /// digest it did before the field was added.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wrappers: Vec<AppDataWrapperCall>,
 }
 
-/// Quote metadata: only the slippage hint is modelled explicitly.
+/// `metadata.quote`.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataQuote {
-    /// Slippage applied to the quote, in basis points (`10_000 == 100 %`).
+    /// Slippage in basis points (`10_000 == 100 %`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slippage_bips: Option<u32>,
-    /// Optional version tag for the quote sub-document.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
 }
 
-/// `metadata.orderClass` sub-document.
-///
-/// Wraps [`crate::order::OrderClass`] in the JSON envelope cow-sdk emits.
+/// `metadata.orderClass` envelope around [`crate::order::OrderClass`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataOrderClass {
-    /// The class tag carried in `metadata.orderClass.orderClass`.
     pub order_class: crate::order::OrderClass,
 }
 
-/// `metadata.partnerFee` sub-document.
-///
-/// Solvers route the configured cut of order surplus / volume to
-/// `recipient` according to the policy carried in [`Self::policy`]. The
-/// policy fields are *flattened* into the same JSON object as
-/// `recipient`, matching the wire shape used by
+/// `metadata.partnerFee`. Policy fields are flattened alongside
+/// `recipient` on the wire, matching
 /// `cowprotocol/services::app_data::PartnerFee`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppDataPartnerFee {
@@ -357,9 +293,8 @@ impl<'de> Deserialize<'de> for AppDataPartnerFee {
 }
 
 /// Reject [`FeePolicy`] values whose bps fields exceed
-/// [`PARTNER_FEE_BPS_MAX`]. Used by [`AppDataPartnerFee::deserialize`]
-/// and the policy constructors so a hostile app-data document cannot
-/// pin a `bps = u64::MAX` that the contract would silently clamp.
+/// [`PARTNER_FEE_BPS_MAX`]. A hostile document otherwise pins a
+/// `bps = u64::MAX` that the contract silently clamps.
 pub fn validate_fee_policy(policy: &FeePolicy) -> Result<(), AppDataError> {
     let check = |field: &'static str, value: u64| -> Result<(), AppDataError> {
         if value > PARTNER_FEE_BPS_MAX {
@@ -392,145 +327,96 @@ pub fn validate_fee_policy(policy: &FeePolicy) -> Result<(), AppDataError> {
 }
 
 impl AppDataPartnerFee {
-    /// Construct a partner-fee binding with bps validation. Use this
-    /// instead of building [`AppDataPartnerFee`] by hand when the policy
-    /// values come from caller input you do not fully trust.
+    /// Construct a partner-fee binding with bps validation. Prefer
+    /// this over hand-building when the policy values come from
+    /// untrusted input.
     pub fn new(policy: FeePolicy, recipient: Address) -> Result<Self, AppDataError> {
         validate_fee_policy(&policy)?;
         Ok(Self { policy, recipient })
     }
 }
 
-/// Fee-policy variant used inside [`AppDataPartnerFee`].
-///
-/// The policy is *flattened* alongside `recipient` in the wire JSON,
-/// matching the upstream `FeePolicy` deserializer in
-/// `cowprotocol/services::app_data`. Mirroring it:
-///
-/// - [`FeePolicy::Surplus`] emits `surplusBps` + `maxVolumeBps`.
-/// - [`FeePolicy::PriceImprovement`] emits `priceImprovementBps` +
-///   `maxVolumeBps`.
-/// - [`FeePolicy::Volume`] emits the legacy `bps` field (rather than
-///   the equivalent `volumeBps`) so docs hashed with previous SDK
-///   versions keep their digests stable.
-///
-/// Deserialisation accepts either `bps` or `volumeBps` for the volume
-/// variant.
+/// Fee-policy variant for [`AppDataPartnerFee`]. Flattened alongside
+/// `recipient` on the wire; matches the upstream `FeePolicy`
+/// deserializer. `Volume` serialises as the legacy `bps` key (not
+/// `volumeBps`) so previously-hashed digests stay stable; the
+/// deserialiser accepts either.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FeePolicy {
-    /// Volume fee: `bps` charged on the swap volume.
-    Volume {
-        /// Basis-point fee (`100 == 1 %`).
-        bps: u64,
-    },
-    /// Surplus fee: `bps` of the captured surplus, capped at
-    /// `max_volume_bps` of the swap volume.
-    Surplus {
-        /// Basis-point cut of the surplus.
-        bps: u64,
-        /// Maximum cut as a basis-point fraction of swap volume.
-        max_volume_bps: u64,
-    },
-    /// Price-improvement fee: `bps` of the price improvement over the
-    /// reference quote, capped at `max_volume_bps` of the swap volume.
-    PriceImprovement {
-        /// Basis-point cut of the price improvement.
-        bps: u64,
-        /// Maximum cut as a basis-point fraction of swap volume.
-        max_volume_bps: u64,
-    },
+    /// `bps` charged on swap volume.
+    Volume { bps: u64 },
+    /// `bps` of captured surplus, capped at `max_volume_bps` of swap
+    /// volume.
+    Surplus { bps: u64, max_volume_bps: u64 },
+    /// `bps` of price improvement vs the reference quote, capped at
+    /// `max_volume_bps` of swap volume.
+    PriceImprovement { bps: u64, max_volume_bps: u64 },
 }
 
-/// `metadata.flashloan` sub-document.
-///
-/// Describes a flashloan attached to the order: the protocol that lends
-/// the funds, the adapter contract that bridges the loan to the
-/// settlement, the receiver of the loan, the borrowed `token`, and the
-/// `amount` in atomic units. Mirrors `ProtocolAppData::flashloan` in
-/// `cowprotocol/services`.
+/// `metadata.flashloan`. Describes a flashloan attached to the order
+/// (lender, adapter, receiver, token, atomic amount). Mirrors
+/// `ProtocolAppData::flashloan` in `cowprotocol/services`.
 #[serde_as]
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataFlashloan {
-    /// Liquidity-providing protocol (e.g. Aave pool address).
     pub liquidity_provider: Address,
-    /// Adapter that proxies the loan into the settlement.
     pub protocol_adapter: Address,
-    /// Account that receives the borrowed funds for the duration of the
-    /// settlement.
     pub receiver: Address,
-    /// Token being borrowed.
     pub token: Address,
-    /// Atomic-unit amount of `token` to borrow.
     #[serde_as(as = "DisplayFromStr")]
     pub amount: U256,
 }
 
-/// `metadata.replacedOrder` sub-document.
-///
-/// The UID of the order this one replaces. Solvers cancel the prior
-/// order when settling the replacement. Mirrors
-/// `ProtocolAppData::replaced_order`.
+/// `metadata.replacedOrder`. UID of the order this one replaces;
+/// solvers cancel the prior order when settling the replacement.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AppDataReplacedOrder {
-    /// UID of the order being replaced.
     pub uid: OrderUid,
 }
 
-/// `metadata.wrappers[]` entry.
-///
-/// Wrapper-contract calls that wrap the order's settlement; solvers
-/// invoke them as part of the settlement transaction. Mirrors
-/// `ProtocolAppData::wrappers[*]`.
+/// `metadata.wrappers[]` entry: wrapper-contract calls the solver
+/// invokes as part of the settlement transaction.
 #[serde_as]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataWrapperCall {
-    /// Wrapper contract address.
     pub address: Address,
-    /// Call data passed to the wrapper. Serialised as `0x`-prefixed hex.
+    /// Wrapper calldata; serialises as `0x`-prefixed hex.
     #[serde_as(as = "BytesHex")]
     pub data: Vec<u8>,
-    /// If `true`, solvers may settle without invoking the wrapper when
-    /// it is uneconomical to do so.
+    /// If `true`, solvers may settle without invoking the wrapper.
     #[serde(default)]
     pub is_omittable: bool,
 }
 
-/// `metadata.referrer` sub-document.
+/// `metadata.referrer`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataReferrer {
-    /// Referrer wallet address.
     pub address: Address,
-    /// Optional version tag for the referrer sub-document.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
 }
 
-/// `metadata.utm` sub-document: campaign attribution.
+/// `metadata.utm`: campaign attribution.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataUtm {
-    /// `utm_source`: origin of the traffic (e.g. `"telegram"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm_source: Option<String>,
-    /// `utm_medium`: broad channel (e.g. `"social"`, `"email"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm_medium: Option<String>,
-    /// `utm_campaign`: campaign identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm_campaign: Option<String>,
-    /// `utm_content`: freeform graffiti / per-order tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm_content: Option<String>,
-    /// `utm_term`: paid-search keyword / segmentation tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm_term: Option<String>,
 }
 
-/// Opaque hooks payload alias, kept around so callers can refer to the
-/// expected shape by name even though we don't model the nested arrays.
+/// Opaque hooks payload alias; the nested arrays are intentionally
+/// not modelled.
 pub type AppDataHooks = serde_json::Value;
 
 impl AppDataDoc {
@@ -545,15 +431,10 @@ impl AppDataDoc {
         }
     }
 
-    /// SDK-attribution document. Sets `appCode` to the supplied
-    /// identifier (pass [`COW_RS_APP_CODE`] when building from native
-    /// Rust, [`COW_RS_WASM_APP_CODE`] when building from the wasm
-    /// shim) and `metadata.quote.version` to this crate's
-    /// `CARGO_PKG_VERSION` so the orderbook indexer can identify
-    /// orders that originated from this SDK and from which release.
-    ///
-    /// Integrators with their own `appCode` should construct an
-    /// [`AppDataDoc`] directly instead.
+    /// SDK-attribution document. Pins `appCode` to the given tag
+    /// ([`COW_RS_APP_CODE`] or [`COW_RS_WASM_APP_CODE`]) and
+    /// `metadata.quote.version` to `CARGO_PKG_VERSION`. Integrators
+    /// with their own `appCode` should build [`AppDataDoc`] directly.
     pub fn sdk_attribution(app_code: &str) -> Self {
         Self {
             version: LATEST_APP_DATA_VERSION.to_string(),
@@ -571,7 +452,10 @@ impl AppDataDoc {
 
     /// Attach a referrer address.
     pub fn with_referrer(mut self, address: Address) -> Self {
-        self.metadata.referrer = Some(AppDataReferrer { address, version: None });
+        self.metadata.referrer = Some(AppDataReferrer {
+            address,
+            version: None,
+        });
         self
     }
 
@@ -590,60 +474,72 @@ impl AppDataDoc {
     /// Attach a partner fee with an explicit [`FeePolicy`]. Fails
     /// closed via [`AppDataError::FeeOutOfRange`] on any over-cap
     /// `bps` / `maxVolumeBps`; see [`Self::with_partner_fee`].
-    pub fn with_partner_fee_policy(mut self, policy: FeePolicy, recipient: Address) -> Result<Self, AppDataError> {
+    pub fn with_partner_fee_policy(
+        mut self,
+        policy: FeePolicy,
+        recipient: Address,
+    ) -> Result<Self, AppDataError> {
         validate_fee_policy(&policy)?;
         self.metadata.partner_fee = Some(AppDataPartnerFee { policy, recipient });
         Ok(self)
     }
 
     /// Attach a typed [`AppDataFlashloan`].
-    pub const fn with_flashloan(mut self, flashloan: AppDataFlashloan) -> Self { self.metadata.flashloan = Some(flashloan); self }
+    pub const fn with_flashloan(mut self, flashloan: AppDataFlashloan) -> Self {
+        self.metadata.flashloan = Some(flashloan);
+        self
+    }
 
     /// Mark this order as replacing an earlier one.
-    pub const fn with_replaced_order(mut self, uid: OrderUid) -> Self { self.metadata.replaced_order = Some(AppDataReplacedOrder { uid }); self }
+    pub const fn with_replaced_order(mut self, uid: OrderUid) -> Self {
+        self.metadata.replaced_order = Some(AppDataReplacedOrder { uid });
+        self
+    }
 
     /// Append a wrapper-contract call.
-    pub fn with_wrapper(mut self, wrapper: AppDataWrapperCall) -> Self { self.metadata.wrappers.push(wrapper); self }
+    pub fn with_wrapper(mut self, wrapper: AppDataWrapperCall) -> Self {
+        self.metadata.wrappers.push(wrapper);
+        self
+    }
 
     /// Tag the order with an order class.
-    pub const fn with_order_class(mut self, order_class: OrderClass) -> Self { self.metadata.order_class = Some(AppDataOrderClass { order_class }); self }
+    pub const fn with_order_class(mut self, order_class: OrderClass) -> Self {
+        self.metadata.order_class = Some(AppDataOrderClass { order_class });
+        self
+    }
 
     /// Attach a slippage hint to the quote sub-document.
     pub fn with_slippage_bips(mut self, slippage_bips: u32) -> Self {
-        self.metadata.quote.get_or_insert_with(AppDataQuote::default).slippage_bips = Some(slippage_bips);
+        self.metadata
+            .quote
+            .get_or_insert_with(AppDataQuote::default)
+            .slippage_bips = Some(slippage_bips);
         self
     }
 
     /// Mark the environment (`"prod"`, `"staging"`, …).
-    pub fn with_environment(mut self, environment: impl Into<String>) -> Self { self.environment = Some(environment.into()); self }
+    pub fn with_environment(mut self, environment: impl Into<String>) -> Self {
+        self.environment = Some(environment.into());
+        self
+    }
 
-    /// Serialise the document to deterministic JSON.
+    /// Serialise to deterministic JSON: lex-sorted keys, no
+    /// whitespace, **raw UTF-8 for non-ASCII** (matching the
+    /// orderbook's `keccak256(toUtf8Bytes(fullAppData))` and cow-sdk's
+    /// TS implementation; cow-py's `ensure_ascii=True` default
+    /// diverges on non-ASCII, the orderbook is the source of truth).
     ///
-    /// The output has all object keys sorted lexicographically, no
-    /// whitespace, and **raw UTF-8 bytes for any non-ASCII character**
-    /// — this matches the orderbook's `keccak256(toUtf8Bytes(fullAppData))`
-    /// digest input. cow-py's default `stringify_deterministic` produces
-    /// the same bytes for any document whose values are pure ASCII (the
-    /// overwhelmingly common case); a document with non-ASCII strings
-    /// would diverge from cow-py's `ensure_ascii=True` default, but
-    /// still agrees with the orderbook (and with cow-sdk's
-    /// TypeScript implementation, which also keeps raw UTF-8).
-    ///
-    /// We round-trip via [`serde_json::Value`] because, with
-    /// `preserve_order` disabled, its `Map` is a `BTreeMap` whose keys
-    /// iterate in sorted order: re-serialising the value therefore emits
-    /// sorted keys regardless of the struct field declaration order.
+    /// Round-trips via `serde_json::Value`, whose `BTreeMap`-backed
+    /// `Map` (without `preserve_order`) emits keys in sorted order
+    /// independently of struct declaration order.
     pub fn canonical_json(&self) -> String {
         let value = serde_json::to_value(self).expect("AppDataDoc must serialise");
         let sorted = sort_value(value);
         serde_json::to_string(&sorted).expect("Value must re-serialise")
     }
 
-    /// Parse a canonical JSON document, rejecting any input larger than
-    /// [`APP_DATA_SIZE_LIMIT`]. Bounds the deserialiser before it
-    /// allocates the parent struct or any opaque nested JSON (`hooks`,
-    /// `flashloan`, `wrappers`), so a hostile orderbook cannot stream a
-    /// multi-MiB document into the SDK.
+    /// Parse a canonical JSON document, rejecting input larger than
+    /// [`APP_DATA_SIZE_LIMIT`] before allocating any nested structure.
     pub fn try_from_str(json: &str) -> Result<Self, AppDataError> {
         if json.len() > APP_DATA_SIZE_LIMIT {
             return Err(AppDataError::DocumentTooLarge {
@@ -657,18 +553,15 @@ impl AppDataDoc {
     /// `keccak256(canonical_json())`. This is the digest written into the
     /// signed `Order.appData` field.
     ///
-    /// Panics if the canonical JSON exceeds [`APP_DATA_SIZE_LIMIT`]; use
-    /// [`AppDataDoc::try_hash`] for the fallible variant when working with
-    /// caller-supplied documents that may legitimately overflow.
+    /// Panics if the canonical JSON exceeds [`APP_DATA_SIZE_LIMIT`];
+    /// use [`Self::try_hash`] with untrusted input.
     pub fn hash(&self) -> AppDataHash {
         self.try_hash()
             .expect("AppDataDoc must fit within APP_DATA_SIZE_LIMIT")
     }
 
-    /// Like [`AppDataDoc::hash`], but rejects documents whose canonical
-    /// JSON would exceed [`APP_DATA_SIZE_LIMIT`]. The orderbook enforces
-    /// the same cap server-side and would otherwise reject the document
-    /// after the user has already signed an order against the digest.
+    /// Fallible [`Self::hash`]; rejects documents above
+    /// [`APP_DATA_SIZE_LIMIT`] before the orderbook would.
     pub fn try_hash(&self) -> Result<AppDataHash, AppDataError> {
         let json = self.canonical_json();
         if json.len() > APP_DATA_SIZE_LIMIT {
@@ -684,46 +577,30 @@ impl AppDataDoc {
 /// Errors raised while validating an [`AppDataDoc`] before signing.
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
 pub enum AppDataError {
-    /// Canonical JSON exceeded [`APP_DATA_SIZE_LIMIT`] (8 KiB). The
-    /// orderbook enforces the same cap server-side, so this would
-    /// otherwise reject post-sign.
+    /// Canonical JSON exceeded [`APP_DATA_SIZE_LIMIT`].
     #[error("app-data document too large: {len} bytes (max {max})")]
-    DocumentTooLarge {
-        /// Length of the offending canonical JSON, in bytes.
-        len: usize,
-        /// Maximum accepted length: [`APP_DATA_SIZE_LIMIT`].
-        max: usize,
-    },
-    /// A partner-fee `bps` field exceeded `10_000` (100%). The CoW
-    /// settlement contract caps partner fees at one hundred percent, so
-    /// over-cap values would either be silently clamped or rejected
-    /// post-settle.
+    DocumentTooLarge { len: usize, max: usize },
+    /// A partner-fee `bps` exceeded [`PARTNER_FEE_BPS_MAX`].
     #[error("partner fee {field} = {value} exceeds maximum {max}")]
     FeeOutOfRange {
-        /// Which bps field overflowed (`bps`, `surplusBps`,
-        /// `priceImprovementBps`, or `maxVolumeBps`).
+        /// `bps`, `surplusBps`, `priceImprovementBps`, or `maxVolumeBps`.
         field: &'static str,
-        /// Value supplied by the caller / wire.
         value: u64,
-        /// Maximum accepted value (`10_000`).
         max: u64,
     },
-    /// JSON parse failure. The underlying `serde_json` error is captured
-    /// as text so this enum stays `PartialEq` for tests.
+    /// JSON parse failure; captured as text to keep the enum `PartialEq`.
     #[error("invalid app-data JSON: {0}")]
     Parse(String),
 }
 
-/// Maximum partner-fee value, in basis points. `10_000 = 100 %`. Mirrors
-/// the cap the CoW settlement contract enforces on the `bps` and
-/// `maxVolumeBps` fields of `metadata.partnerFee`.
+/// Maximum partner-fee value, in basis points (`10_000 = 100 %`).
+/// Mirrors the cap the settlement contract enforces on
+/// `metadata.partnerFee.{bps,maxVolumeBps}`.
 pub const PARTNER_FEE_BPS_MAX: u64 = 10_000;
 
-/// Recursively rebuild a [`serde_json::Value`] so every object's keys are
-/// in sorted order. `serde_json::Map` is a `BTreeMap` when the
-/// `preserve_order` feature is off (the workspace default), so this is
-/// effectively a deep clone: but doing the walk explicitly future-proofs
-/// the helper against the feature flipping on later.
+/// Recursively rebuild a `serde_json::Value` with sorted object keys.
+/// `Map` is a `BTreeMap` under the workspace's default (no
+/// `preserve_order`); the explicit walk future-proofs against a flip.
 fn sort_value(value: serde_json::Value) -> serde_json::Value {
     use serde_json::Value;
     match value {
@@ -741,42 +618,28 @@ fn sort_value(value: serde_json::Value) -> serde_json::Value {
     }
 }
 
-/// IPFS CID that the orderbook pins app-data documents under.
-///
-/// Format: `cidv1(raw codec 0x55, multihash keccak-256 0x1b 0x20 || hash)`,
-/// base32-encoded (RFC 4648 lower-case alphabet, no padding) and prefixed
-/// with the `b` multibase tag. The multihash hash function is **keccak-256**,
-/// matching the digest the orderbook stores in the signed order; the CID
-/// therefore round-trips with [`AppDataHash`] without any further hashing.
-///
-/// This matches the derivation in `cowprotocol/services` (`crates/app-data`,
-/// `create_ipfs_cid`) and the legacy-free path in cow-sdk's
-/// `appDataHexToCid` and cow-py's `AppDataHex.to_cid`.
+/// IPFS CID the orderbook pins app-data under. Format:
+/// `cidv1(raw=0x55, multihash=keccak256(0x1b 0x20 || hash))`,
+/// base32-encoded with the `b` multibase prefix. The multihash is
+/// keccak-256, so the CID round-trips with [`AppDataHash`] without
+/// any extra hashing. Matches `cowprotocol/services::app-data` and
+/// cow-sdk's `appDataHexToCid`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct AppDataCid(String);
 
-/// CIDv1 version byte: `0x01`.
 const CID_V1: u8 = 0x01;
-/// IPFS multicodec for raw bytes: `0x55`.
 const CID_CODEC_RAW: u8 = 0x55;
-/// Multihash code for keccak-256: `0x1b`.
 const MULTIHASH_KECCAK_256: u8 = 0x1b;
-/// Multihash digest length for 32-byte hashes.
 const MULTIHASH_LEN_32: u8 = 0x20;
-/// Total size of the binary CID before multibase encoding.
 const CID_BYTES_LEN: usize = 4 + 32;
-/// Upper bound on the multibase-encoded CID string. Real CIDs are at most
-/// 73 chars (`f` + 72 base16 nibbles); 96 leaves slack for trailing
-/// whitespace or unusual padding without permitting attacker-driven
-/// gigabyte allocations in [`AppDataCid::to_hash`].
+/// Upper bound on multibase-encoded CIDs. Real CIDs are <= 73 chars;
+/// 96 leaves slack while bounding [`AppDataCid::to_hash`] allocation.
 const CID_STRING_MAX_LEN: usize = 96;
 
 impl AppDataCid {
-    /// Derive the CID a 32-byte app-data digest pins to.
-    ///
-    /// Pure offline derivation: builds the 36-byte CID
-    /// `[0x01, 0x55, 0x1b, 0x20, ..hash]` and base32-encodes it with the
-    /// `b` multibase prefix.
+    /// CID for a 32-byte digest. Pure offline derivation: builds the
+    /// 36-byte CID `[0x01, 0x55, 0x1b, 0x20, ..hash]` and base32
+    /// -encodes with the `b` prefix.
     pub fn from_hash(hash: AppDataHash) -> Self {
         let mut bytes = [0u8; CID_BYTES_LEN];
         bytes[0] = CID_V1;
@@ -791,20 +654,13 @@ impl AppDataCid {
         Self(out)
     }
 
-    /// Borrow the canonical `b...` string representation.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
+    /// Canonical `b...` string.
+    pub fn as_str(&self) -> &str { &self.0 }
 
-    /// Extract the embedded [`AppDataHash`] back out of the CID.
-    ///
-    /// Accepts both `b`-prefixed (RFC 4648 lower-case base32, no padding)
-    /// and `f`-prefixed (lower-case base16) multibase encodings. cow-rs
-    /// only emits the `b` form, matching `cowprotocol/services` and the
-    /// orderbook's IPFS pin, but cow-sdk (TypeScript) emits `f` so
-    /// round-tripping a CID handed to us by the canonical JS SDK
-    /// requires accepting both. Validates version, codec, multihash
-    /// code, and digest length before returning the trailing 32 bytes.
+    /// Extract the embedded [`AppDataHash`]. Accepts `b`-prefixed
+    /// (base32) and `f`-prefixed (base16) multibase encodings; cow-rs
+    /// emits `b`, but cow-sdk emits `f`. Validates version, codec,
+    /// multihash, and digest length.
     pub fn to_hash(&self) -> Result<AppDataHash, AppDataCidError> {
         if self.0.len() > CID_STRING_MAX_LEN {
             return Err(AppDataCidError::CidTooLong {

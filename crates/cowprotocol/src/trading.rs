@@ -61,14 +61,23 @@ impl<'a> SwapOrder<'a> {
     }
 
     /// Pin a partner-fee tier (bps of swap value).
-    pub const fn with_partner_fee_bps(mut self, bps: u32) -> Self { self.partner_fee_bps = bps; self }
+    pub const fn with_partner_fee_bps(mut self, bps: u32) -> Self {
+        self.partner_fee_bps = bps;
+        self
+    }
 
     /// Pin a custom slippage tolerance (bps).
-    pub const fn with_slippage_bps(mut self, bps: u32) -> Self { self.slippage_bps = bps; self }
+    pub const fn with_slippage_bps(mut self, bps: u32) -> Self {
+        self.slippage_bps = bps;
+        self
+    }
 
     /// Pin the signing scheme to EthSign (legacy `personal_sign`);
     /// EIP-712 is the default.
-    pub const fn with_ethsign(mut self) -> Self { self.scheme = EcdsaSigningScheme::EthSign; self }
+    pub const fn with_ethsign(mut self) -> Self {
+        self.scheme = EcdsaSigningScheme::EthSign;
+        self
+    }
 }
 
 /// Result of [`TradingClient::post_swap_order`].

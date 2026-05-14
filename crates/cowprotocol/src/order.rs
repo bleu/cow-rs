@@ -20,112 +20,94 @@ use std::str::FromStr;
 use crate::app_data::AppDataHash;
 use crate::domain::{DomainSeparator, hashed_eip712_message};
 
-/// Sentinel address used in place of a buy token to indicate that the order
-/// pays out in the chain's native currency (e.g. ETH on mainnet, xDAI on
-/// Gnosis Chain).
+/// Sentinel buy token meaning the order pays out in the chain's
+/// native currency (ETH on mainnet, xDAI on Gnosis, etc.).
 pub const BUY_ETH_ADDRESS: Address = Address::repeat_byte(0xee);
 
-/// Server-side lifecycle status returned by
-/// `GET /api/v1/orders/{uid}`.
+/// Server-side lifecycle status from `GET /api/v1/orders/{uid}`.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OrderStatus {
-    /// On-chain pre-signature has not yet been observed.
+    /// Awaiting on-chain pre-signature.
     PresignaturePending,
-    /// Order is live and may be matched.
     #[default]
     Open,
-    /// Order is fully filled.
     Fulfilled,
-    /// Order was cancelled (off-chain delete or on-chain pre-sign reversal).
+    /// Off-chain delete or on-chain pre-sign reversal.
     Cancelled,
-    /// `validTo` passed before the order could be filled.
+    /// `validTo` passed before any fill.
     Expired,
 }
 
-/// Server-side classification of an order, returned alongside the lifecycle
-/// status. Determines fee handling and solver routing.
+/// Server-side order classification. Drives fee handling and solver
+/// routing.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OrderClass {
-    /// Standard market order, settled quickly.
     #[default]
     Market,
-    /// Solver-internal liquidity order: placed by whitelisted participants.
+    /// Solver-internal, placed by whitelisted participants.
     Liquidity,
-    /// Limit order: fee taken from surplus once the price target is met.
+    /// Limit order; fee taken from surplus once the target is met.
     Limit,
 }
 
-/// The exact 12 fields signed by the order owner and verified by the
-/// settlement contract.
-///
-/// See [`GPv2Order.Data`] for the Solidity counterpart.
+/// The 12 fields signed by the order owner and verified by
+/// `GPv2Settlement`. Mirrors [`GPv2Order.Data`].
 ///
 /// [`GPv2Order.Data`]: https://github.com/cowprotocol/contracts/blob/v1.1.2/src/contracts/libraries/GPv2Order.sol
 #[serde_as]
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderData {
-    /// Token the owner is selling.
     pub sell_token: Address,
-    /// Token the owner is buying.
     pub buy_token: Address,
-    /// Optional recipient of the buy token; the owner receives it when `None`.
+    /// `None` means the owner receives the buy token.
     #[serde(default)]
     pub receiver: Option<Address>,
-    /// Amount of `sell_token` the owner is willing to part with, in atomic units.
+    /// Atomic units of `sell_token`.
     #[serde_as(as = "DisplayFromStr")]
     pub sell_amount: U256,
-    /// Amount of `buy_token` the owner expects to receive, in atomic units.
+    /// Atomic units of `buy_token`.
     #[serde_as(as = "DisplayFromStr")]
     pub buy_amount: U256,
-    /// Unix timestamp (seconds) after which the order is no longer valid.
+    /// Unix seconds.
     pub valid_to: u32,
-    /// 32-byte digest of the app-data document.
     pub app_data: AppDataHash,
-    /// Protocol fee charged in `sell_token` atomic units. Zero for limit
-    /// orders (their fee is taken from surplus) and for liquidity orders.
+    /// Protocol fee in `sell_token` atomic units. Zero for limit and
+    /// liquidity orders (fee taken from surplus).
     #[serde_as(as = "DisplayFromStr")]
     pub fee_amount: U256,
-    /// Whether the owner is fixing the sell amount or the buy amount.
     pub kind: OrderKind,
-    /// Whether partial fills are allowed.
     pub partially_fillable: bool,
-    /// Source from which the sell token is drawn.
     #[serde(default)]
     pub sell_token_balance: SellTokenSource,
-    /// Destination to which the buy token is paid out.
     #[serde(default)]
     pub buy_token_balance: BuyTokenDestination,
 }
 
 impl OrderData {
-    /// EIP-712 `typeHash` of the canonical `Order` struct.
-    ///
-    /// `keccak256(`
-    /// `"Order(address sellToken,address buyToken,address receiver,uint256 sellAmount,"`
-    /// `"uint256 buyAmount,uint32 validTo,bytes32 appData,uint256 feeAmount,"`
-    /// `"string kind,bool partiallyFillable,string sellTokenBalance,string buyTokenBalance)"`
-    /// `)`
-    ///
-    /// Note that `kind`, `sellTokenBalance` and `buyTokenBalance` are declared
-    /// as `string` in the EIP-712 schema, even though `GPv2Order.Data` stores
-    /// them as `bytes32` markers: see
-    /// [`GPv2Order.sol`](https://github.com/cowprotocol/contracts/blob/main/src/contracts/libraries/GPv2Order.sol).
+    /// EIP-712 `typeHash` of the `Order` struct.
+    /// `keccak256("Order(address sellToken,address buyToken,address receiver,
+    /// uint256 sellAmount,uint256 buyAmount,uint32 validTo,bytes32 appData,
+    /// uint256 feeAmount,string kind,bool partiallyFillable,string sellTokenBalance,
+    /// string buyTokenBalance)")`. Note `kind` and the two balance markers
+    /// are EIP-712 `string` even though `GPv2Order.Data` stores them as
+    /// `bytes32`.
     pub const TYPE_HASH: [u8; 32] =
         hex!("d5a25ba2e97094ad7d83dc28a6572da797d6b3e7fc6663bd93efb789fc17e489");
 
-    /// EIP-712 `hashStruct` over the order, per
-    /// <https://eips.ethereum.org/EIPS/eip-712#definition-of-hashstruct>.
-    ///
-    /// The output is the 32-byte input expected by
-    /// [`hashed_eip712_message`].
+    /// EIP-712 `hashStruct` over the order; the 32-byte input expected
+    /// by [`hashed_eip712_message`].
     pub fn hash_struct(&self) -> [u8; 32] {
         let mut hash_data = [0u8; 416];
         hash_data[0..32].copy_from_slice(&Self::TYPE_HASH);
         // Most slots are left zero so the address / uint32 fields are left-padded
         // to 32 bytes.
+        // Leave most slots zero so address / uint32 fields are
+        // left-padded to 32 bytes.
+        // Leave most slots zero so address / uint32 fields are
+        // left-padded to 32 bytes.
         hash_data[44..64].copy_from_slice(self.sell_token.as_slice());
         hash_data[76..96].copy_from_slice(self.buy_token.as_slice());
         hash_data[108..128].copy_from_slice(self.receiver.unwrap_or(Address::ZERO).as_slice());
@@ -144,8 +126,7 @@ impl OrderData {
         *keccak256(hash_data)
     }
 
-    /// Compute the 56-byte order UID for this order on a given chain and
-    /// for a given owner.
+    /// 56-byte order UID on `domain` for `owner`.
     pub fn uid(&self, domain: &DomainSeparator, owner: Address) -> OrderUid {
         OrderUid::from_parts(
             hashed_eip712_message(domain, &self.hash_struct()),
@@ -154,9 +135,9 @@ impl OrderData {
         )
     }
 
-    /// Sign this order with an ECDSA signer. Equivalent to calling
+    /// Sign with an ECDSA signer; equivalent to
     /// [`crate::signature::EcdsaSignature::sign`] over
-    /// [`OrderData::hash_struct`] and promoting the result into a
+    /// [`Self::hash_struct`] promoted into a
     /// [`crate::signature::Signature`].
     pub fn sign<S: alloy_signer::SignerSync>(
         &self,
@@ -223,36 +204,65 @@ impl OrderBuilder {
     }
 
     /// Sell amount in atomic units.
-    pub const fn sell_amount(mut self, amount: U256) -> Self { self.0.sell_amount = amount; self }
+    pub const fn sell_amount(mut self, amount: U256) -> Self {
+        self.0.sell_amount = amount;
+        self
+    }
 
     /// Buy amount in atomic units.
-    pub const fn buy_amount(mut self, amount: U256) -> Self { self.0.buy_amount = amount; self }
+    pub const fn buy_amount(mut self, amount: U256) -> Self {
+        self.0.buy_amount = amount;
+        self
+    }
 
     /// Unix-seconds expiry timestamp.
-    pub const fn valid_to(mut self, valid_to: u32) -> Self { self.0.valid_to = valid_to; self }
+    pub const fn valid_to(mut self, valid_to: u32) -> Self {
+        self.0.valid_to = valid_to;
+        self
+    }
 
     /// 32-byte app-data digest.
-    pub const fn app_data(mut self, hash: AppDataHash) -> Self { self.0.app_data = hash; self }
+    pub const fn app_data(mut self, hash: AppDataHash) -> Self {
+        self.0.app_data = hash;
+        self
+    }
 
     /// User-signed fee amount. Must be `0` at submission;
     /// [`crate::OrderQuoteResponse::to_signed_order_data`] handles
     /// that for callers projecting from a quote.
-    pub const fn fee_amount(mut self, amount: U256) -> Self { self.0.fee_amount = amount; self }
+    pub const fn fee_amount(mut self, amount: U256) -> Self {
+        self.0.fee_amount = amount;
+        self
+    }
 
     /// Order direction.
-    pub const fn kind(mut self, kind: OrderKind) -> Self { self.0.kind = kind; self }
+    pub const fn kind(mut self, kind: OrderKind) -> Self {
+        self.0.kind = kind;
+        self
+    }
 
     /// Whether the order may be filled in parts (default: `false`).
-    pub const fn partially_fillable(mut self, partially_fillable: bool) -> Self { self.0.partially_fillable = partially_fillable; self }
+    pub const fn partially_fillable(mut self, partially_fillable: bool) -> Self {
+        self.0.partially_fillable = partially_fillable;
+        self
+    }
 
     /// Source for the sell-side token balance.
-    pub const fn sell_token_balance(mut self, balance: SellTokenSource) -> Self { self.0.sell_token_balance = balance; self }
+    pub const fn sell_token_balance(mut self, balance: SellTokenSource) -> Self {
+        self.0.sell_token_balance = balance;
+        self
+    }
 
     /// Destination for the buy-side token balance.
-    pub const fn buy_token_balance(mut self, balance: BuyTokenDestination) -> Self { self.0.buy_token_balance = balance; self }
+    pub const fn buy_token_balance(mut self, balance: BuyTokenDestination) -> Self {
+        self.0.buy_token_balance = balance;
+        self
+    }
 
     /// Finalise the builder.
-    pub const fn build(self) -> OrderData { self.0 }
+    pub const fn build(self) -> OrderData {
+        self.0
+    }
 
     /// Convenience: [`OrderData::sign`] on the built payload.
     pub fn sign<S: alloy_signer::SignerSync>(
@@ -265,97 +275,75 @@ impl OrderBuilder {
     }
 }
 
-/// Full order representation returned by `GET /api/v1/orders/{uid}`.
-///
-/// Carries the 12 signed-payload fields of [`OrderData`] (via `#[serde(flatten)]`)
-/// plus server-derived metadata: identity, signature, lifecycle status,
-/// execution counters. Less-common contextual sub-objects (`quote`,
-/// `interactions`, `ethflowData`, `onchainOrderData`) are preserved as
-/// opaque [`serde_json::Value`]s in this first iteration so the type stays
-/// forward-compatible with orderbook schema additions.
+/// Full order returned by `GET /api/v1/orders/{uid}`. Flattens the
+/// 12 [`OrderData`] fields plus server-derived metadata; less-common
+/// contextual objects stay as opaque JSON for forward-compat.
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Order {
-    /// The 12 fields that were signed.
     #[serde(flatten)]
     pub data: OrderData,
-    /// 56-byte order UID assigned by the orderbook at submission.
     pub uid: OrderUid,
-    /// Recovered (or declared) signer.
     pub owner: alloy_primitives::Address,
-    /// Off-chain signing scheme used to authenticate the order.
     pub signing_scheme: crate::signing_scheme::SigningScheme,
     /// Raw signature bytes, hex-encoded.
     pub signature: String,
-    /// ISO-8601 timestamp at which the orderbook accepted the order.
+    /// ISO-8601 timestamp the orderbook accepted the order.
     pub creation_date: String,
-    /// Lifecycle status.
     pub status: OrderStatus,
-    /// Solver-routing classification.
     pub class: OrderClass,
-    /// Cumulative buy-token amount filled so far.
     #[serde_as(as = "DisplayFromStr")]
     pub executed_buy_amount: alloy_primitives::U256,
-    /// Cumulative sell-token amount filled so far.
     #[serde_as(as = "DisplayFromStr")]
     pub executed_sell_amount: alloy_primitives::U256,
-    /// Cumulative fee charged in `executed_fee_token` atomic units.
+    /// Executed fee in `executed_fee_token` atomic units.
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(default)]
     pub executed_fee: Option<alloy_primitives::U256>,
-    /// Token the executed fee was charged in.
     #[serde(default)]
     pub executed_fee_token: Option<alloy_primitives::Address>,
-    /// Whether the order has been invalidated (e.g. cancelled).
     #[serde(default)]
     pub invalidated: bool,
-    /// Whether the order was placed by a whitelisted liquidity provider.
     #[serde(default)]
     pub is_liquidity_order: bool,
-    /// Canonical JSON of the app-data document, when the orderbook has seen it.
     #[serde(default)]
     pub full_app_data: Option<String>,
-    /// Quote that produced the order, when one was supplied at submission.
+    /// Quote that produced the order, when one was supplied.
     #[serde(default)]
     pub quote: Option<serde_json::Value>,
-    /// Pre/post settlement interactions attached via app-data hooks.
+    /// Pre/post settlement interactions from app-data hooks.
     #[serde(default)]
     pub interactions: Option<serde_json::Value>,
-    /// EthFlow-specific metadata for native-sell orders.
+    /// EthFlow metadata for native-sell orders.
     #[serde(default)]
     pub ethflow_data: Option<serde_json::Value>,
-    /// On-chain placement metadata for orders posted via `EthFlow`.
+    /// On-chain placement metadata for EthFlow orders.
     #[serde(default)]
     pub onchain_order_data: Option<serde_json::Value>,
-    /// On-chain user that placed the order (distinct from `owner` for
-    /// proxy/relayer flows).
+    /// On-chain user (distinct from `owner` for proxy/relayer flows).
     #[serde(default)]
     pub onchain_user: Option<alloy_primitives::Address>,
-    /// Settlement contract this order is bound to.
     #[serde(default)]
     pub settlement_contract: Option<alloy_primitives::Address>,
 }
 
-/// Direction of an order: whether the owner is fixing the buy side or the
-/// sell side.
+/// Order direction.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OrderKind {
-    /// The owner is fixing the amount of `buy_token` they receive.
+    /// Owner fixes the `buy_token` amount.
     #[default]
     Buy,
-    /// The owner is fixing the amount of `sell_token` they part with.
+    /// Owner fixes the `sell_token` amount.
     Sell,
 }
 
 impl OrderKind {
-    /// `keccak256("buy")`: the EIP-712 string encoding of [`OrderKind::Buy`]
-    /// and the on-chain `bytes32` marker stored in `GPv2Order.Data.kind`.
+    /// `keccak256("buy")`: EIP-712 encoding + on-chain `bytes32` marker.
     pub const BUY: [u8; 32] =
         hex!("6ed88e868af0a1983e3886d5f3e95a2fafbd6c3450bc229e27342283dc429ccc");
-    /// `keccak256("sell")`: the EIP-712 string encoding of [`OrderKind::Sell`]
-    /// and the on-chain `bytes32` marker stored in `GPv2Order.Data.kind`.
+    /// `keccak256("sell")`: EIP-712 encoding + on-chain `bytes32` marker.
     pub const SELL: [u8; 32] =
         hex!("f3b277728b3fee749481eb3e0b3b48980dbbab78658fc419025cb16eee346775");
 
@@ -406,32 +394,31 @@ impl Display for OrderKind {
     }
 }
 
-/// Source from which `sellAmount` is transferred into the settlement
-/// contract on fulfilment.
+/// Source the sell amount is transferred from on fulfilment.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SellTokenSource {
-    /// Drawn from the owner's regular ERC-20 allowance to the Vault relayer.
+    /// Owner's ERC-20 allowance to the Vault relayer.
     #[default]
     Erc20,
-    /// Drawn from the owner's ERC-20 balance via Balancer external balances.
+    /// Owner's ERC-20 balance via Balancer external balances.
     External,
-    /// Drawn from the owner's Balancer Vault internal balances.
+    /// Owner's Balancer Vault internal balance.
     Internal,
 }
 
 impl SellTokenSource {
-    /// `keccak256("erc20")`: EIP-712 string encoding and on-chain marker.
+    /// `keccak256("erc20")`.
     pub const ERC20: [u8; 32] =
         hex!("5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9");
-    /// `keccak256("external")`: EIP-712 string encoding and on-chain marker.
+    /// `keccak256("external")`.
     pub const EXTERNAL: [u8; 32] =
         hex!("abee3b73373acd583a130924aad6dc38cfdc44ba0555ba94ce2ff63980ea0632");
-    /// `keccak256("internal")`: EIP-712 string encoding and on-chain marker.
+    /// `keccak256("internal")`.
     pub const INTERNAL: [u8; 32] =
         hex!("4ac99ace14ee0a5ef932dc609df0943ab7ac16b7583634612f8dc35a4289a6ce");
 
-    /// 32-byte EIP-712 encoding of this variant for inclusion in `hash_struct`.
+    /// EIP-712 32-byte marker for `hash_struct`.
     pub const fn as_bytes(&self) -> [u8; 32] {
         match self {
             Self::Erc20 => Self::ERC20,
@@ -440,9 +427,8 @@ impl SellTokenSource {
         }
     }
 
-    /// Parse the 32-byte on-chain marker (as returned by
-    /// `GPv2Order.Data.sellTokenBalance`) into a Rust enum. Returns `None`
-    /// for unknown markers.
+    /// Parse the on-chain `GPv2Order.Data.sellTokenBalance` marker.
+    /// Returns `None` for unknown values.
     pub const fn from_contract_bytes(bytes: [u8; 32]) -> Option<Self> {
         if matches_bytes(&bytes, &Self::ERC20) {
             Some(Self::Erc20)
@@ -456,26 +442,26 @@ impl SellTokenSource {
     }
 }
 
-/// Destination to which `buyAmount` is paid out to the receiver on fulfilment.
+/// Destination the buy amount is paid to on fulfilment.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BuyTokenDestination {
-    /// Paid out as a regular ERC-20 transfer.
+    /// Regular ERC-20 transfer.
     #[default]
     Erc20,
-    /// Paid out as a Balancer Vault internal balance transfer.
+    /// Balancer Vault internal balance.
     Internal,
 }
 
 impl BuyTokenDestination {
-    /// `keccak256("erc20")`: EIP-712 string encoding and on-chain marker.
+    /// `keccak256("erc20")`.
     pub const ERC20: [u8; 32] =
         hex!("5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9");
-    /// `keccak256("internal")`: EIP-712 string encoding and on-chain marker.
+    /// `keccak256("internal")`.
     pub const INTERNAL: [u8; 32] =
         hex!("4ac99ace14ee0a5ef932dc609df0943ab7ac16b7583634612f8dc35a4289a6ce");
 
-    /// 32-byte EIP-712 encoding of this variant for inclusion in `hash_struct`.
+    /// EIP-712 32-byte marker for `hash_struct`.
     pub const fn as_bytes(&self) -> [u8; 32] {
         match self {
             Self::Erc20 => Self::ERC20,
@@ -483,9 +469,8 @@ impl BuyTokenDestination {
         }
     }
 
-    /// Parse the 32-byte on-chain marker (as returned by
-    /// `GPv2Order.Data.buyTokenBalance`) into a Rust enum. Returns `None`
-    /// for unknown markers.
+    /// Parse the on-chain `GPv2Order.Data.buyTokenBalance` marker.
+    /// Returns `None` for unknown values.
     pub const fn from_contract_bytes(bytes: [u8; 32]) -> Option<Self> {
         if matches_bytes(&bytes, &Self::ERC20) {
             Some(Self::Erc20)
@@ -497,9 +482,9 @@ impl BuyTokenDestination {
     }
 }
 
-/// 56-byte order identifier: `32-byte digest || 20-byte owner || 4-byte validTo`.
-///
-/// The digest is `keccak256(0x19 0x01 || domain_separator || order_struct_hash)`.
+/// 56-byte order identifier:
+/// `32-byte digest || 20-byte owner || 4-byte validTo`. The digest is
+/// `keccak256(0x19 0x01 || domain_separator || order_struct_hash)`.
 #[derive(Clone, Copy, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub struct OrderUid(pub [u8; 56]);
 
@@ -513,12 +498,8 @@ impl OrderUid {
         Self(uid)
     }
 
-    /// Build a UID with the first four bytes of the digest set to `i`
-    /// (big-endian) and every other byte zero.
-    ///
-    /// Test-only ergonomics: lets callers fabricate distinct order UIDs
-    /// without going through a full `hash_struct` /
-    /// `hashed_eip712_message` pipeline. Mirrors
+    /// UID with the first four bytes set to `i` (big-endian) and the
+    /// rest zeroed. Test-only ergonomics; mirrors
     /// `cowprotocol/services::OrderUid::from_integer`.
     pub const fn from_integer(i: u32) -> Self {
         let mut uid = [0u8; 56];
