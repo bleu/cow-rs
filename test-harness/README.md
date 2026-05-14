@@ -11,17 +11,21 @@ orderbook through reqwest's browser-fetch backend.
 From the repository root:
 
 ```sh
-# 1. Build the wasm package (output is git-ignored).
-(cd crates/cow-rs-wasm && wasm-pack build --target web --dev)
-
-# 2. Serve the workspace over HTTP so ES-module imports resolve.
-python3 -m http.server 8765
-
-# 3. Open the harness.
+just wasm-harness
 open http://localhost:8765/test-harness/
 ```
 
 Install `wasm-pack` with `cargo install wasm-pack --locked` if not present.
+
+The recipe just chains the two raw commands, in case you prefer to run
+them manually:
+
+```sh
+# 1. Build the wasm package (output is git-ignored).
+(cd crates/cow-rs-wasm && wasm-pack build --target web --dev)
+# 2. Serve the workspace over HTTP so ES-module imports resolve.
+python3 -m http.server 8765
+```
 
 ## What it verifies
 
