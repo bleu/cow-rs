@@ -32,7 +32,7 @@
   <p class="group">Pure compute (no network)</p>
 
   <section>
-    <h2>1. <code>compute_order_uid</code> — UID parity</h2>
+    <h2>1. <code>order_uid</code> — UID parity</h2>
     <p>
       Derives the 56-byte order UID for a fixed sell-only order against the
       mainnet GPv2Settlement domain. Sanity-checks the byte length so
@@ -204,12 +204,13 @@
     import init, {
       build_order_creation,
       chain_info,
-      compute_order_uid,
       domain_separator,
       eip712_message_hash,
       eip712_payload,
+      empty_app_data_hash,
       get_quote_simple,
       order_struct_hash,
+      order_uid,
       post_order,
       sdk_app_data_hash,
       sdk_app_data_json,
@@ -264,7 +265,21 @@
       const uidStatus = document.getElementById('uid-status');
       const uidOutput = document.getElementById('uid-output');
       try {
-        const uid = compute_order_uid(USDC, DAI, OWNER, '100000000', '99000000000000000000', 4294967295);
+        const order = {
+          sellToken: USDC,
+          buyToken: DAI,
+          receiver: null,
+          sellAmount: '100000000',
+          buyAmount: '99000000000000000000',
+          validTo: 4294967295,
+          appData: empty_app_data_hash(),
+          feeAmount: '0',
+          kind: 'sell',
+          partiallyFillable: false,
+          sellTokenBalance: 'erc20',
+          buyTokenBalance: 'erc20',
+        };
+        const uid = order_uid(order, 'mainnet', OWNER);
         uidOutput.textContent = uid;
         if (typeof uid !== 'string' || !uid.startsWith('0x') || uid.length !== 114) {
           throw new Error(`unexpected UID shape: length=${uid.length}, head=${uid.slice(0, 4)}`);

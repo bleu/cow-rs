@@ -29,8 +29,8 @@ use {
 };
 
 use cow_sdk_wasm::{
-    app_data_cid_from_hash, app_data_hash_from_json, chain_info, compute_order_uid,
-    domain_separator, empty_app_data_hash, get_quote_simple, sdk_app_data_hash, sdk_app_data_json,
+    app_data_cid_from_hash, app_data_hash_from_json, chain_info, domain_separator,
+    empty_app_data_hash, get_quote_simple, order_uid, sdk_app_data_hash, sdk_app_data_json,
     version,
 };
 
@@ -38,21 +38,33 @@ wasm_bindgen_test_configure!(run_in_browser);
 
 // ===== Pure-compute tests ==============================================
 
-/// `compute_order_uid` should produce a 0x-prefixed 56-byte hex string
+/// `order_uid` should produce a 0x-prefixed 56-byte hex string
 /// (2 + 112 chars) for a minimal sell order. The exact UID is byte-exact
 /// across native Rust and wasm; this test would catch a serde rename or
 /// a wasm-bindgen marshalling regression that silently shifts bytes.
 #[wasm_bindgen_test]
-fn compute_order_uid_returns_56_byte_hex() {
-    let uid = compute_order_uid(
-        "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC
-        "0x6B175474E89094C44Da98b954EedeAC495271d0F", // DAI
-        "0x70997970C51812dc3A010C7d01b50e0d17dc79C8", // owner
-        "100000000",
-        "99000000000000000000",
-        4294967295,
+fn order_uid_returns_56_byte_hex() {
+    let order = serde_wasm_bindgen::to_value(&serde_json::json!({
+        "sellToken": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC
+        "buyToken":  "0x6B175474E89094C44Da98b954EedeAC495271d0F", // DAI
+        "receiver": null,
+        "sellAmount": "100000000",
+        "buyAmount":  "99000000000000000000",
+        "validTo": 4294967295u32,
+        "appData": empty_app_data_hash(),
+        "feeAmount": "0",
+        "kind": "sell",
+        "partiallyFillable": false,
+        "sellTokenBalance": "erc20",
+        "buyTokenBalance":  "erc20",
+    }))
+    .unwrap();
+    let uid = order_uid(
+        order,
+        "mainnet",
+        "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
     )
-    .expect("compute_order_uid");
+    .expect("order_uid");
     assert!(uid.starts_with("0x"), "no 0x prefix: {uid}");
     assert_eq!(
         uid.len(),

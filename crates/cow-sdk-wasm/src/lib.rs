@@ -33,8 +33,8 @@ use {
     alloy_primitives::{Address, B256, U256},
     cowprotocol::{
         AppDataCid, AppDataDoc, AppDataHash, Chain, DomainSeparator, EMPTY_APP_DATA_HASH,
-        EcdsaSignature, EcdsaSigningScheme, OrderBuilder, OrderCancellation, OrderData, OrderKind,
-        OrderUid, QuoteRequest, Signature, SigningScheme, hashed_eip712_message,
+        EcdsaSignature, EcdsaSigningScheme, OrderCancellation, OrderData, OrderUid, QuoteRequest,
+        Signature, SigningScheme, hashed_eip712_message,
     },
     serde::{Deserialize, Serialize},
     wasm_bindgen::prelude::*,
@@ -455,21 +455,10 @@ pub fn build_order_creation_eip1271(
     to_js(&creation)
 }
 
-/// Canonicalise an app-data document (deep-sorted keys, fixed
-/// stringification) and return the keccak256 of the bytes. This is the
-/// `appData` field written into the signed order.
-#[wasm_bindgen]
-pub fn app_data_hash_from_doc(doc: JsValue) -> Result<String, JsValue> {
-    let parsed: AppDataDoc = from_js(doc)?;
-    let hash = parsed
-        .try_hash()
-        .map_err(|err| JsValue::from_str(&format!("hash failed: {err}")))?;
-    Ok(hash.to_string())
-}
-
-/// Same as [`app_data_hash_from_doc`] but takes the document as a raw
-/// JSON string (no further canonicalisation; the caller is responsible
-/// for matching the orderbook's canonicalisation).
+/// Parse a JSON app-data document and return its keccak256 digest.
+/// The caller is responsible for canonicalising the JSON before
+/// passing it in (the orderbook indexes documents byte-exactly; any
+/// reformatting after this call changes the hash).
 #[wasm_bindgen]
 pub fn app_data_hash_from_json(canonical_json: &str) -> Result<String, JsValue> {
     let doc = AppDataDoc::try_from_str(canonical_json)
@@ -694,31 +683,6 @@ pub fn cancel_order_signed(
         OrderCancellation::sign(uid, EcdsaSigningScheme::Eip712, &domain, &signer)
             .map_err(|err| JsValue::from_str(&format!("sign cancellation failed: {err}")))?;
     to_js(&cancellation)
-}
-
-// ===== Compatibility wrappers (legacy harness) =========================
-
-/// Legacy wrapper kept stable for the pre-expansion `test-harness/`.
-/// New callers should use [`order_uid`] which takes a full `OrderData`.
-#[wasm_bindgen]
-pub fn compute_order_uid(
-    sell_token: &str,
-    buy_token: &str,
-    owner: &str,
-    sell_amount: &str,
-    buy_amount: &str,
-    valid_to: u32,
-) -> Result<String, JsValue> {
-    let order = OrderBuilder::new(parse_address(sell_token)?, parse_address(buy_token)?)
-        .sell_amount(parse_u256(sell_amount)?)
-        .buy_amount(parse_u256(buy_amount)?)
-        .valid_to(valid_to)
-        .kind(OrderKind::Sell)
-        .app_data(EMPTY_APP_DATA_HASH)
-        .build();
-    let domain = DomainSeparator::new(Chain::Mainnet.id(), Chain::Mainnet.settlement());
-    let uid = order.uid(&domain, parse_address(owner)?);
-    Ok(uid.to_string())
 }
 
 #[cfg(test)]
