@@ -418,7 +418,7 @@ pub fn build_order_creation(
 ///
 /// The signature is funnelled through
 /// [`Signature::from_bytes`] so the
-/// [`cowprotocol::EIP1271_MAX_LEN`] (32 KiB) cap applies here as well
+/// [`cowprotocol::signature::EIP1271_MAX_LEN`] (32 KiB) cap applies here as well
 /// as on the deserialise path. `chain` is accepted for parity with the
 /// ECDSA constructor; for EIP-1271 it is informational (owner
 /// verification is on-chain via `isValidSignature`, not via signer
@@ -557,7 +557,9 @@ pub async fn get_quote_simple(
     let c = parse_chain(chain)?;
     let url = endpoint(c, "api/v1/quote");
     let response: cowprotocol::OrderQuoteResponse = transport::post_json(&url, &request).await?;
-    let order_data = response.quote.to_order_data();
+    let order_data = response
+        .to_signed_order_data(&request, cowprotocol::EMPTY_APP_DATA_HASH)
+        .map_err(|err| JsValue::from_str(&format!("to_signed_order_data failed: {err}")))?;
     let domain = DomainSeparator::new(c.id(), c.settlement());
     let uid = order_data.uid(&domain, response.from);
     let payload = serde_json::json!({

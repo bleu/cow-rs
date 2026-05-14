@@ -186,7 +186,15 @@
       <code>cancelled</code> / <code>expired</code> rather than
       <code>traded</code>, but submission still records.
     </p>
+    <p style="margin: 0.5rem 0;">
+      <label for="sell-amount-usdc">Sell amount (USDC, integer):</label>
+      <input id="sell-amount-usdc" type="text" value="1" style="width: 6rem;">
+      <span style="color:#666; font-size:0.8rem;">
+        — your wallet must hold at least this much USDC on Base.
+      </span>
+    </p>
     <button id="connect-wallet">Connect wallet</button>
+    <button id="probe-usdc-balance" disabled>Probe USDC balance</button>
     <button id="submit-base-order" disabled>Sign &amp; submit (Base)</button>
     <p id="submit-status" class="pending">click <em>Connect wallet</em> first</p>
     <pre id="submit-output"></pre>
@@ -551,16 +559,97 @@
       const submitOutput = document.getElementById('submit-output');
       const submitButton = document.getElementById('submit-base-order');
       const connectButton = document.getElementById('connect-wallet');
+      const probeButton = document.getElementById('probe-usdc-balance');
       let connectedAccount = null;
 
+      // `IERC20.balanceOf(address)` selector: keccak256 prefix of
+      // "balanceOf(address)" = 0x70a08231.
+      const ERC20_BALANCE_OF_SELECTOR = '0x70a08231';
+      // Same shape on Base (USDbC is the deprecated bridged variant).
+      const USDBC_BASE = '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA';
+
+      async function probeUsdcBalance(account) {
+        const padded = account.toLowerCase().replace(/^0x/, '').padStart(64, '0');
+        const data = ERC20_BALANCE_OF_SELECTOR + padded;
+        async function balanceAt(token) {
+          const hex = await window.ethereum.request({
+            method: 'eth_call',
+            params: [{ to: token, data }, 'latest'],
+          });
+          // The contract returns uint256 as a 0x-prefixed 32-byte hex word.
+          return BigInt(hex);
+        }
+        const [usdc, usdbc] = await Promise.all([
+          balanceAt(USDC_BASE),
+          balanceAt(USDBC_BASE),
+        ]);
+        return { usdc, usdbc };
+      }
+
+      function formatUsdc(atomic) {
+        // 6-decimal display. Truncate, don't round, so the user can see
+        // exactly what the orderbook checks against.
+        const whole = atomic / 1_000_000n;
+        const frac = (atomic % 1_000_000n).toString().padStart(6, '0');
+        return `${whole}.${frac} (${atomic} atomic)`;
+      }
+
+      probeButton.addEventListener('click', async () => {
+        if (!connectedAccount) {
+          setStatus(submitStatus, false, '❌ connect a wallet first');
+          return;
+        }
+        try {
+          setStatus(submitStatus, true, '⏳ reading balances on Base…');
+          const { usdc, usdbc } = await probeUsdcBalance(connectedAccount);
+          const want = (document.getElementById('sell-amount-usdc').value || '0').trim();
+          const wantAtomic = BigInt(want || '0') * 1_000_000n;
+          submitOutput.textContent = JSON.stringify(
+            {
+              account: connectedAccount,
+              USDC_native:   { contract: USDC_BASE,  balance: formatUsdc(usdc)  },
+              USDbC_bridged: { contract: USDBC_BASE, balance: formatUsdc(usdbc) },
+              required_for_submit: formatUsdc(wantAtomic),
+              decision: usdc >= wantAtomic
+                ? 'OK -- native USDC balance ≥ required'
+                : 'INSUFFICIENT -- the orderbook checks the native USDC contract',
+            },
+            null,
+            2,
+          );
+          setStatus(submitStatus, true, usdc >= wantAtomic
+            ? `✅ wallet holds ${formatUsdc(usdc)} native USDC (≥ ${want})`
+            : `⚠️ wallet holds ${formatUsdc(usdc)} native USDC -- need ${want}`);
+        } catch (err) {
+          setStatus(submitStatus, false, `❌ balance probe: ${err.message ?? err}`);
+        }
+      });
+
+      let connectInFlight = false;
       connectButton.addEventListener('click', async () => {
+        if (connectInFlight) {
+          setStatus(submitStatus, false,
+            '❌ a wallet connect prompt is already open; check the MetaMask extension icon');
+          return;
+        }
+        connectInFlight = true;
+        connectButton.disabled = true;
         try {
           if (typeof window.ethereum === 'undefined') {
             throw new Error('window.ethereum not found; install MetaMask or similar');
           }
-          const [account] = await window.ethereum.request({
-            method: 'eth_requestAccounts',
-          });
+          // Reuse an existing authorised account if there is one, so a
+          // double-click does not stack a second eth_requestAccounts
+          // call MetaMask will then reject with
+          // "Request of type 'wallet_requestPermissions' already pending".
+          let accounts = await window.ethereum.request({ method: 'eth_accounts' });
+          if (accounts.length === 0) {
+            accounts = await window.ethereum.request({
+              method: 'eth_requestAccounts',
+            });
+          }
+          const account = accounts[0];
+
           // Make sure the wallet is on Base; prompt to switch if not.
           const chainId = await window.ethereum.request({ method: 'eth_chainId' });
           if (chainId !== BASE_CHAIN_ID_HEX) {
@@ -579,9 +668,22 @@
           }
           connectedAccount = account;
           submitButton.disabled = false;
+          probeButton.disabled = false;
           setStatus(submitStatus, true, `✅ wallet connected: ${account}`);
         } catch (err) {
-          setStatus(submitStatus, false, `❌ ${err.message ?? err}`);
+          const msg = err.message ?? String(err);
+          // Tell the user how to clear MetaMask's pending state rather
+          // than just echoing the raw error.
+          if (msg.includes('already pending')) {
+            setStatus(submitStatus, false,
+              '❌ a connect prompt is already open in MetaMask. Click the MetaMask '
+                + 'extension icon, approve / reject the pending request, then retry.');
+          } else {
+            setStatus(submitStatus, false, `❌ ${msg}`);
+          }
+        } finally {
+          connectInFlight = false;
+          connectButton.disabled = false;
         }
       });
 
@@ -594,13 +696,21 @@
         setStatus(submitStatus, true, '⏳ quoting…');
         submitOutput.textContent = '';
         try {
-          // 1. Quote.
+          // 1. Quote. Sell amount comes from the input; converted to
+          //    atomic (6-decimal) units. Whole numbers only -- the
+          //    panel is a smoke test, not a calculator.
+          const rawAmount = document.getElementById('sell-amount-usdc').value.trim();
+          const sellAmountInteger = BigInt(rawAmount || '0');
+          if (sellAmountInteger <= 0n) {
+            throw new Error('enter a positive integer USDC amount');
+          }
+          const sellAmountAtomic = (sellAmountInteger * 1_000_000n).toString();
           const quote = await get_quote_simple(
             'base',
             USDC_BASE,
             ETH_PLACEHOLDER,
             account,
-            '25000000', // 25 USDC, 6 decimals
+            sellAmountAtomic,
           );
           const q = quote.response.quote;
 
@@ -654,13 +764,21 @@
           const v = parseInt(sigHex.slice(130, 132), 16);
 
           // 5. Build the OrderCreation body and submit.
+          //
+          // `quote_id` is `Option<u64>` on the wasm side and wasm-bindgen
+          // requires a `bigint | undefined` for that type, not a plain
+          // JS Number (Number tops out at 53 bits of precision so the
+          // binding refuses it). Coerce defensively.
           setStatus(submitStatus, true, '⏳ posting to api.cow.fi/base…');
+          const quoteIdRaw = quote.response.id;
+          const quoteId = quoteIdRaw == null ? undefined : BigInt(quoteIdRaw);
           const creation = build_order_creation(
             orderData,
             { signingScheme: 'eip712', r, s, v },
             account,
+            'base',
             appDataJson,
-            quote.response.id,
+            quoteId,
           );
           const uid = await post_order('base', creation);
 
@@ -681,8 +799,23 @@
           setStatus(submitStatus, true,
             `✅ submitted — open https://explorer.cow.fi/base/orders/${uid}`);
         } catch (err) {
-          setStatus(submitStatus, false, `❌ ${err.message ?? err}`);
-          submitOutput.textContent = String(err);
+          const raw = err.message ?? String(err);
+          // The orderbook's most common rejection on this panel is
+          // `InsufficientBalance` -- a strict pre-flight check that the
+          // signer holds enough sell-side USDC at the current block.
+          // Surface it as guidance rather than a wall of HTTP text.
+          let msg = raw;
+          if (raw.includes('InsufficientBalance')) {
+            const want = (document.getElementById('sell-amount-usdc').value || '?');
+            msg = `InsufficientBalance: this wallet does not hold ≥ ${want} USDC on Base `
+                + `at the current block. Reduce the sell amount above, fund the wallet, `
+                + `or switch to a wallet with USDC on Base.`;
+          } else if (raw.includes('MissingFromAddress') || raw.includes('SellAmountOverflow')) {
+            msg = `${raw} -- check the connected wallet matches the from address the `
+                + `orderbook quoted against.`;
+          }
+          setStatus(submitStatus, false, `❌ ${msg}`);
+          submitOutput.textContent = raw;
         }
       });
     }

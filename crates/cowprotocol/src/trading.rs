@@ -160,7 +160,7 @@ impl TradingClient {
 
         let quote = self.api.get_quote(&params.request).await?;
 
-        let order_data = quote.to_signed_order_data_with_costs_for(
+        let order_data = quote.to_signed_order_data_with_costs(
             &params.request,
             params.partner_fee_bps,
             params.slippage_bps,

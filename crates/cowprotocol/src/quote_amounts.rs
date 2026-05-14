@@ -35,6 +35,18 @@
 //!                  └─ afterSlippage    (slippage on the non-fixed side)
 //! ```
 //!
+//! ## Fail-closed arithmetic
+//!
+//! Every intermediate uses checked `U256` arithmetic and returns
+//! [`Error::QuoteFeeMathOverflow`] on overflow or underflow rather than
+//! saturating. The TypeScript reference relies on unbounded `BigInt`,
+//! so it never silently clamps; the port must reject pathological
+//! orderbook inputs (e.g. `sellAmount = U256::MAX`, `slippageBps >
+//! 10_000`, `protocolFeeBps >= 100%`) instead of folding a saturated
+//! amount into the signed [`crate::OrderData`]. The same fail-closed
+//! contract already governs [`crate::OrderQuoteResponse::to_signed_order_data`]
+//! via [`Error::QuoteAmountOverflow`].
+//!
 //! [api §"Step 3"]: https://docs.cow.fi/cow-protocol/howto/integrate/api#step-3-compute-the-amounts-to-sign
 
 use alloy_primitives::U256;
@@ -175,7 +187,12 @@ pub fn compute(params: QuoteAmountsParams<'_>) -> Result<QuoteAmountsAndCosts> {
     if sell_amount.is_zero() {
         return Err(Error::QuoteSellAmountZero);
     }
-    let network_fee_in_buy = mul_div(buy_amount, fee_amount, sell_amount);
+    let network_fee_in_buy = mul_div(
+        buy_amount,
+        fee_amount,
+        sell_amount,
+        "network_fee_in_buy.mul_div",
+    )?;
 
     let protocol_fee_amount = protocol_fee_amount(
         kind,
@@ -183,18 +200,32 @@ pub fn compute(params: QuoteAmountsParams<'_>) -> Result<QuoteAmountsAndCosts> {
         buy_amount,
         fee_amount,
         protocol_fee_bps_scaled,
-    );
+    )?;
 
     let before_all_fees = if is_sell {
         Amounts {
-            sell_amount: sell_amount.saturating_add(fee_amount),
+            sell_amount: sell_amount.checked_add(fee_amount).ok_or(
+                Error::QuoteFeeMathOverflow {
+                    stage: "before_all_fees.sell",
+                },
+            )?,
             buy_amount: buy_amount
-                .saturating_add(network_fee_in_buy)
-                .saturating_add(protocol_fee_amount),
+                .checked_add(network_fee_in_buy)
+                .ok_or(Error::QuoteFeeMathOverflow {
+                    stage: "before_all_fees.buy_network",
+                })?
+                .checked_add(protocol_fee_amount)
+                .ok_or(Error::QuoteFeeMathOverflow {
+                    stage: "before_all_fees.buy_protocol",
+                })?,
         }
     } else {
         Amounts {
-            sell_amount: sell_amount.saturating_sub(protocol_fee_amount),
+            sell_amount: sell_amount.checked_sub(protocol_fee_amount).ok_or(
+                Error::QuoteFeeMathOverflow {
+                    stage: "before_all_fees.sell_protocol",
+                },
+            )?,
             buy_amount,
         }
     };
@@ -204,7 +235,10 @@ pub fn compute(params: QuoteAmountsParams<'_>) -> Result<QuoteAmountsAndCosts> {
             sell_amount: before_all_fees.sell_amount,
             buy_amount: before_all_fees
                 .buy_amount
-                .saturating_sub(protocol_fee_amount),
+                .checked_sub(protocol_fee_amount)
+                .ok_or(Error::QuoteFeeMathOverflow {
+                    stage: "after_protocol_fees.buy",
+                })?,
         }
     } else {
         Amounts {
@@ -220,7 +254,11 @@ pub fn compute(params: QuoteAmountsParams<'_>) -> Result<QuoteAmountsAndCosts> {
         }
     } else {
         Amounts {
-            sell_amount: sell_amount.saturating_add(fee_amount),
+            sell_amount: sell_amount.checked_add(fee_amount).ok_or(
+                Error::QuoteFeeMathOverflow {
+                    stage: "after_network_costs.sell",
+                },
+            )?,
             buy_amount: after_protocol_fees.buy_amount,
         }
     };
@@ -237,20 +275,27 @@ pub fn compute(params: QuoteAmountsParams<'_>) -> Result<QuoteAmountsAndCosts> {
             surplus_base,
             U256::from(partner_fee_bps),
             U256::from(ONE_HUNDRED_BPS),
-        )
+            "partner_fee.mul_div",
+        )?
     };
     let after_partner_fees = if is_sell {
         Amounts {
             sell_amount: after_network_costs.sell_amount,
             buy_amount: after_network_costs
                 .buy_amount
-                .saturating_sub(partner_fee_amount),
+                .checked_sub(partner_fee_amount)
+                .ok_or(Error::QuoteFeeMathOverflow {
+                    stage: "after_partner_fees.buy",
+                })?,
         }
     } else {
         Amounts {
             sell_amount: after_network_costs
                 .sell_amount
-                .saturating_add(partner_fee_amount),
+                .checked_add(partner_fee_amount)
+                .ok_or(Error::QuoteFeeMathOverflow {
+                    stage: "after_partner_fees.sell",
+                })?,
             buy_amount: after_network_costs.buy_amount,
         }
     };
@@ -260,19 +305,29 @@ pub fn compute(params: QuoteAmountsParams<'_>) -> Result<QuoteAmountsAndCosts> {
             after_partner_fees.buy_amount,
             U256::from(slippage_bps),
             U256::from(ONE_HUNDRED_BPS),
-        );
+            "slippage_buy.mul_div",
+        )?;
         Amounts {
             sell_amount: after_partner_fees.sell_amount,
-            buy_amount: after_partner_fees.buy_amount.saturating_sub(slip),
+            buy_amount: after_partner_fees.buy_amount.checked_sub(slip).ok_or(
+                Error::QuoteFeeMathOverflow {
+                    stage: "after_slippage.buy",
+                },
+            )?,
         }
     } else {
         let slip = mul_div(
             after_partner_fees.sell_amount,
             U256::from(slippage_bps),
             U256::from(ONE_HUNDRED_BPS),
-        );
+            "slippage_sell.mul_div",
+        )?;
         Amounts {
-            sell_amount: after_partner_fees.sell_amount.saturating_add(slip),
+            sell_amount: after_partner_fees.sell_amount.checked_add(slip).ok_or(
+                Error::QuoteFeeMathOverflow {
+                    stage: "after_slippage.sell",
+                },
+            )?,
             buy_amount: after_partner_fees.buy_amount,
         }
     };
@@ -386,40 +441,63 @@ fn protocol_fee_amount(
     buy_amount: U256,
     fee_amount: U256,
     bps_scaled: u64,
-) -> U256 {
+) -> Result<U256> {
     if bps_scaled == 0 {
-        return U256::ZERO;
+        return Ok(U256::ZERO);
     }
     let bps_big = U256::from(bps_scaled);
-    let scale = U256::from(ONE_HUNDRED_BPS).saturating_mul(U256::from(HUNDRED_THOUSANDS));
+    // 10_000 * 100_000 fits trivially; .expect documents the invariant
+    // rather than silently saturating like the prior implementation.
+    let scale = U256::from(ONE_HUNDRED_BPS)
+        .checked_mul(U256::from(HUNDRED_THOUSANDS))
+        .expect("ONE_HUNDRED_BPS * HUNDRED_THOUSANDS fits in U256");
     match kind {
         OrderKind::Sell => {
             // protocolFeeInBuy = buyAmount * bps / (10_000 * 100_000 - bps)
-            let denom = scale.saturating_sub(bps_big);
+            // bps >= scale means the quote claims >=100% protocol fee,
+            // which the TS reference would surface as division by zero
+            // (or worse, negative denominator). Fail closed instead of
+            // letting an over-100% fee saturate to a bogus signed amount.
+            let denom = scale
+                .checked_sub(bps_big)
+                .ok_or(Error::QuoteFeeMathOverflow {
+                    stage: "protocol_fee.sell_denom",
+                })?;
             if denom.is_zero() {
-                return U256::ZERO;
+                return Err(Error::QuoteFeeMathOverflow {
+                    stage: "protocol_fee.sell_denom",
+                });
             }
-            mul_div(buy_amount, bps_big, denom)
+            mul_div(buy_amount, bps_big, denom, "protocol_fee.sell_mul_div")
         }
         OrderKind::Buy => {
             // protocolFeeInSell = (sellAmount + feeAmount) * bps
             //                     / (10_000 * 100_000 + bps)
-            let denom = scale.saturating_add(bps_big);
-            let base = sell_amount.saturating_add(fee_amount);
-            if denom.is_zero() {
-                return U256::ZERO;
-            }
-            mul_div(base, bps_big, denom)
+            // `scale + bps` cannot zero (scale > 0), so no zero check.
+            let denom = scale
+                .checked_add(bps_big)
+                .ok_or(Error::QuoteFeeMathOverflow {
+                    stage: "protocol_fee.buy_denom",
+                })?;
+            let base = sell_amount
+                .checked_add(fee_amount)
+                .ok_or(Error::QuoteFeeMathOverflow {
+                    stage: "protocol_fee.buy_base",
+                })?;
+            mul_div(base, bps_big, denom, "protocol_fee.buy_mul_div")
         }
     }
 }
 
 #[inline]
-fn mul_div(a: U256, b: U256, c: U256) -> U256 {
+fn mul_div(a: U256, b: U256, c: U256, stage: &'static str) -> Result<U256> {
     if c.is_zero() {
-        return U256::ZERO;
+        return Ok(U256::ZERO);
     }
-    a.saturating_mul(b) / c
+    let prod = a
+        .checked_mul(b)
+        .ok_or(Error::QuoteFeeMathOverflow { stage })?;
+    Ok(prod / c)
 }
 
 #[cfg(test)]
@@ -563,6 +641,158 @@ mod tests {
             parse_protocol_fee_bps(Some("0.x")),
             Err(Error::InvalidProtocolFeeBps { .. }),
         ));
+    }
+
+    /// `sell + fee` overflow on a SELL quote must surface as
+    /// [`Error::QuoteFeeMathOverflow`] at the `before_all_fees.sell`
+    /// stage rather than saturating to `U256::MAX` and being copied
+    /// into the signed `OrderData`. Mirrors the contract that
+    /// [`crate::OrderQuoteResponse::to_signed_order_data`] enforces via
+    /// `Error::QuoteAmountOverflow`.
+    #[test]
+    fn rejects_sell_plus_fee_overflow() {
+        let err = compute(QuoteAmountsParams {
+            kind: OrderKind::Sell,
+            sell_amount: U256::MAX,
+            buy_amount: U256::from(1u64),
+            fee_amount: U256::from(1u64),
+            partner_fee_bps: 0,
+            slippage_bps: 0,
+            protocol_fee_bps: None,
+        })
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::QuoteFeeMathOverflow {
+                    stage: "before_all_fees.sell"
+                },
+            ),
+            "got: {err:?}",
+        );
+    }
+
+    /// A SELL quote that reports `buyAmount = U256::MAX` together with
+    /// a non-zero `protocolFeeBps` would saturate the protocol-fee
+    /// `mul_div` to a bogus value before signing. The fail-closed
+    /// contract requires erroring out instead.
+    #[test]
+    fn rejects_protocol_fee_mul_div_overflow_on_sell() {
+        let err = compute(QuoteAmountsParams {
+            kind: OrderKind::Sell,
+            sell_amount: U256::from(1u64),
+            buy_amount: U256::MAX,
+            fee_amount: U256::ZERO,
+            partner_fee_bps: 0,
+            slippage_bps: 0,
+            protocol_fee_bps: Some("5"),
+        })
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::QuoteFeeMathOverflow { .. }),
+            "got: {err:?}",
+        );
+    }
+
+    /// Slippage above 100% would clamp `after_slippage.buy_amount` to
+    /// zero under saturating arithmetic, producing an "any price
+    /// accepted" SELL order. The checked path must reject it.
+    #[test]
+    fn rejects_slippage_above_one_hundred_percent_on_sell() {
+        let err = compute(QuoteAmountsParams {
+            kind: OrderKind::Sell,
+            sell_amount: U256::from(1_000_000_000_000_000_000u128),
+            buy_amount: U256::from(1_000_000_000_000_000_000u128),
+            fee_amount: U256::ZERO,
+            partner_fee_bps: 0,
+            slippage_bps: 20_000,
+            protocol_fee_bps: None,
+        })
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::QuoteFeeMathOverflow {
+                    stage: "after_slippage.buy"
+                },
+            ),
+            "got: {err:?}",
+        );
+    }
+
+    /// On a BUY order, an inflated `protocolFeeBps` plus a `feeAmount`
+    /// larger than the `sellAmount` makes `protocol_fee_amount` exceed
+    /// `sell_amount`, which would underflow to zero under saturating
+    /// arithmetic. Checked subtraction surfaces the failure.
+    #[test]
+    fn rejects_buy_protocol_fee_underflowing_sell_amount() {
+        let err = compute(QuoteAmountsParams {
+            kind: OrderKind::Buy,
+            sell_amount: U256::from(10u64),
+            buy_amount: U256::from(1u64),
+            fee_amount: U256::from(1_000u64),
+            partner_fee_bps: 0,
+            slippage_bps: 0,
+            protocol_fee_bps: Some("9999.99999"),
+        })
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::QuoteFeeMathOverflow {
+                    stage: "before_all_fees.sell_protocol"
+                },
+            ),
+            "got: {err:?}",
+        );
+    }
+
+    /// `protocolFeeBps >= 100%` makes the SELL-side denominator
+    /// `scale - bps` zero or negative. The TS reference would divide
+    /// by zero; we reject it explicitly.
+    #[test]
+    fn rejects_protocol_fee_bps_at_or_above_one_hundred_percent() {
+        let err_at = compute(QuoteAmountsParams {
+            kind: OrderKind::Sell,
+            sell_amount: U256::from(1_000_000_000_000_000_000u128),
+            buy_amount: U256::from(1_000_000_000_000_000_000u128),
+            fee_amount: U256::ZERO,
+            partner_fee_bps: 0,
+            slippage_bps: 0,
+            // 10_000 bps == scale, denom collapses to zero.
+            protocol_fee_bps: Some("10000"),
+        })
+        .unwrap_err();
+        assert!(
+            matches!(
+                err_at,
+                Error::QuoteFeeMathOverflow {
+                    stage: "protocol_fee.sell_denom"
+                },
+            ),
+            "got: {err_at:?}",
+        );
+
+        let err_above = compute(QuoteAmountsParams {
+            kind: OrderKind::Sell,
+            sell_amount: U256::from(1_000_000_000_000_000_000u128),
+            buy_amount: U256::from(1_000_000_000_000_000_000u128),
+            fee_amount: U256::ZERO,
+            partner_fee_bps: 0,
+            slippage_bps: 0,
+            // 10_001 bps > scale, denom underflows.
+            protocol_fee_bps: Some("10001"),
+        })
+        .unwrap_err();
+        assert!(
+            matches!(
+                err_above,
+                Error::QuoteFeeMathOverflow {
+                    stage: "protocol_fee.sell_denom"
+                },
+            ),
+            "got: {err_above:?}",
+        );
     }
 
     #[test]

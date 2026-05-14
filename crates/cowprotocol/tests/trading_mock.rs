@@ -30,7 +30,13 @@ fn anvil_signer() -> PrivateKeySigner {
         .unwrap()
 }
 
-fn quote_body(sell: u128, buy: u128, fee: u128, protocol_fee_bps: Option<&str>) -> Value {
+fn quote_body(
+    from: Address,
+    sell: u128,
+    buy: u128,
+    fee: u128,
+    protocol_fee_bps: Option<&str>,
+) -> Value {
     let mut quote = json!({
         "sellToken": format!("{:#x}", USDC),
         "buyToken": format!("{:#x}", DAI),
@@ -48,7 +54,7 @@ fn quote_body(sell: u128, buy: u128, fee: u128, protocol_fee_bps: Option<&str>) 
     });
     let mut body = json!({
         "quote": quote.take(),
-        "from": "0x0000000000000000000000000000000000000000",
+        "from": format!("{from:#x}"),
         "expiration": "2099-12-31T23:59:59Z",
         "id": 42,
         "verified": true,
@@ -65,10 +71,14 @@ async fn post_swap_order_lowers_buy_amount_when_protocol_fee_compounds_with_part
     // buyAmount=2e18, partner fee 100 bps, slippage 50 bps. With
     // `protocolFeeBps = "5"` the signed buy_amount must drop to
     // 1_970_090_045_022_511_257 (vs 1_970_100_000_000_000_000 without).
+    let signer = anvil_signer();
+    let signer_addr = alloy_signer::Signer::address(&signer);
+
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/v1/quote"))
         .respond_with(ResponseTemplate::new(200).set_body_json(quote_body(
+            signer_addr,
             1_000_000_000_000_000_000,
             2_000_000_000_000_000_000,
             0,
@@ -101,9 +111,6 @@ async fn post_swap_order_lowers_buy_amount_when_protocol_fee_compounds_with_part
         })
         .mount(&server)
         .await;
-
-    let signer = anvil_signer();
-    let signer_addr = alloy_signer::Signer::address(&signer);
 
     let api = OrderBookApi::new_with_base_url(server.uri().parse().unwrap());
     let client = TradingClient::from_orderbook(Chain::Mainnet, api);

@@ -539,8 +539,9 @@ impl QuoteRequest {
 ///
 /// This is the 12-field signed payload ([`OrderData`]) plus the signing
 /// scheme the orderbook expects and the price metadata it surfaces back to
-/// the caller. Use [`OrderQuote::to_order_data`] to extract the subset that
-/// gets hashed and signed.
+/// the caller. Use [`OrderQuoteResponse::to_signed_order_data`] to project
+/// the response into the signable [`OrderData`] after binding it to the
+/// originating [`QuoteRequest`].
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -579,42 +580,36 @@ pub struct OrderQuote {
     pub signing_scheme: SigningScheme,
 }
 
-impl OrderQuote {
-    /// Project just the 12 signed fields into an [`OrderData`] suitable for
-    /// [`OrderData::hash_struct`] and [`OrderData::uid`].
-    pub const fn to_order_data(&self) -> OrderData {
-        OrderData {
-            sell_token: self.sell_token,
-            buy_token: self.buy_token,
-            receiver: self.receiver,
-            sell_amount: self.sell_amount,
-            buy_amount: self.buy_amount,
-            valid_to: self.valid_to,
-            app_data: self.app_data,
-            fee_amount: self.fee_amount,
-            kind: self.kind,
-            partially_fillable: self.partially_fillable,
-            sell_token_balance: self.sell_token_balance,
-            buy_token_balance: self.buy_token_balance,
-        }
-    }
-}
-
 impl OrderQuoteResponse {
     /// Apply the submission adjustments documented at
-    /// [`api.mdx §"Step 3"`][step3] and return the [`OrderData`] that must
-    /// be hashed and signed by the order owner.
+    /// [`api.mdx §"Step 3"`][step3] and return the [`OrderData`] that
+    /// must be hashed and signed by the order owner.
+    ///
+    /// Cross-checks every caller-authorised field of the response
+    /// against the originating [`QuoteRequest`] before projecting:
+    /// `sellToken`, `buyToken`, normalised `receiver`, `kind`, the
+    /// envelope's `from`, and (when the caller pinned them) `validTo`,
+    /// `partiallyFillable`, `sellTokenBalance`, `buyTokenBalance`,
+    /// `signingScheme`, and the `appData` digest. A hostile orderbook
+    /// that flips any of these between request and response is
+    /// rejected with [`Error::QuoteFieldMismatch`] before any
+    /// signable bytes leave the SDK.
     ///
     /// - For sell orders, `sell_amount` is the quoted `sellAmount +
     ///   feeAmount`. For buy orders, the quote values pass through.
     /// - `fee_amount` is always `0` at submission: solvers price gas at
     ///   settlement time.
     /// - `app_data` is the 32-byte digest of the canonical metadata JSON
-    ///   the caller will submit (use [`crate::EMPTY_APP_DATA_HASH`] for the
-    ///   empty document `"{}"`).
+    ///   the caller will submit (use [`crate::EMPTY_APP_DATA_HASH`] for
+    ///   the empty document `"{}"`).
     ///
     /// [step3]: https://docs.cow.fi/cow-protocol/howto/integrate/api#step-3-compute-the-amounts-to-sign
-    pub fn to_signed_order_data(&self, app_data: AppDataHash) -> Result<OrderData> {
+    pub fn to_signed_order_data(
+        &self,
+        request: &QuoteRequest,
+        app_data: AppDataHash,
+    ) -> Result<OrderData> {
+        self.check_response_matches_request(request, app_data)?;
         let q = &self.quote;
         let (sell_amount, buy_amount) = match q.kind {
             OrderKind::Sell => {
@@ -645,25 +640,15 @@ impl OrderQuoteResponse {
         })
     }
 
-    /// Like [`OrderQuoteResponse::to_signed_order_data`] but cross-checks
-    /// the quote's `sell_token`, `buy_token`, `receiver` and (when the
-    /// caller pinned a digest) `app_data` against the original
-    /// [`QuoteRequest`] before producing the [`OrderData`] the user will
-    /// sign.
-    ///
-    /// Defends against a hostile orderbook that swaps any of those
-    /// fields between request and response: the SDK refuses to project
-    /// the response into a signable order until every caller-authorised
-    /// field round-trips. Returns [`Error::QuoteFieldMismatch`] on the
-    /// first divergence.
-    /// Project this quote into [`QuoteAmountsAndCosts`], threading the
-    /// caller's partner fee, slippage and any `protocolFeeBps` echoed
-    /// by the response through the same arithmetic the TypeScript SDK
-    /// uses (`getQuoteAmountsAndCosts`). Use this when posting an order
-    /// that combines a partner fee with a quote that carries a
-    /// protocol fee, otherwise the partner-fee base is computed against
-    /// the wrong spot price and the orderbook receives an inflated
-    /// `buyAmount` (see [`cow-sdk` #867]).
+    /// Project this quote into [`crate::quote_amounts::QuoteAmountsAndCosts`],
+    /// threading the caller's partner fee, slippage and any
+    /// `protocolFeeBps` echoed by the response through the same
+    /// arithmetic the TypeScript SDK uses (`getQuoteAmountsAndCosts`).
+    /// Use this when posting an order that combines a partner fee with
+    /// a quote that carries a protocol fee, otherwise the partner-fee
+    /// base is computed against the wrong spot price and the
+    /// orderbook receives an inflated `buyAmount` (see
+    /// [`cow-sdk` #867]).
     ///
     /// `protocol_fee_bps_override` lets the caller pin a specific value
     /// instead of trusting [`Self::protocol_fee_bps`]; `None` falls
@@ -694,14 +679,17 @@ impl OrderQuoteResponse {
     /// [`Self::amounts_with_costs`] before projecting into
     /// [`OrderData`]. Use this whenever the order being submitted
     /// carries an `AppDataPartnerFee`, or when the quote response
-    /// echoes a non-zero `protocolFeeBps`.
+    /// echoes a non-zero `protocolFeeBps`. Shares the same
+    /// request-binding guard.
     pub fn to_signed_order_data_with_costs(
         &self,
+        request: &QuoteRequest,
         partner_fee_bps: u32,
         slippage_bps: u32,
         protocol_fee_bps_override: Option<&str>,
         app_data: AppDataHash,
     ) -> Result<OrderData> {
+        self.check_response_matches_request(request, app_data)?;
         let amounts =
             self.amounts_with_costs(partner_fee_bps, slippage_bps, protocol_fee_bps_override)?;
         let q = &self.quote;
@@ -719,28 +707,6 @@ impl OrderQuoteResponse {
             sell_token_balance: q.sell_token_balance,
             buy_token_balance: q.buy_token_balance,
         })
-    }
-
-    /// Like [`Self::to_signed_order_data_with_costs`] but also
-    /// cross-checks the quote's `sell_token`, `buy_token`, `receiver`
-    /// and (when the caller pinned a digest) `app_data` against the
-    /// original [`QuoteRequest`] before producing the [`OrderData`]
-    /// the user will sign.
-    pub fn to_signed_order_data_with_costs_for(
-        &self,
-        request: &QuoteRequest,
-        partner_fee_bps: u32,
-        slippage_bps: u32,
-        protocol_fee_bps_override: Option<&str>,
-        app_data: AppDataHash,
-    ) -> Result<OrderData> {
-        self.check_response_matches_request(request, app_data)?;
-        self.to_signed_order_data_with_costs(
-            partner_fee_bps,
-            slippage_bps,
-            protocol_fee_bps_override,
-            app_data,
-        )
     }
 
     fn check_response_matches_request(
@@ -763,6 +729,27 @@ impl OrderQuoteResponse {
                 returned: format!("{:#x}", q.buy_token),
             });
         }
+        // `from` lives on the response envelope, not OrderQuote. The
+        // orderbook indexes the order under this address and the SDK
+        // computes the UID from it; a mismatch silently swaps the
+        // owner the order would settle for.
+        if self.from != request.from {
+            return Err(Error::QuoteFieldMismatch {
+                field: "from",
+                requested: format!("{:#x}", request.from),
+                returned: format!("{:#x}", self.from),
+            });
+        }
+        // `kind` is the most damaging swap: flipping Sell <-> Buy
+        // reinterprets which side of the order is the fixed leg, so a
+        // user-confirmed sell amount can come back as a quoted buy.
+        if q.kind != request.kind {
+            return Err(Error::QuoteFieldMismatch {
+                field: "kind",
+                requested: format!("{:?}", request.kind),
+                returned: format!("{:?}", q.kind),
+            });
+        }
         // Treat `None`, `Some(ZERO)` and `Some(owner)` as "owner
         // receives" on both sides; the orderbook normalises the same
         // way. Comparing only when `request.receiver` is `Some` would
@@ -781,6 +768,53 @@ impl OrderQuoteResponse {
                 returned: format!("{got:?}"),
             });
         }
+        // Conditional fields: only enforce when the request pinned
+        // them, otherwise the orderbook is free to fill in defaults.
+        if let Some(valid_to) = request.valid_to
+            && q.valid_to != valid_to
+        {
+            return Err(Error::QuoteFieldMismatch {
+                field: "validTo",
+                requested: valid_to.to_string(),
+                returned: q.valid_to.to_string(),
+            });
+        }
+        if let Some(partially_fillable) = request.partially_fillable
+            && q.partially_fillable != partially_fillable
+        {
+            return Err(Error::QuoteFieldMismatch {
+                field: "partiallyFillable",
+                requested: partially_fillable.to_string(),
+                returned: q.partially_fillable.to_string(),
+            });
+        }
+        if let Some(src) = request.sell_token_balance
+            && q.sell_token_balance != src
+        {
+            return Err(Error::QuoteFieldMismatch {
+                field: "sellTokenBalance",
+                requested: format!("{src:?}"),
+                returned: format!("{:?}", q.sell_token_balance),
+            });
+        }
+        if let Some(dst) = request.buy_token_balance
+            && q.buy_token_balance != dst
+        {
+            return Err(Error::QuoteFieldMismatch {
+                field: "buyTokenBalance",
+                requested: format!("{dst:?}"),
+                returned: format!("{:?}", q.buy_token_balance),
+            });
+        }
+        if let Some(scheme) = request.signing_scheme
+            && q.signing_scheme != scheme
+        {
+            return Err(Error::QuoteFieldMismatch {
+                field: "signingScheme",
+                requested: format!("{scheme:?}"),
+                returned: format!("{:?}", q.signing_scheme),
+            });
+        }
         if let Some(QuoteAppData::Hash(requested_hash)) = request.app_data.as_ref()
             && *requested_hash != app_data
         {
@@ -791,22 +825,6 @@ impl OrderQuoteResponse {
             });
         }
         Ok(())
-    }
-
-    /// Like [`Self::to_signed_order_data`] but cross-checks the
-    /// quote's `sell_token`, `buy_token`, `receiver` and (when the
-    /// caller pinned a digest) `app_data` against the original
-    /// [`QuoteRequest`] before producing the [`OrderData`] the user
-    /// will sign. Defends against a hostile orderbook that swaps any
-    /// of those fields between request and response. Returns
-    /// [`Error::QuoteFieldMismatch`] on the first divergence.
-    pub fn to_signed_order_data_for(
-        &self,
-        request: &QuoteRequest,
-        app_data: AppDataHash,
-    ) -> Result<OrderData> {
-        self.check_response_matches_request(request, app_data)?;
-        self.to_signed_order_data(app_data)
     }
 }
 
@@ -1482,9 +1500,11 @@ mod tests {
         assert_eq!(response.quote.signing_scheme, SigningScheme::Eip712);
         assert_eq!(response.quote.app_data, AppDataHash([0u8; 32]));
 
-        // The order data extracted from the quote round-trips into the
+        // The order data projected from the quote round-trips into the
         // signed-payload type and hashes deterministically.
-        let order_data = response.quote.to_order_data();
+        let order_data = response
+            .to_signed_order_data(&fixture_quote_request(), EMPTY_APP_DATA_HASH)
+            .unwrap();
         let _ = order_data.hash_struct();
     }
 
@@ -1502,7 +1522,9 @@ mod tests {
         let original_sell = quote.quote.sell_amount;
         let original_fee = quote.quote.fee_amount;
 
-        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
+        let signed = quote
+            .to_signed_order_data(&fixture_quote_request(), EMPTY_APP_DATA_HASH)
+            .unwrap();
 
         assert_eq!(signed.sell_amount, original_sell + original_fee);
         assert_eq!(signed.buy_amount, quote.quote.buy_amount);
@@ -1518,8 +1540,14 @@ mod tests {
         quote.quote.kind = OrderKind::Buy;
         let original_sell = quote.quote.sell_amount;
         let original_buy = quote.quote.buy_amount;
+        // Match the mutated `kind` so the request-bound projection
+        // does not reject this synthetic Buy-side quote.
+        let request =
+            QuoteRequest::buy_amount_after_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64));
 
-        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
+        let signed = quote
+            .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
+            .unwrap();
 
         assert_eq!(signed.sell_amount, original_sell);
         assert_eq!(signed.buy_amount, original_buy);
@@ -1534,7 +1562,9 @@ mod tests {
     #[test]
     fn order_creation_serialises_to_expected_wire_shape() {
         let quote = load_mainnet_quote();
-        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
+        let signed = quote
+            .to_signed_order_data(&fixture_quote_request(), EMPTY_APP_DATA_HASH)
+            .unwrap();
         let signature = Signature::default_with(SigningScheme::Eip712);
         let creation = OrderCreation::from_signed_order_data(
             signed,
@@ -1567,7 +1597,9 @@ mod tests {
     /// boundary without losing fields.
     fn round_trip_with_signature(signature: Signature) -> OrderCreation {
         let quote = load_mainnet_quote();
-        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
+        let signed = quote
+            .to_signed_order_data(&fixture_quote_request(), EMPTY_APP_DATA_HASH)
+            .unwrap();
         let original = OrderCreation::from_signed_order_data(
             signed,
             signature,
@@ -1665,8 +1697,37 @@ mod tests {
         quote.quote.sell_amount = U256::MAX;
         quote.quote.fee_amount = U256::from(1u64);
 
-        let err = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap_err();
+        let err = quote
+            .to_signed_order_data(&fixture_quote_request(), EMPTY_APP_DATA_HASH)
+            .unwrap_err();
         assert!(matches!(err, Error::QuoteAmountOverflow { .. }));
+    }
+
+    /// Same fail-closed contract as the basic path: the
+    /// fee-composition projection used by
+    /// [`OrderQuoteResponse::to_signed_order_data_with_costs`] must
+    /// reject an overflowing sell-side adjustment rather than copy a
+    /// saturated `U256::MAX` into the signed `OrderData`.
+    #[test]
+    fn to_signed_order_data_with_costs_rejects_overflowing_sell_adjustment() {
+        let mut quote = load_mainnet_quote();
+        quote.quote.kind = OrderKind::Sell;
+        quote.quote.sell_amount = U256::MAX;
+        quote.quote.fee_amount = U256::from(1u64);
+
+        let err = quote
+            .to_signed_order_data_with_costs(
+                &fixture_quote_request(),
+                0,
+                0,
+                None,
+                EMPTY_APP_DATA_HASH,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::QuoteFeeMathOverflow { .. }),
+            "got: {err:?}",
+        );
     }
 
     /// `OrderCreation::from_signed_order_data` rejects a zero `from`
@@ -1687,11 +1748,11 @@ mod tests {
         );
     }
 
-    /// R20: `to_signed_order_data_for` rejects a tampered `buy_token`
+    /// R20: `to_signed_order_data` rejects a tampered `buy_token`
     /// instead of letting the user sign an order paying out a different
     /// asset than they asked for.
     #[test]
-    fn to_signed_order_data_for_rejects_swapped_buy_token() {
+    fn to_signed_order_data_rejects_swapped_buy_token() {
         use alloy_primitives::address;
         let quote = load_mainnet_quote();
         let request = QuoteRequest::sell_amount_before_fee(
@@ -1702,7 +1763,7 @@ mod tests {
             U256::from(1u64),
         );
         let err = quote
-            .to_signed_order_data_for(&request, EMPTY_APP_DATA_HASH)
+            .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
             .unwrap_err();
         assert!(
             matches!(
@@ -1716,10 +1777,12 @@ mod tests {
         );
     }
 
-    /// R20: `to_signed_order_data_for` returns the same `OrderData` as
-    /// the unchecked path when every caller-authorised field matches.
+    /// R20: `to_signed_order_data` returns an `OrderData` whose 12
+    /// signed fields mirror the response when every caller-authorised
+    /// field matches the request. The amount-side check pins the
+    /// documented sell-side fee adjustment.
     #[test]
-    fn to_signed_order_data_for_passes_when_request_matches_response() {
+    fn to_signed_order_data_passes_when_request_matches_response() {
         let quote = load_mainnet_quote();
         let request = QuoteRequest::sell_amount_before_fee(
             quote.quote.sell_token,
@@ -1728,19 +1791,27 @@ mod tests {
             U256::from(1u64),
         );
         let signed = quote
-            .to_signed_order_data_for(&request, EMPTY_APP_DATA_HASH)
+            .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
             .unwrap();
-        let unchecked = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
-        assert_eq!(signed, unchecked);
+        assert_eq!(signed.sell_token, quote.quote.sell_token);
+        assert_eq!(signed.buy_token, quote.quote.buy_token);
+        assert_eq!(signed.receiver, quote.quote.receiver);
+        assert_eq!(signed.kind, quote.quote.kind);
+        assert_eq!(signed.app_data, EMPTY_APP_DATA_HASH);
+        assert_eq!(signed.fee_amount, U256::ZERO);
+        assert_eq!(
+            signed.sell_amount,
+            quote.quote.sell_amount + quote.quote.fee_amount,
+        );
     }
 
-    /// R20: `to_signed_order_data_for` rejects a quote that swaps the
+    /// R20: `to_signed_order_data` rejects a quote that swaps the
     /// receiver when the request omitted it (default owner-receives).
     /// Without normalising both sides, a hostile orderbook could
     /// redirect proceeds to an attacker while the caller never set a
     /// receiver in the request.
     #[test]
-    fn to_signed_order_data_for_rejects_swapped_receiver_when_request_omits_receiver() {
+    fn to_signed_order_data_rejects_swapped_receiver_when_request_omits_receiver() {
         use alloy_primitives::address;
         let mut quote = load_mainnet_quote();
         quote.quote.receiver = Some(address!("dead00000000000000000000000000000000beef"));
@@ -1751,7 +1822,7 @@ mod tests {
             U256::from(1u64),
         );
         let err = quote
-            .to_signed_order_data_for(&request, EMPTY_APP_DATA_HASH)
+            .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
             .unwrap_err();
         assert!(
             matches!(
@@ -1770,7 +1841,7 @@ mod tests {
     /// and must not trip a mismatch. Mirrors the orderbook's
     /// normalisation.
     #[test]
-    fn to_signed_order_data_for_accepts_owner_receiver_echo_when_request_omits_receiver() {
+    fn to_signed_order_data_accepts_owner_receiver_echo_when_request_omits_receiver() {
         let mut quote = load_mainnet_quote();
         quote.quote.receiver = Some(quote.from);
         let request = QuoteRequest::sell_amount_before_fee(
@@ -1780,15 +1851,15 @@ mod tests {
             U256::from(1u64),
         );
         quote
-            .to_signed_order_data_for(&request, EMPTY_APP_DATA_HASH)
+            .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
             .expect("owner-as-receiver echo should normalise to owner-receives");
     }
 
-    /// R20: `to_signed_order_data_with_costs_for` shares the same
+    /// R20: `to_signed_order_data_with_costs` shares the same
     /// `check_response_matches_request` guard and must reject the
     /// default-receiver swap on the costs-aware path too.
     #[test]
-    fn to_signed_order_data_with_costs_for_rejects_swapped_receiver_when_request_omits_receiver() {
+    fn to_signed_order_data_with_costs_rejects_swapped_receiver_when_request_omits_receiver() {
         use alloy_primitives::address;
         let mut quote = load_mainnet_quote();
         quote.quote.receiver = Some(address!("dead00000000000000000000000000000000beef"));
@@ -1799,7 +1870,7 @@ mod tests {
             U256::from(1u64),
         );
         let err = quote
-            .to_signed_order_data_with_costs_for(&request, 0, 0, None, EMPTY_APP_DATA_HASH)
+            .to_signed_order_data_with_costs(&request, 0, 0, None, EMPTY_APP_DATA_HASH)
             .unwrap_err();
         assert!(
             matches!(
@@ -1813,11 +1884,11 @@ mod tests {
         );
     }
 
-    /// R20: `to_signed_order_data_for` rejects a quote whose returned
+    /// R20: `to_signed_order_data` rejects a quote whose returned
     /// `app_data` digest disagrees with the digest the caller pinned in
     /// the request.
     #[test]
-    fn to_signed_order_data_for_rejects_swapped_app_data() {
+    fn to_signed_order_data_rejects_swapped_app_data() {
         let quote = load_mainnet_quote();
         let pinned = AppDataHash([0x42; 32]);
         let request = QuoteRequest::sell_amount_before_fee(
@@ -1829,7 +1900,7 @@ mod tests {
         .with_app_data(pinned);
         // The response's digest is `EMPTY_APP_DATA_HASH`, not `pinned`.
         let err = quote
-            .to_signed_order_data_for(&request, EMPTY_APP_DATA_HASH)
+            .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
             .unwrap_err();
         assert!(
             matches!(
@@ -1843,13 +1914,171 @@ mod tests {
         );
     }
 
+    /// R20: `to_signed_order_data` rejects a quote whose `kind` flips
+    /// the side of the order the user authorised. A Sell intent
+    /// returning as Buy reinterprets which side is the fixed leg, so
+    /// signing would commit to a different trade than the user saw.
+    #[test]
+    fn to_signed_order_data_rejects_swapped_kind() {
+        let mut quote = load_mainnet_quote();
+        quote.quote.kind = OrderKind::Buy;
+        let request = fixture_quote_request();
+        assert_eq!(request.kind, OrderKind::Sell);
+        let err = quote
+            .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::QuoteFieldMismatch { field: "kind", .. }),
+            "got: {err}"
+        );
+    }
+
+    /// R20: `to_signed_order_data` rejects a quote whose envelope
+    /// `from` does not match the request. The orderbook indexes the
+    /// order under this address and the SDK derives the UID from it,
+    /// so a swap silently changes the owner the order would settle
+    /// for.
+    #[test]
+    fn to_signed_order_data_rejects_swapped_from() {
+        use alloy_primitives::address;
+        let mut quote = load_mainnet_quote();
+        quote.from = address!("dead000000000000000000000000000000000000");
+        let err = quote
+            .to_signed_order_data(&fixture_quote_request(), EMPTY_APP_DATA_HASH)
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::QuoteFieldMismatch { field: "from", .. }),
+            "got: {err}"
+        );
+    }
+
+    /// R20: `to_signed_order_data` rejects a quote whose `validTo`
+    /// disagrees with the absolute expiry the caller pinned via
+    /// [`QuoteRequest::with_valid_to`]. Unpinned `validTo` stays the
+    /// orderbook's prerogative.
+    #[test]
+    fn to_signed_order_data_rejects_swapped_valid_to_when_request_pins_it() {
+        let quote = load_mainnet_quote();
+        let request = fixture_quote_request().with_valid_to(quote.quote.valid_to.wrapping_add(1));
+        let err = quote
+            .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                Error::QuoteFieldMismatch {
+                    field: "validTo",
+                    ..
+                }
+            ),
+            "got: {err}"
+        );
+    }
+
+    /// R20: `to_signed_order_data` rejects a quote whose
+    /// `partiallyFillable` flips the value the caller pinned. Without
+    /// the check, a hostile orderbook could partially fill an order
+    /// the user expected to be fill-or-kill (or vice versa).
+    #[test]
+    fn to_signed_order_data_rejects_swapped_partially_fillable_when_request_pins_it() {
+        let mut quote = load_mainnet_quote();
+        quote.quote.partially_fillable = true;
+        let request = fixture_quote_request().with_partially_fillable(false);
+        let err = quote
+            .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                Error::QuoteFieldMismatch {
+                    field: "partiallyFillable",
+                    ..
+                }
+            ),
+            "got: {err}"
+        );
+    }
+
+    /// R20: `to_signed_order_data` rejects a quote whose
+    /// `sellTokenBalance` swaps the source the caller pinned (ERC20
+    /// vs Vault internal balance vs external).
+    #[test]
+    fn to_signed_order_data_rejects_swapped_sell_token_balance_when_request_pins_it() {
+        let mut quote = load_mainnet_quote();
+        quote.quote.sell_token_balance = SellTokenSource::Internal;
+        let request = fixture_quote_request().with_sell_token_balance(SellTokenSource::Erc20);
+        let err = quote
+            .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                Error::QuoteFieldMismatch {
+                    field: "sellTokenBalance",
+                    ..
+                }
+            ),
+            "got: {err}"
+        );
+    }
+
+    /// R20: `to_signed_order_data` rejects a quote whose
+    /// `buyTokenBalance` swaps the destination the caller pinned.
+    #[test]
+    fn to_signed_order_data_rejects_swapped_buy_token_balance_when_request_pins_it() {
+        let mut quote = load_mainnet_quote();
+        quote.quote.buy_token_balance = BuyTokenDestination::Internal;
+        let request = fixture_quote_request().with_buy_token_balance(BuyTokenDestination::Erc20);
+        let err = quote
+            .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                Error::QuoteFieldMismatch {
+                    field: "buyTokenBalance",
+                    ..
+                }
+            ),
+            "got: {err}"
+        );
+    }
+
+    /// R20: `to_signed_order_data` rejects a quote whose
+    /// `signingScheme` swaps the scheme the caller pinned. The signed
+    /// payload itself does not commit to the scheme, but the
+    /// orderbook routes the resulting order under the wire scheme,
+    /// and a smart-contract caller pinning EIP-1271 must not have it
+    /// silently downgraded to PreSign.
+    #[test]
+    fn to_signed_order_data_rejects_swapped_signing_scheme_when_request_pins_it() {
+        let mut quote = load_mainnet_quote();
+        quote.quote.signing_scheme = SigningScheme::PreSign;
+        let request = fixture_quote_request().with_signing_scheme(SigningScheme::Eip712);
+        let err = quote
+            .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                Error::QuoteFieldMismatch {
+                    field: "signingScheme",
+                    ..
+                }
+            ),
+            "got: {err}"
+        );
+    }
+
     /// R21: `from_signed_order_data` rejects an `app_data` JSON document
     /// whose keccak256 does not match the `OrderData::app_data` digest
     /// the user signed against.
     #[test]
     fn from_signed_order_data_rejects_app_data_digest_mismatch() {
         let quote = load_mainnet_quote();
-        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
+        let signed = quote
+            .to_signed_order_data(&fixture_quote_request(), EMPTY_APP_DATA_HASH)
+            .unwrap();
         let err = OrderCreation::from_signed_order_data(
             signed,
             Signature::default_with(SigningScheme::Eip712),
@@ -1879,7 +2108,9 @@ mod tests {
     #[test]
     fn deserialise_rejects_app_data_digest_mismatch() {
         let quote = load_mainnet_quote();
-        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
+        let signed = quote
+            .to_signed_order_data(&fixture_quote_request(), EMPTY_APP_DATA_HASH)
+            .unwrap();
         let mut body = serde_json::to_value(
             OrderCreation::from_signed_order_data(
                 signed,
@@ -1995,7 +2226,9 @@ mod tests {
     #[test]
     fn order_creation_skips_optional_quote_id() {
         let quote = load_mainnet_quote();
-        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
+        let signed = quote
+            .to_signed_order_data(&fixture_quote_request(), EMPTY_APP_DATA_HASH)
+            .unwrap();
         let creation = OrderCreation::from_signed_order_data(
             signed,
             Signature::default_with(SigningScheme::Eip712),

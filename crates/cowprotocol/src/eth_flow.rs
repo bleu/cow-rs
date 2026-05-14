@@ -22,6 +22,7 @@
 use {
     crate::{
         app_data::AppDataHash,
+        error::{Error, Result},
         order::{BuyTokenDestination, OrderData, OrderKind, SellTokenSource},
     },
     alloy_primitives::{Address, U256, address},
@@ -61,16 +62,20 @@ pub const ETH_FLOW_STAGING: Address = address!("04501b9b1D52e67f6862d157E00D1341
 /// sells the chain's wrapped-native token; the caller passes that address
 /// in to [`EthFlowOrder::to_order_data`].
 ///
-/// `receiver` is modelled as `Option<Address>` to match
-/// [`OrderData::receiver`] semantics: `None` means the order owner receives
-/// the buy token, which the EthFlow contract encodes as the zero address.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+/// `receiver` is a mandatory non-zero address: the EthFlow contract is the
+/// EIP-1271 order owner, so the GPv2 "receiver = address(0) means the owner
+/// receives the buy token" sentinel would route proceeds to the contract
+/// rather than the original native-token seller. `CoWSwapEthFlow.createOrder`
+/// mirrors this invariant on-chain by reverting with `ReceiverMustBeSet()`;
+/// [`EthFlowOrder::to_order_data`] enforces it before any hash is produced.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct EthFlowOrder {
     /// Token the user wishes to buy with their native ETH.
     pub buy_token: Address,
-    /// Optional recipient of the buy token. `None` defers to the order owner
-    /// (i.e. the EthFlow contract's view of the original native-token sender).
-    pub receiver: Option<Address>,
+    /// Recipient of the buy token. Must be non-zero: the on-chain EthFlow
+    /// contract rejects `address(0)` because it is itself the order owner
+    /// under GPv2's owner-fallback semantics.
+    pub receiver: Address,
     /// Amount of native ETH being sold, in wei. Must equal
     /// `msg.value - fee_amount` when `createOrder` is invoked.
     pub sell_amount: U256,
@@ -99,8 +104,7 @@ impl EthFlowOrder {
     /// native gas token into: WETH on Ethereum mainnet, WXDAI on Gnosis
     /// Chain, and so on. The result is a sell order with `validTo` pinned to
     /// `u32::MAX` (the EthFlow contract enforces the user-facing expiry
-    /// separately) and an empty receiver folded into `Some(receiver)` when
-    /// set.
+    /// separately).
     ///
     /// Signing is implicit: the EthFlow contract is the order owner and
     /// signs via ERC-1271 ([`crate::signing_scheme::SigningScheme::Eip1271`])
@@ -108,11 +112,27 @@ impl EthFlowOrder {
     /// sentinel `0xEeee…EEeE` is *not* used here: it is a quote-time
     /// convenience for `OrderBookApi`; the on-chain order produced by this
     /// helper always sets `sell_token = wrapped_native_token`.
-    pub const fn to_order_data(&self, wrapped_native_token: Address) -> OrderData {
-        OrderData {
+    ///
+    /// Fails with [`Error::OrderCreationInvalid`] when `receiver` is the
+    /// zero address. The on-chain `CoWSwapEthFlow.createOrder` reverts with
+    /// `ReceiverMustBeSet()` in that case because the order owner is the
+    /// EthFlow contract; encoding `address(0)` in the signed payload would
+    /// route proceeds to the contract instead of the original native-token
+    /// seller. We check before producing any `OrderData` so a hostile or
+    /// careless caller cannot circulate a hash, UID or wire-form order
+    /// derived from the unsafe shape.
+    pub fn to_order_data(&self, wrapped_native_token: Address) -> Result<OrderData> {
+        if self.receiver == Address::ZERO {
+            return Err(Error::OrderCreationInvalid {
+                field: "receiver",
+                reason: "EthFlow orders require a non-zero receiver; the EthFlow contract \
+                    is the EIP-1271 order owner, so address(0) would route proceeds to it",
+            });
+        }
+        Ok(OrderData {
             sell_token: wrapped_native_token,
             buy_token: self.buy_token,
-            receiver: self.receiver,
+            receiver: Some(self.receiver),
             sell_amount: self.sell_amount,
             buy_amount: self.buy_amount,
             valid_to: u32::MAX,
@@ -122,7 +142,7 @@ impl EthFlowOrder {
             partially_fillable: self.partially_fillable,
             sell_token_balance: SellTokenSource::Erc20,
             buy_token_balance: BuyTokenDestination::Erc20,
-        }
+        })
     }
 }
 
@@ -155,13 +175,13 @@ mod tests {
     }
 
     /// `to_order_data` should pin `sell_token` to the supplied wrapped-native
-    /// token, propagate the receiver, force `valid_to = u32::MAX` and
-    /// `kind = Sell`, and leave the user-supplied amounts untouched.
+    /// token, lift the receiver into `Some(...)`, force `valid_to = u32::MAX`
+    /// and `kind = Sell`, and leave the user-supplied amounts untouched.
     #[test]
     fn to_order_data_projects_canonical_sell_order() {
         let eth_flow = EthFlowOrder {
             buy_token: address!("6B175474E89094C44Da98b954EedeAC495271d0F"), // DAI
-            receiver: Some(SAMPLE_RECEIVER),
+            receiver: SAMPLE_RECEIVER,
             sell_amount: U256::from(1_000_000_000_000_000_000_u128), // 1 ETH
             buy_amount: U256::from(3_500_000_000_000_000_000_000_u128), // 3,500 DAI
             app_data: AppDataHash([0xab; 32]),
@@ -173,7 +193,7 @@ mod tests {
             quote_id: 42,
         };
 
-        let order = eth_flow.to_order_data(WETH_MAINNET);
+        let order = eth_flow.to_order_data(WETH_MAINNET).unwrap();
 
         assert_eq!(order.sell_token, WETH_MAINNET);
         assert_eq!(order.buy_token, eth_flow.buy_token);
@@ -189,14 +209,17 @@ mod tests {
         assert_eq!(order.buy_token_balance, BuyTokenDestination::Erc20);
     }
 
-    /// A `None` receiver on the EthFlow side projects through unchanged so
-    /// that downstream EIP-712 hashing treats it as the zero address (matching
-    /// the EthFlow contract's behaviour of leaving the receiver slot empty).
+    /// Mirror the `ReceiverMustBeSet()` revert on `CoWSwapEthFlow.createOrder`:
+    /// projecting an EthFlow order whose receiver is the zero address must
+    /// fail before any `OrderData` (and therefore any hash, UID, or wire-form
+    /// order) is produced. Otherwise, with the EthFlow contract being the
+    /// EIP-1271 owner, GPv2's owner-fallback semantics would silently route
+    /// proceeds to the contract rather than the original native-token seller.
     #[test]
-    fn to_order_data_preserves_absent_receiver() {
+    fn to_order_data_rejects_zero_receiver() {
         let eth_flow = EthFlowOrder {
             buy_token: address!("6B175474E89094C44Da98b954EedeAC495271d0F"),
-            receiver: None,
+            receiver: Address::ZERO,
             sell_amount: U256::from(1_u8),
             buy_amount: U256::from(1_u8),
             app_data: AppDataHash::default(),
@@ -206,9 +229,37 @@ mod tests {
             quote_id: 0,
         };
 
-        let order = eth_flow.to_order_data(WETH_MAINNET);
-        assert_eq!(order.receiver, None);
-        assert_eq!(order.valid_to, u32::MAX);
-        assert!(order.partially_fillable);
+        let err = eth_flow.to_order_data(WETH_MAINNET).unwrap_err();
+        match err {
+            crate::Error::OrderCreationInvalid { field, .. } => assert_eq!(field, "receiver"),
+            other => panic!("expected OrderCreationInvalid, got {other:?}"),
+        }
+    }
+
+    /// Regression guard: the projected `OrderData.receiver` must hold the
+    /// concrete user address (i.e. `Some(receiver)`), so its EIP-712 hash
+    /// differs from one a future refactor that drops the receiver back to
+    /// `None` would produce. The zero-address fallback is exactly what the
+    /// audit finding flagged; failing this test means we have regressed.
+    #[test]
+    fn to_order_data_hash_binds_concrete_receiver() {
+        let eth_flow = EthFlowOrder {
+            buy_token: address!("6B175474E89094C44Da98b954EedeAC495271d0F"),
+            receiver: SAMPLE_RECEIVER,
+            sell_amount: U256::from(1_u8),
+            buy_amount: U256::from(1_u8),
+            app_data: AppDataHash::default(),
+            fee_amount: U256::ZERO,
+            valid_to: 0,
+            partially_fillable: false,
+            quote_id: 0,
+        };
+
+        let order = eth_flow.to_order_data(WETH_MAINNET).unwrap();
+        assert_eq!(order.receiver, Some(SAMPLE_RECEIVER));
+
+        let mut owner_fallback = order;
+        owner_fallback.receiver = None;
+        assert_ne!(order.hash_struct(), owner_fallback.hash_struct());
     }
 }

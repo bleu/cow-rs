@@ -85,7 +85,7 @@ pub enum Error {
 
     /// A field on the orderbook's quote response did not match the
     /// caller's [`crate::QuoteRequest`]. Raised by
-    /// [`crate::OrderQuoteResponse::to_signed_order_data_for`] before any
+    /// [`crate::OrderQuoteResponse::to_signed_order_data`] before any
     /// `OrderData` is returned, so a hostile orderbook cannot trick the
     /// caller into signing an order with a swapped buy token, recipient,
     /// or app-data digest.
@@ -128,6 +128,22 @@ pub enum Error {
     /// math cannot divide by zero downstream.
     #[error("quote sellAmount is zero, network cost projection undefined")]
     QuoteSellAmountZero,
+
+    /// A [`crate::quote_amounts::compute`] intermediate overflowed or
+    /// underflowed before reaching the signed [`crate::OrderData`].
+    /// Mirrors the fail-closed contract of [`Self::QuoteAmountOverflow`]
+    /// for the full fee-composition path: a hostile or malformed
+    /// orderbook response that would push `sellAmount`, `buyAmount`,
+    /// `feeAmount`, or `protocolFeeBps` into a U256-saturating
+    /// computation is rejected before any saturated bytes are folded
+    /// into a signature. `stage` labels the leg that failed (e.g.
+    /// `"before_all_fees.buy"`, `"protocol_fee.mul_div"`,
+    /// `"after_slippage.sell"`) so the offending input is greppable.
+    #[error("quote fee math overflow at {stage}")]
+    QuoteFeeMathOverflow {
+        /// Name of the projection leg whose checked arithmetic failed.
+        stage: &'static str,
+    },
 
     /// The keccak256 of an [`crate::AppDataDocument`]'s `fullAppData`
     /// bytes did not match the [`crate::AppDataHash`] it was paired with.

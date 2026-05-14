@@ -88,8 +88,10 @@ async fn main() -> cowprotocol::Result<()> {
     println!("fee amount:   {}", quote.quote.fee_amount);
     println!("valid to:     {}", quote.quote.valid_to);
 
-    // Step 2: project into the signed payload.
-    let order_data = quote.to_signed_order_data(EMPTY_APP_DATA_HASH)?;
+    // Step 2: project into the signed payload, binding the response
+    // to the original request so a hostile orderbook cannot trick us
+    // into signing a swapped token / receiver.
+    let order_data = quote.to_signed_order_data(&request, EMPTY_APP_DATA_HASH)?;
 
     // Step 3: sign under the Sepolia GPv2Settlement domain.
     let domain = DomainSeparator::new(Chain::Sepolia.id(), GPV2_SETTLEMENT);

@@ -27,3 +27,7 @@ tools/vector-gen/vectors.json
 # pkg-bundler/, pkg-nodejs/. Regenerate locally with `just wasm-build`
 # (dev) or `just wasm-build-all` (release).
 crates/cow-sdk-wasm/pkg*
+
+# Local PR description drafts. The current PR body lives on GitHub;
+# this file is the easy-to-copy working draft.
+PR_DESCRIPTION.md
