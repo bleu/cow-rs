@@ -70,10 +70,15 @@ sol! {
 
     /// Pointer to off-chain merkle proofs, recorded by
     /// `ComposableCoW.setRoot` so watch-towers know where to fetch the
-    /// leaf proofs from.
+    /// leaf proofs from. `location` is a `ProofLocation` enum in
+    /// `ComposableCoW.sol`; Solidity ABI-canonicalises enum parameters
+    /// as `uint8` for selector and event-signature hashing, so the
+    /// type here must be `uint8` (not `uint256`) for
+    /// [`MerkleRootSet::SIGNATURE_HASH`] to match the topic the contract
+    /// actually emits.
     #[derive(Debug, Eq, Hash, PartialEq)]
     struct Proof {
-        uint256 location;
+        uint8 location;
         bytes data;
     }
 
@@ -289,8 +294,12 @@ impl Display for TwapError {
         f.write_str(match self {
             Self::SameToken => "TWAP sell_token equals buy_token",
             Self::InvalidToken => "TWAP token is the zero address",
-            Self::InvalidSellAmount => "TWAP sell amount is zero or smaller than number_of_parts",
-            Self::InvalidBuyAmount => "TWAP buy amount is zero or smaller than number_of_parts",
+            Self::InvalidSellAmount => {
+                "TWAP sell amount is zero or does not divide cleanly across number_of_parts"
+            }
+            Self::InvalidBuyAmount => {
+                "TWAP buy amount is zero or does not divide cleanly across number_of_parts"
+            }
             Self::InvalidNumParts => "TWAP number_of_parts must be > 1",
             Self::InvalidFrequency => "TWAP time_between_parts must be > 0 and <= 365 days",
             Self::InvalidSpan => "TWAP LimitDuration span must be <= time_between_parts",
@@ -333,12 +342,17 @@ impl TwapData {
             TwapStart::AtEpoch(s) => s,
         };
         let n = U256::from(self.number_of_parts);
+        // Floor-division would silently discard the remainder and let
+        // the aggregate min-buy / max-sell drift below user intent
+        // (e.g. `buy_amount = 101, n = 10` ⇒ `minPartLimit = 10`,
+        // aggregate floor 100). Reject indivisible totals so the
+        // signed leaf matches the user's stated amounts exactly.
         let part_sell_amount = self.sell_amount / n;
         let min_part_limit = self.buy_amount / n;
-        if part_sell_amount.is_zero() {
+        if part_sell_amount.is_zero() || self.sell_amount % n != U256::ZERO {
             return Err(TwapError::InvalidSellAmount);
         }
-        if min_part_limit.is_zero() {
+        if min_part_limit.is_zero() || self.buy_amount % n != U256::ZERO {
             return Err(TwapError::InvalidBuyAmount);
         }
         Ok(TwapStaticInput {
@@ -427,7 +441,7 @@ mod tests {
     #[test]
     fn proof_round_trips_via_abi() {
         let proof = Proof {
-            location: U256::from(0_u64),
+            location: 0u8,
             data: Bytes::from_static(b"hello"),
         };
         let encoded = proof.abi_encode();
@@ -482,10 +496,13 @@ mod tests {
     /// emitted event.
     #[test]
     fn composable_cow_event_topic_hashes_match_keccak() {
-        // MerkleRootSet(address,bytes32,(uint256,bytes))
+        // MerkleRootSet(address,bytes32,(uint8,bytes)). `uint8` because
+        // `Proof.location` is a `ProofLocation` enum in
+        // `ComposableCoW.sol` and Solidity canonicalises enums to
+        // `uint8` for selector / event-signature hashing.
         assert_eq!(
             ComposableCoW::MerkleRootSet::SIGNATURE_HASH,
-            keccak256("MerkleRootSet(address,bytes32,(uint256,bytes))")
+            keccak256("MerkleRootSet(address,bytes32,(uint8,bytes))")
         );
         // ConditionalOrderCreated(address,(address,bytes32,bytes))
         assert_eq!(
@@ -596,6 +613,23 @@ mod tests {
         assert_eq!(
             tiny_sell.static_input().unwrap_err(),
             TwapError::InvalidSellAmount
+        );
+
+        // Indivisible totals must be rejected so the signed leaf
+        // matches user intent: 101 / 10 floors to a per-part 10 and
+        // an aggregate min-buy of 100, one unit below what the user
+        // asked for.
+        let mut indivisible_sell = base;
+        indivisible_sell.sell_amount = U256::from(101_u64);
+        assert_eq!(
+            indivisible_sell.static_input().unwrap_err(),
+            TwapError::InvalidSellAmount
+        );
+        let mut indivisible_buy = base;
+        indivisible_buy.buy_amount = U256::from(101_u64);
+        assert_eq!(
+            indivisible_buy.static_input().unwrap_err(),
+            TwapError::InvalidBuyAmount
         );
     }
 
