@@ -93,7 +93,7 @@ impl std::error::Error for MultiplexerError {}
 impl Multiplexer {
     /// Construct a tree from leaves derived via [`conditional_order_leaf`].
     ///
-    /// At each level pairs of nodes are combined with [`hash_pair`]; an
+    /// At each level pairs of nodes are combined with `hash_pair`; an
     /// odd trailing node is carried up unmodified. Matches OZ's
     /// `StandardMerkleTree` JS algorithm and the on-chain verifier's
     /// implicit expectations.
