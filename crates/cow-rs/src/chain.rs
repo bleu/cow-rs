@@ -94,6 +94,34 @@ impl Chain {
             .expect("hard-coded orderbook URL")
     }
 
+    /// Staging ("barn") orderbook base URL, e.g.
+    /// `https://barn.api.cow.fi/mainnet`. Returns `None` for chains
+    /// that do not have a published barn deployment.
+    ///
+    /// Barn is the pre-production environment the CoW team runs
+    /// alongside production. Integrators wire their staging stack
+    /// against barn before flipping the prod feature flag.
+    pub fn orderbook_barn_url(self) -> Option<url::Url> {
+        if !self.has_barn_deployment() {
+            return None;
+        }
+        Some(
+            url::Url::parse(&format!("https://barn.api.cow.fi/{}", self.orderbook_slug()))
+                .expect("hard-coded barn URL"),
+        )
+    }
+
+    /// Whether the orderbook team operates a staging ("barn")
+    /// deployment for this chain. Mainnet, Gnosis Chain, Sepolia and
+    /// Arbitrum One are barn-eligible; the other deployments only have
+    /// production endpoints.
+    pub const fn has_barn_deployment(self) -> bool {
+        matches!(
+            self,
+            Self::Mainnet | Self::Gnosis | Self::Sepolia | Self::ArbitrumOne
+        )
+    }
+
     /// CoW Protocol subgraph URL on The Graph Studio, mirroring
     /// `cowdao_cowpy.subgraph.deployments.NETWORK_SUBGRAPH_IDS_MAP`.
     ///
@@ -274,6 +302,30 @@ mod tests {
             assert_eq!(url.host_str(), Some("api.cow.fi"));
         }
         assert_eq!(seen.len(), 11);
+    }
+
+    #[test]
+    fn orderbook_barn_url_only_set_for_barn_chains() {
+        for chain in ALL {
+            match chain.orderbook_barn_url() {
+                Some(url) => {
+                    assert!(chain.has_barn_deployment(), "{chain:?}");
+                    assert_eq!(url.scheme(), "https");
+                    assert_eq!(url.host_str(), Some("barn.api.cow.fi"));
+                    assert!(url.path().contains(chain.orderbook_slug()));
+                }
+                None => {
+                    assert!(!chain.has_barn_deployment(), "{chain:?}");
+                }
+            }
+        }
+        // Sanity: at least the four canonical barn chains are present.
+        assert!(Chain::Mainnet.has_barn_deployment());
+        assert!(Chain::Gnosis.has_barn_deployment());
+        assert!(Chain::Sepolia.has_barn_deployment());
+        assert!(Chain::ArbitrumOne.has_barn_deployment());
+        // ...and at least one non-barn chain is correctly excluded.
+        assert!(!Chain::Bnb.has_barn_deployment());
     }
 
     #[test]
