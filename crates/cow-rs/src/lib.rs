@@ -2,20 +2,29 @@
 //!
 //! Rust SDK for the [CoW Protocol](https://cow.fi).
 //!
-//! Public surface so far:
+//! ## Surface
 //!
-//! - [`OrderData`] — the 12-field signed payload, with
-//!   [`OrderData::hash_struct`] for EIP-712 hashing and
-//!   [`OrderData::uid`] for the 56-byte order identifier.
-//! - [`DomainSeparator`] and [`hashed_eip712_message`] for the typed-data
-//!   envelope.
-//! - [`Chain`] — the five chains the CoW orderbook supports, with their
-//!   `api.cow.fi` URL slugs.
-//! - [`OrderBookApi`] — async client for `POST /api/v1/quote`.
-//!
-//! Everything else (signing, order submission, contract bindings, app-data
-//! schema, subgraph, composable orders) will land in subsequent commits so
-//! each addition can be reviewed in isolation.
+//! - [`OrderData`]: the 12-field signed payload, with
+//!   [`OrderData::hash_struct`] for EIP-712 hashing,
+//!   [`OrderData::uid`] for the 56-byte order identifier and
+//!   [`OrderData::sign`] for ECDSA signing.
+//! - [`DomainSeparator`], [`hashed_eip712_message`] and
+//!   [`hashed_ethsign_message`] for the typed-data envelope.
+//! - [`Signature`], [`EcdsaSignature`] and [`SignatureError`] covering
+//!   EIP-712, EthSign, EIP-1271 and PreSign schemes.
+//! - [`Chain`]: all eleven chains the orderbook supports
+//!   (Mainnet, Bnb, Gnosis, Polygon, Base, Plasma, Arbitrum One, Avalanche,
+//!   Ink, Linea, Sepolia), with their `api.cow.fi` URL slugs.
+//! - [`OrderBookApi`]: async client for the orderbook HTTP API, with
+//!   methods for quoting, posting, lookup, cancellation, trade and account
+//!   queries, native-price lookups and app-data pinning.
+//! - [`OrderCreation`], [`OrderCancellation`] and [`OrderCancellations`]
+//!   for the submission and cancellation flows.
+//! - [`AppDataHash`] and [`AppDataDoc`] for the canonical metadata
+//!   document and its keccak digest.
+//! - [`EthFlowOrder`] plus the [`ETH_FLOW_PRODUCTION`] /
+//!   [`ETH_FLOW_STAGING`] addresses for native-ETH sells via the
+//!   periphery EthFlow contract.
 //!
 //! ## Quote example
 //!
@@ -35,6 +44,9 @@
 //! println!("buy amount: {}", response.quote.buy_amount);
 //! # Ok(()) }
 //! ```
+//!
+//! See `examples/post_order.rs` for the full sign-and-submit flow on
+//! Sepolia.
 //!
 //! ## Parity references
 //!
