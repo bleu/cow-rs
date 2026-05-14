@@ -178,7 +178,7 @@ impl OrderData {
 /// fields (`sell_token`, `buy_token`) and the rest are set fluently.
 ///
 /// ```
-/// use cow_rs::{OrderBuilder, OrderKind};
+/// use cowprotocol::{OrderBuilder, OrderKind};
 /// use alloy_primitives::{U256, address};
 ///
 /// let order = OrderBuilder::new(

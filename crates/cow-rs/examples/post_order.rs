@@ -4,8 +4,8 @@
 //!
 //! 1. Ask the Sepolia orderbook for a quote on a small WETH -> COW swap.
 //! 2. Apply the documented submission adjustments via
-//!    [`cow_rs::OrderQuoteResponse::to_signed_order_data`].
-//! 3. Sign the resulting [`cow_rs::OrderData`] under the GPv2Settlement
+//!    [`cowprotocol::OrderQuoteResponse::to_signed_order_data`].
+//! 3. Sign the resulting [`cowprotocol::OrderData`] under the GPv2Settlement
 //!    domain with an EIP-712 ECDSA signature.
 //! 4. POST the signed body to `/api/v1/orders` and print the assigned UID
 //!    together with a CoW Explorer URL.
@@ -41,7 +41,7 @@
 use {
     alloy_primitives::{Address, U256, address},
     alloy_signer_local::PrivateKeySigner,
-    cow_rs::{
+    cowprotocol::{
         Chain, DomainSeparator, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON, EcdsaSigningScheme,
         GPV2_SETTLEMENT, OrderBookApi, OrderCreation, QuoteRequest,
     },
@@ -58,7 +58,7 @@ const COW_SEPOLIA: Address = address!("0625aFB445C3B6B7B929342a04A22599fd5dBB59"
 const SELL_AMOUNT_WEI: u128 = 10_000_000_000_000_000;
 
 #[tokio::main]
-async fn main() -> cow_rs::Result<()> {
+async fn main() -> cowprotocol::Result<()> {
     let Ok(raw_key) = std::env::var("SEPOLIA_PRIVATE_KEY") else {
         println!("set SEPOLIA_PRIVATE_KEY=... to run live (skipping)");
         return Ok(());
@@ -66,7 +66,7 @@ async fn main() -> cow_rs::Result<()> {
 
     // Configuration error: the env-supplied key must be valid hex. We
     // surface this immediately rather than smuggling it through
-    // `cow_rs::Error`, whose variants describe wire-format / signing /
+    // `cowprotocol::Error`, whose variants describe wire-format / signing /
     // orderbook failures, not user-input parsing.
     let signer = PrivateKeySigner::from_str(raw_key.trim())
         .expect("SEPOLIA_PRIVATE_KEY must be a 0x-prefixed 32-byte hex string");

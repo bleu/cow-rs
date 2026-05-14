@@ -1,4 +1,4 @@
-//! Integration tests for [`cow_rs::OrderBookApi`].
+//! Integration tests for [`cowprotocol::OrderBookApi`].
 //!
 //! Spins up an in-process [`wiremock::MockServer`] per test, points an
 //! [`OrderBookApi`] at it, and exercises every endpoint against canned
@@ -7,11 +7,11 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use alloy_primitives::{Address, U256, address};
-use cow_rs::{
-    AppDataHash, BuyTokenDestination, Chain, OrderBookApi, OrderCancellations, OrderCreation,
-    OrderData, OrderKind, OrderUid, QuoteRequest, SellTokenSource, Signature, SigningScheme,
-    order_book::AppDataDocument,
+use alloy_primitives::{Address, B256, U256, address};
+use cowprotocol::{
+    AppDataHash, BuyTokenDestination, Chain, OrderBookApi, OrderCancellation, OrderCancellations,
+    OrderCreation, OrderData, OrderKind, OrderUid, QuoteRequest, SellTokenSource, Signature,
+    SigningScheme, order_book::AppDataDocument,
 };
 use serde_json::json;
 use wiremock::{
@@ -82,7 +82,7 @@ async fn post_order_returns_assigned_uid() {
         order,
         Signature::default(),
         OWNER,
-        cow_rs::EMPTY_APP_DATA_JSON.to_owned(),
+        cowprotocol::EMPTY_APP_DATA_JSON.to_owned(),
         Some(123),
     )
     .unwrap();
@@ -107,7 +107,7 @@ async fn post_order_surfaces_orderbook_api_error() {
         OrderData::default(),
         Signature::default(),
         OWNER,
-        cow_rs::EMPTY_APP_DATA_JSON.to_owned(),
+        cowprotocol::EMPTY_APP_DATA_JSON.to_owned(),
         None,
     )
     .unwrap();
@@ -159,7 +159,7 @@ async fn get_order_decodes_full_order_record() {
     assert_eq!(order.uid, uid);
     assert_eq!(order.owner, OWNER);
     assert_eq!(order.data.sell_amount, U256::from(1_000_000_u64));
-    assert!(matches!(order.status, cow_rs::OrderStatus::Open));
+    assert!(matches!(order.status, cowprotocol::OrderStatus::Open));
 }
 
 #[tokio::test]
@@ -178,7 +178,7 @@ async fn get_order_status_decodes_lifecycle_payload() {
 
     let uid: OrderUid = uid_hex.parse().unwrap();
     let status = api(&server).get_order_status(&uid).await.unwrap();
-    assert_eq!(status.status_type, cow_rs::AuctionStatusType::Active);
+    assert_eq!(status.status_type, cowprotocol::AuctionStatusType::Active);
     assert_eq!(status.value.len(), 1);
 }
 
@@ -195,17 +195,65 @@ async fn cancel_orders_sends_signed_collection_and_accepts_200() {
     let signer =
         alloy_signer_local::PrivateKeySigner::from_bytes(&U256::from(1u64).to_be_bytes().into())
             .unwrap();
-    let domain = cow_rs::DomainSeparator::new(
+    let domain = cowprotocol::DomainSeparator::new(
         Chain::Mainnet.id(),
         address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
     );
     let signed = OrderCancellations {
         order_uids: vec![OrderUid([0x11; 56])],
     }
-    .sign(cow_rs::EcdsaSigningScheme::Eip712, &domain, &signer)
+    .sign(cowprotocol::EcdsaSigningScheme::Eip712, &domain, &signer)
     .unwrap();
 
     api(&server).cancel_orders(&signed).await.unwrap();
+}
+
+#[tokio::test]
+async fn cancel_order_puts_uid_in_path_and_omits_it_from_body() {
+    let server = MockServer::start().await;
+    let uid = OrderUid([0x11; 56]);
+    let uid_hex = uid.to_string();
+
+    Mock::given(method("DELETE"))
+        .and(path(format!("/api/v1/orders/{uid_hex}")))
+        .and(body_string_contains("\"signingScheme\":\"eip712\""))
+        .and(body_string_contains("\"signature\":"))
+        // The single-cancel body shape must NOT carry the UID; that's in
+        // the URL. Guard against a regression where we leak `orderUid`
+        // into the JSON.
+        .and(NotContains("\"orderUid\""))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let signer =
+        alloy_signer_local::PrivateKeySigner::from_bytes(&U256::from(1u64).to_be_bytes().into())
+            .unwrap();
+    let domain = cowprotocol::DomainSeparator::new(
+        Chain::Mainnet.id(),
+        address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
+    );
+    let cancellation = OrderCancellation::sign(
+        uid,
+        cowprotocol::EcdsaSigningScheme::Eip712,
+        &domain,
+        &signer,
+    )
+    .unwrap();
+
+    api(&server).cancel_order(&cancellation).await.unwrap();
+}
+
+/// `wiremock::matchers::Match` adapter for "body does NOT contain `s`".
+#[derive(Debug, Clone)]
+struct NotContains(&'static str);
+
+impl wiremock::Match for NotContains {
+    fn matches(&self, request: &wiremock::Request) -> bool {
+        !std::str::from_utf8(&request.body)
+            .map(|body| body.contains(self.0))
+            .unwrap_or(false)
+    }
 }
 
 #[tokio::test]
@@ -255,6 +303,79 @@ async fn trades_by_owner_filters_with_query_param() {
 
     let trades = api(&server).trades_by_owner(OWNER).await.unwrap();
     assert!(trades.is_empty());
+}
+
+#[tokio::test]
+async fn token_metadata_decodes_present_and_absent_fields() {
+    let server = MockServer::start().await;
+
+    // Both fields populated.
+    Mock::given(method("GET"))
+        .and(path(format!("/api/v1/token/{USDC:?}/metadata")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "firstTradeBlock": 17_456_789_u32,
+            "nativePrice": "123456789012345678",
+        })))
+        .mount(&server)
+        .await;
+
+    let metadata = api(&server).token_metadata(USDC).await.unwrap();
+    assert_eq!(metadata.first_trade_block, Some(17_456_789));
+    assert_eq!(
+        metadata.native_price,
+        Some(U256::from(123_456_789_012_345_678_u128))
+    );
+
+    // Both fields absent.
+    let other_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/api/v1/token/{DAI:?}/metadata")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(&other_server)
+        .await;
+    let empty = api(&other_server).token_metadata(DAI).await.unwrap();
+    assert!(empty.first_trade_block.is_none());
+    assert!(empty.native_price.is_none());
+}
+
+#[tokio::test]
+async fn orders_by_tx_fetches_settlement_orders() {
+    let server = MockServer::start().await;
+    let tx_hash = B256::repeat_byte(0xab);
+    Mock::given(method("GET"))
+        .and(path(format!("/api/v1/transactions/{tx_hash:?}/orders")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&server)
+        .await;
+
+    let orders = api(&server).orders_by_tx(tx_hash).await.unwrap();
+    assert!(orders.is_empty());
+}
+
+#[tokio::test]
+async fn upload_app_data_returns_server_computed_hash() {
+    let server = MockServer::start().await;
+    let computed_hash = AppDataHash([0xcd; 32]);
+    let expected_hex = format!("0x{}", const_hex::encode(computed_hash.0));
+
+    Mock::given(method("PUT"))
+        .and(path("/api/v1/app_data"))
+        .and(body_json(
+            json!({ "fullAppData": "{\"appCode\":\"cow-rs\"}" }),
+        ))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .insert_header("content-type", "application/json")
+                .set_body_string(format!("\"{expected_hex}\"")),
+        )
+        .mount(&server)
+        .await;
+
+    let document = AppDataDocument {
+        full_app_data: "{\"appCode\":\"cow-rs\"}".into(),
+    };
+    let hash = api(&server).upload_app_data(&document).await.unwrap();
+    assert_eq!(hash, computed_hash);
 }
 
 #[tokio::test]
@@ -417,7 +538,7 @@ async fn poll_until_runs_with_caller_supplied_sleep() {
     let order = api(&server)
         .poll_until(
             &uid,
-            |order| matches!(order.status, cow_rs::OrderStatus::Fulfilled),
+            |order| matches!(order.status, cowprotocol::OrderStatus::Fulfilled),
             || {
                 sleep_count.set(sleep_count.get() + 1);
                 std::future::ready(())
@@ -426,7 +547,7 @@ async fn poll_until_runs_with_caller_supplied_sleep() {
         .await
         .unwrap();
 
-    assert!(matches!(order.status, cow_rs::OrderStatus::Fulfilled));
+    assert!(matches!(order.status, cowprotocol::OrderStatus::Fulfilled));
     assert_eq!(
         sleep_count.get(),
         2,

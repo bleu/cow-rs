@@ -1,4 +1,7 @@
-//! # cow-rs
+//! # cowprotocol
+//!
+//! Crate name on crates.io. Hosted at
+//! [`cowdao-grants/cow-rs`](https://github.com/cowdao-grants/cow-rs).
 //!
 //! Rust SDK for the [CoW Protocol](https://cow.fi).
 //!
@@ -40,10 +43,10 @@
 //! ## Quote example
 //!
 //! ```no_run
-//! use cow_rs::{Chain, OrderBookApi, QuoteRequest};
+//! use cowprotocol::{Chain, OrderBookApi, QuoteRequest};
 //! use alloy_primitives::{Address, U256, address};
 //!
-//! # async fn run() -> cow_rs::Result<()> {
+//! # async fn run() -> cowprotocol::Result<()> {
 //! let api = OrderBookApi::new(Chain::Mainnet);
 //! let request = QuoteRequest::sell_amount_before_fee(
 //!     address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"), // USDC
@@ -115,8 +118,8 @@ pub use crate::{
     },
     order_book::{
         AppDataDocument, AuctionStatus, AuctionStatusType, NativePrice, OrderBookApi,
-        OrderCreation, OrderQuote, OrderQuoteResponse, PriceQuality, QuoteRequest, TotalSurplus,
-        Trade,
+        OrderCreation, OrderQuote, OrderQuoteResponse, PriceQuality, QuoteRequest, TokenMetadata,
+        TotalSurplus, Trade,
     },
     signature::{EcdsaSignature, Recovered, Signature, SignatureError},
     signing_scheme::{EcdsaSigningScheme, SigningScheme},

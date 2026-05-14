@@ -1,7 +1,7 @@
 # cow-rs
 
-[![crates.io](https://img.shields.io/crates/v/cow-rs.svg)](https://crates.io/crates/cow-rs)
-[![docs.rs](https://docs.rs/cow-rs/badge.svg)](https://docs.rs/cow-rs)
+[![crates.io](https://img.shields.io/crates/v/cowprotocol.svg)](https://crates.io/crates/cowprotocol)
+[![docs.rs](https://docs.rs/cowprotocol/badge.svg)](https://docs.rs/cowprotocol)
 [![CI](https://github.com/cowdao-grants/cow-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/cowdao-grants/cow-rs/actions/workflows/ci.yml)
 [![Licence: GPL-3.0-or-later](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue)](./LICENSE)
 
@@ -38,22 +38,26 @@ every protocol-critical path byte-for-byte against
 
 ```toml
 [dependencies]
-cow-rs = "1.0.0-alpha"
+cowprotocol = "1.0.0-alpha"
 ```
+
+The crate is published as `cowprotocol` on crates.io (the `cow-rs` name was already taken on
+crates.io by an unrelated publisher before this SDK existed); the source lives at
+[`cowdao-grants/cow-rs`](https://github.com/cowdao-grants/cow-rs).
 
 MSRV `1.91`, edition `2024`.
 
 ## Quick start: quote, sign, submit
 
 ```rust,no_run
-use cow_rs::{
+use cowprotocol::{
     Chain, DomainSeparator, EcdsaSigningScheme, EMPTY_APP_DATA_HASH,
     EMPTY_APP_DATA_JSON, OrderBookApi, OrderCreation, QuoteRequest,
 };
 use alloy_primitives::{U256, address};
 use alloy_signer_local::PrivateKeySigner;
 
-# async fn run(signer: PrivateKeySigner) -> cow_rs::Result<()> {
+# async fn run(signer: PrivateKeySigner) -> cowprotocol::Result<()> {
 let api = OrderBookApi::new(Chain::Mainnet);
 
 // 1. Quote.
@@ -98,7 +102,7 @@ an embedded context, or anywhere else a tokio reactor is hostile,
 without pulling in `reqwest` or `tokio`.
 
 ```rust
-use cow_rs::{OrderBuilder, OrderKind, DomainSeparator, Chain};
+use cowprotocol::{OrderBuilder, OrderKind, DomainSeparator, Chain};
 use alloy_primitives::{U256, address};
 
 let order = OrderBuilder::new(
@@ -133,7 +137,7 @@ assert_eq!(uid.0.len(), 56);
 | `contracts` | `GPv2Settlement` (settle + events), `CoWSwapOnchainOrders` (ETH-flow events), `ERC20`, `WETH9`, `GPV2_SETTLEMENT`, `GPV2_VAULT_RELAYER` |
 | `subgraph` | `SubgraphClient` typed access to CoW's subgraph; totals, daily / hourly volume; opt-in bearer-token auth for the gateway URL |
 
-Everything is re-exported at the crate root: `use cow_rs::...`.
+Everything is re-exported at the crate root: `use cowprotocol::...`.
 
 ## WASM
 

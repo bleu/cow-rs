@@ -9,7 +9,7 @@
 
 use {
     alloy_primitives::{Address, U256, address},
-    cow_rs::{Chain, OrderBookApi, QuoteRequest},
+    cowprotocol::{Chain, OrderBookApi, QuoteRequest},
 };
 
 // Ethereum mainnet USDC.
@@ -21,7 +21,7 @@ const DAI: Address = address!("6B175474E89094C44Da98b954EedeAC495271d0F");
 const OWNER: Address = address!("70997970C51812dc3A010C7d01b50e0d17dc79C8");
 
 #[tokio::main]
-async fn main() -> cow_rs::Result<()> {
+async fn main() -> cowprotocol::Result<()> {
     let api = OrderBookApi::new(Chain::Mainnet);
     let request = QuoteRequest::sell_amount_before_fee(
         USDC,
@@ -41,7 +41,7 @@ async fn main() -> cow_rs::Result<()> {
     // Project the quote into the signed payload and print its UID for the
     // configured chain: this is what we would sign in the next step.
     let order_data = response.quote.to_order_data();
-    let domain = cow_rs::DomainSeparator::new(
+    let domain = cowprotocol::DomainSeparator::new(
         Chain::Mainnet.id(),
         address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
     );

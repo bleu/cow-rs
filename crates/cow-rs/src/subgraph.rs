@@ -14,8 +14,8 @@
 //! and the bearer token directly:
 //!
 //! ```no_run
-//! use cow_rs::SubgraphClient;
-//! # async fn run() -> cow_rs::Result<()> {
+//! use cowprotocol::SubgraphClient;
+//! # async fn run() -> cowprotocol::Result<()> {
 //! let client = SubgraphClient::new(
 //!     "https://gateway.thegraph.com/api/<key>/subgraphs/id/<id>"
 //!         .parse()

@@ -5,17 +5,60 @@
 //! by `@cowprotocol/cow-sdk` and `cow-py`. The request and response shapes
 //! reflect the production orderbook OpenAPI as of 2026-05.
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::{Address, B256, U256};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
 use crate::app_data::AppDataHash;
-use crate::cancellation::SignedOrderCancellations;
+use crate::cancellation::{OrderCancellation, SignedOrderCancellations};
 use crate::chain::Chain;
 use crate::error::{ApiError, Error, Result};
 use crate::order::{BuyTokenDestination, Order, OrderData, OrderKind, OrderUid, SellTokenSource};
-use crate::signature::Signature;
-use crate::signing_scheme::SigningScheme;
+use crate::signature::{EcdsaSignature, Signature};
+use crate::signing_scheme::{EcdsaSigningScheme, SigningScheme};
+
+/// App-data binding on a quote request.
+///
+/// The orderbook's `POST /api/v1/quote` accepts a single `appData`
+/// field whose content can be either the 32-byte digest (hex) or the
+/// canonical JSON document. Solvers price against the resulting
+/// `app_data` field of the [`OrderData`] they expect to sign, so the
+/// caller decides whether to commit to a digest or hand the orderbook
+/// the full document. Mirrors the `OrderCreationAppData::{Hash, Full}`
+/// variants in `cowprotocol/services/crates/model/src/quote.rs`.
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum QuoteAppData {
+    /// 32-byte digest only. Orderbook keeps the digest; the full
+    /// document remains opaque until someone pins it via
+    /// [`OrderBookApi::put_app_data`]. Serialises directly as a
+    /// `0x`-prefixed hex string under the parent's `appData` key.
+    Hash(AppDataHash),
+    /// Canonical JSON document; orderbook computes the digest itself
+    /// and serves it back on subsequent `GET /api/v1/app_data/{hash}`
+    /// queries. Serialises as a JSON string literal whose body is the
+    /// document JSON (not as a nested object).
+    Full(String),
+}
+
+impl QuoteAppData {
+    /// Bind the quote to a pre-computed digest.
+    pub const fn hash(digest: AppDataHash) -> Self {
+        Self::Hash(digest)
+    }
+
+    /// Bind the quote to a canonical JSON document; orderbook computes
+    /// the digest.
+    pub const fn full(full: String) -> Self {
+        Self::Full(full)
+    }
+}
+
+impl From<AppDataHash> for QuoteAppData {
+    fn from(digest: AppDataHash) -> Self {
+        Self::Hash(digest)
+    }
+}
 
 /// Quote price-quality knob the orderbook accepts on `POST
 /// /api/v1/quote`. Solvers honour the hint by trading off latency
@@ -94,6 +137,24 @@ pub struct TotalSurplus {
     pub total_surplus: String,
 }
 
+/// Per-token metadata returned by `GET /api/v1/token/{token}/metadata`.
+///
+/// Both fields are absent for tokens the orderbook has never seen.
+#[serde_as]
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenMetadata {
+    /// Block at which the first trade of this token was indexed, or
+    /// `None` if the orderbook has not observed a trade for it.
+    #[serde(default)]
+    pub first_trade_block: Option<u32>,
+    /// Most recent native-price quote in atomic units of the chain's
+    /// native token. Encoded as a decimal-or-hex string on the wire.
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub native_price: Option<U256>,
+}
+
 /// Response of `GET /api/v1/app_data/{hash}` and input to
 /// [`OrderBookApi::put_app_data`]. Carries the canonical JSON string of
 /// the document; when hashed with `keccak256` this yields the [`AppDataHash`]
@@ -110,6 +171,17 @@ pub struct AppDataDocument {
 #[serde(rename_all = "camelCase")]
 struct OrdersByUidsRequest<'a> {
     order_uids: &'a [OrderUid],
+}
+
+/// Wire body for `DELETE /api/v1/orders/{uid}`. The UID lives in the URL,
+/// so the body is just the signature material; this mirrors the upstream
+/// `CancellationPayload` shape in `cowprotocol/services/crates/model/
+/// src/order.rs`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CancellationPayload<'a> {
+    signature: &'a EcdsaSignature,
+    signing_scheme: EcdsaSigningScheme,
 }
 
 fn hex_string(bytes: &[u8]) -> String {
@@ -199,7 +271,7 @@ pub struct QuoteRequest {
     pub valid_for: Option<u32>,
     /// Optional pre-computed app-data digest.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub app_data: Option<AppDataHash>,
+    pub app_data: Option<QuoteAppData>,
     /// Whether to allow partial fills.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub partially_fillable: Option<bool>,
@@ -310,9 +382,21 @@ impl QuoteRequest {
         self
     }
 
-    /// Set the order's app-data digest.
-    pub const fn with_app_data(mut self, app_data: AppDataHash) -> Self {
-        self.app_data = Some(app_data);
+    /// Set the order's app-data digest (the common case). Wraps the
+    /// hash into [`QuoteAppData::Hash`].
+    ///
+    /// Not `const fn` because [`QuoteAppData::Full`] holds a `String`,
+    /// which the compiler cannot drop at const-evaluation time even
+    /// though this constructor only ever stores the `Hash` variant.
+    pub fn with_app_data(mut self, app_data: AppDataHash) -> Self {
+        self.app_data = Some(QuoteAppData::Hash(app_data));
+        self
+    }
+
+    /// Bind the quote to the canonical JSON document instead of just
+    /// the digest. The orderbook computes and pins the hash itself.
+    pub fn with_app_data_full(mut self, full_app_data: impl Into<String>) -> Self {
+        self.app_data = Some(QuoteAppData::Full(full_app_data.into()));
         self
     }
 
@@ -868,6 +952,21 @@ impl OrderBookApi {
             .await
     }
 
+    /// `GET /api/v1/token/{token}/metadata`: first-trade block and the
+    /// most recent native-price quote the orderbook has cached.
+    pub async fn token_metadata(&self, token: Address) -> Result<TokenMetadata> {
+        self.get_json(&format!("api/v1/token/{token:?}/metadata"))
+            .await
+    }
+
+    /// `GET /api/v1/transactions/{hash}/orders`: every order settled in
+    /// the given transaction. Returns an empty list if the hash does not
+    /// correspond to a known settlement.
+    pub async fn orders_by_tx(&self, tx_hash: B256) -> Result<Vec<Order>> {
+        self.get_json(&format!("api/v1/transactions/{tx_hash:?}/orders"))
+            .await
+    }
+
     /// `GET /api/v1/users/{user}/total_surplus`: cumulative surplus the
     /// user has captured across all of their orders.
     pub async fn total_surplus(&self, user: Address) -> Result<TotalSurplus> {
@@ -902,6 +1001,21 @@ impl OrderBookApi {
             |_| Err(Error::UnexpectedStatus { status, body: text }),
             |api| Err(Error::OrderbookApi { status, api }),
         )
+    }
+
+    /// `PUT /api/v1/app_data`: pin a document without committing to a
+    /// hash upfront; the orderbook computes the digest from the body and
+    /// returns it. Use this when the client wants the server to be the
+    /// source of truth for the canonical hash, or when porting code that
+    /// has the document but not its digest. The hashed variant
+    /// ([`OrderBookApi::put_app_data`]) is preferred when the caller has
+    /// already pinned an [`AppDataHash`] in a signed order.
+    ///
+    /// Returns the digest the orderbook computed; status `201 Created`
+    /// for a fresh pin or `200 OK` if the orderbook already had it on
+    /// file.
+    pub async fn upload_app_data(&self, document: &AppDataDocument) -> Result<AppDataHash> {
+        self.put_json("api/v1/app_data", document).await
     }
 
     /// `GET /api/v1/version`: the orderbook server's free-form version
@@ -948,6 +1062,35 @@ impl OrderBookApi {
         )
     }
 
+    /// `DELETE /api/v1/orders/{uid}`: soft-cancel a single order. The
+    /// UID is taken from `cancellation.order_uid` and placed in the URL;
+    /// the body carries only the signature and signing scheme, matching
+    /// the upstream `CancellationPayload` wire shape.
+    ///
+    /// Like [`OrderBookApi::cancel_orders`], the cancellation is "soft":
+    /// orders that have already been picked up by a solver may still
+    /// settle. For pre-signed and EthFlow orders use the on-chain
+    /// invalidation path instead.
+    pub async fn cancel_order(&self, cancellation: &OrderCancellation) -> Result<()> {
+        let url = self
+            .base_url
+            .join(&format!("api/v1/orders/{}", cancellation.order_uid))?;
+        let body = CancellationPayload {
+            signature: &cancellation.signature,
+            signing_scheme: cancellation.signing_scheme,
+        };
+        let response = self.client.delete(url).json(&body).send().await?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let text = response.text().await?;
+        serde_json::from_str::<ApiError>(&text).map_or_else(
+            |_| Err(Error::UnexpectedStatus { status, body: text }),
+            |api| Err(Error::OrderbookApi { status, api }),
+        )
+    }
+
     async fn post_json<TReq, TResp>(&self, path: &str, body: &TReq) -> Result<TResp>
     where
         TReq: Serialize + ?Sized,
@@ -956,6 +1099,20 @@ impl OrderBookApi {
         let response = self
             .client
             .post(self.base_url.join(path)?)
+            .json(body)
+            .send()
+            .await?;
+        Self::decode_response(response).await
+    }
+
+    async fn put_json<TReq, TResp>(&self, path: &str, body: &TReq) -> Result<TResp>
+    where
+        TReq: Serialize + ?Sized,
+        TResp: for<'de> Deserialize<'de>,
+    {
+        let response = self
+            .client
+            .put(self.base_url.join(path)?)
             .json(body)
             .send()
             .await?;
@@ -1014,6 +1171,29 @@ mod tests {
 
     fn fixture_quote_request() -> QuoteRequest {
         QuoteRequest::sell_amount_before_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64))
+    }
+
+    #[test]
+    fn quote_request_emits_app_data_hash_form() {
+        let request = fixture_quote_request().with_app_data(crate::EMPTY_APP_DATA_HASH);
+        let body = serde_json::to_value(request).unwrap();
+        assert_eq!(
+            body["appData"],
+            serde_json::Value::String(
+                "0xb48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d".to_owned()
+            )
+        );
+        // QuoteRequest's `appData` field is overloaded by content; there
+        // is no separate `appDataHash` key on the quote wire shape.
+        assert!(body.get("appDataHash").is_none());
+    }
+
+    #[test]
+    fn quote_request_emits_app_data_full_form() {
+        let request = fixture_quote_request().with_app_data_full(crate::EMPTY_APP_DATA_JSON);
+        let body = serde_json::to_value(request).unwrap();
+        assert_eq!(body["appData"], serde_json::Value::String("{}".to_owned()));
+        assert!(body.get("appDataHash").is_none());
     }
 
     #[test]
