@@ -41,3 +41,19 @@ python3 -m http.server 8765
    computed `uid` is the expected 56-byte shape.
 
 Both panels report ✅ / ❌ inline with the raw JSON beneath.
+
+## Build targets
+
+The harness uses the `--target web` build because it loads the wasm
+package as an ES module via a `<script type="module">` tag. The crate
+also ships release builds for the other two `wasm-pack` targets, each
+in its own output directory so they can coexist:
+
+| Target  | Recipe                | Output dir   | Consumers                  |
+| ------- | --------------------- | ------------ | -------------------------- |
+| web     | `just wasm-build-web` | `pkg-web/`   | Plain browser ES modules.  |
+| bundler | `just wasm-build-bundler` | `pkg-bundler/` | webpack, Vite, Rollup. |
+| nodejs  | `just wasm-build-nodejs` | `pkg-nodejs/` | Node 18+, CommonJS.    |
+
+Run `just wasm-build-all` to produce all three, then `just wasm-size`
+to print the `.wasm` byte sizes after `wasm-opt -Oz`.

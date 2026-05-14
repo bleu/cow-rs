@@ -190,7 +190,7 @@ Production readiness:
 - ✅ Mock-server integration coverage for every `OrderBookApi` method
 - ✅ WASM compilation gate in CI plus an in-browser e2e harness
 - ✅ `cargo clippy -- -Dwarnings`, no `unsafe`, no `anyhow` in lib code
-- ⏳ Publishing to crates.io as `cowprotocol`
+- ✅ Published to crates.io as [`cowprotocol`](https://crates.io/crates/cowprotocol)
 
 ## Building
 
@@ -209,8 +209,9 @@ just doc          # cargo doc with -D warnings
 ```
 crates/cow-rs/                # Library crate; everything re-exported from the root
 crates/cow-rs/examples/       # get_quote.rs, post_order.rs
+crates/cow-rs-wasm/           # #[wasm_bindgen] shim driving the in-browser harness (unpublished)
+test-harness/                 # Static HTML harness; `just wasm-harness` to run
 tools/vector-gen/             # Node.js golden-vector generator (ethers reference)
-recon/                        # Internal recon docs (gitignored, not published)
 ```
 
 ## Contributing

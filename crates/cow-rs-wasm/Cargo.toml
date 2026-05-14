@@ -24,3 +24,11 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 serde-wasm-bindgen = "0.6"
 console_error_panic_hook = "0.1"
+
+[package.metadata.wasm-pack.profile.release]
+# -Oz biases binaryen for binary size over speed (~30% smaller than
+# the default -O). Hot paths in this shim are network-bound (reqwest)
+# or one-shot EIP-712 hashing; speed regressions from -Oz are not
+# user-visible. Bulk-memory + mutable-globals are baseline post-MVP
+# features all the targeted browsers ship.
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-mutable-globals"]
