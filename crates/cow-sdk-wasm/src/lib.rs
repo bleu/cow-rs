@@ -160,6 +160,53 @@ pub fn domain_separator(chain: &str) -> Result<String, JsValue> {
     Ok(format!("0x{}", const_hex::encode(domain.0)))
 }
 
+/// Canonical EIP-712 typed-data payload for an order, ready to feed
+/// into viem's `signTypedData` or ethers' `signer.signTypedData`. Lets
+/// JS callers sign with their own wallet without redefining the
+/// `Order` type or the `Gnosis Protocol` domain separator.
+///
+/// Returns `{ domain, primaryType, types, message }`. The `message`
+/// normalises `receiver: null` to `address(0)` so the hash the wallet
+/// signs matches what `OrderData::hash_struct` computes server-side.
+#[wasm_bindgen]
+pub fn eip712_payload(order_data: JsValue, chain: &str) -> Result<JsValue, JsValue> {
+    let order: OrderData = from_js(order_data)?;
+    let c = parse_chain(chain)?;
+    let mut message = serde_json::to_value(order)
+        .map_err(|err| JsValue::from_str(&format!("serialise order failed: {err}")))?;
+    // null receiver gets hashed as address(0); make that explicit.
+    if message.get("receiver").is_none_or(serde_json::Value::is_null) {
+        message["receiver"] = serde_json::Value::String(Address::ZERO.to_string());
+    }
+    let payload = serde_json::json!({
+        "domain": {
+            "name": "Gnosis Protocol",
+            "version": "v2",
+            "chainId": c.id(),
+            "verifyingContract": c.settlement().to_string(),
+        },
+        "primaryType": "Order",
+        "types": {
+            "Order": [
+                {"name": "sellToken",          "type": "address"},
+                {"name": "buyToken",           "type": "address"},
+                {"name": "receiver",           "type": "address"},
+                {"name": "sellAmount",         "type": "uint256"},
+                {"name": "buyAmount",          "type": "uint256"},
+                {"name": "validTo",            "type": "uint32"},
+                {"name": "appData",            "type": "bytes32"},
+                {"name": "feeAmount",          "type": "uint256"},
+                {"name": "kind",               "type": "string"},
+                {"name": "partiallyFillable",  "type": "bool"},
+                {"name": "sellTokenBalance",   "type": "string"},
+                {"name": "buyTokenBalance",    "type": "string"},
+            ],
+        },
+        "message": message,
+    });
+    to_js(&payload)
+}
+
 /// `keccak256(order)` struct hash (the input to EIP-712's `_hashTypedData`).
 /// Accepts the same JSON shape that `OrderData` serialises to.
 #[wasm_bindgen]

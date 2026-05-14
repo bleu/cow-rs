@@ -54,7 +54,22 @@
   </section>
 
   <section>
-    <h2>3. <code>sign_eip712</code> — in-shim ECDSA signing</h2>
+    <h2>3. <code>eip712_payload</code> — cross-library digest parity</h2>
+    <p>
+      Builds the canonical viem / ethers typed-data input via the shim's
+      <code>eip712_payload</code>, then hashes it independently with
+      viem's <code>hashTypedData</code>, ethers' <code>TypedDataEncoder</code>,
+      and the cow TS SDK's <code>OrderSigningUtils</code>. All four
+      digests (including the shim's own <code>order_struct_hash</code> +
+      <code>eip712_message_hash</code> path) must match byte for byte.
+    </p>
+    <button id="run-parity">Compare digests</button>
+    <p id="parity-status" class="pending">click the button to run</p>
+    <pre id="parity-output"></pre>
+  </section>
+
+  <section>
+    <h2>4. <code>sign_eip712</code> — in-shim ECDSA signing</h2>
     <p>
       Signs the same fixed order with a hardhat-test private key (anvil
       account #1). Pure compute; proves <code>k256</code> works inside
@@ -73,7 +88,7 @@
   <p class="group">Live orderbook (network)</p>
 
   <section>
-    <h2>4. <code>get_quote_simple</code> — quote against api.cow.fi mainnet</h2>
+    <h2>5. <code>get_quote_simple</code> — quote against api.cow.fi mainnet</h2>
     <p>
       Hits the live orderbook. Demonstrates reqwest's browser-fetch backend,
       CORS, JSON deserialisation across the wasm boundary, and UID derivation
@@ -86,7 +101,7 @@
   </section>
 
   <section>
-    <h2>5. <code>version</code> — orderbook git revision</h2>
+    <h2>6. <code>version</code> — orderbook git revision</h2>
     <p>
       Calls <code>GET /api/v1/version</code> against
       <code>api.cow.fi/mainnet</code>. Smallest possible network test;
@@ -101,10 +116,17 @@
     import init, {
       chain_info,
       compute_order_uid,
+      domain_separator,
+      eip712_message_hash,
+      eip712_payload,
       get_quote_simple,
+      order_struct_hash,
       sign_eip712,
       version,
     } from '../crates/cow-sdk-wasm/pkg/cow_sdk_wasm.js';
+    import { hashTypedData } from 'https://esm.sh/viem@2.21.0';
+    import { TypedDataEncoder } from 'https://esm.sh/ethers@6.13.4';
+    import { OrderSigningUtils } from 'https://esm.sh/@cowprotocol/cow-sdk@5.13.0?bundle';
 
     const USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
     const DAI  = '0x6B175474E89094C44Da98b954EedeAC495271d0F';
@@ -164,7 +186,49 @@
         return { body: info, summary: `id=${info.id}, settlement=${info.settlement.slice(0, 10)}…` };
       });
 
-      // Panel 3: sign_eip712.
+      // Panel 3: cross-library EIP-712 digest parity.
+      runOnClick('run-parity', 'parity-status', 'parity-output', async () => {
+        const orderData = {
+          sellToken: USDC, buyToken: DAI, receiver: null,
+          sellAmount: '100000000', buyAmount: '99000000000000000000',
+          validTo: 4294967295,
+          appData: '0xb48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d',
+          feeAmount: '0', kind: 'sell', partiallyFillable: false,
+          sellTokenBalance: 'erc20', buyTokenBalance: 'erc20',
+        };
+        const payload = eip712_payload(orderData, 'mainnet');
+
+        // shim path: domain_separator + order_struct_hash + eip712_message_hash.
+        const shimDigest = eip712_message_hash(
+          domain_separator('mainnet'),
+          order_struct_hash(orderData),
+        );
+
+        // viem.
+        const viemDigest = hashTypedData(payload);
+
+        // ethers v6. TypedDataEncoder ignores primaryType (it derives it).
+        const ethersDigest = TypedDataEncoder.hash(payload.domain, payload.types, payload.message);
+
+        // cow TS SDK. OrderSigningUtils.getEIP712Types omits the message;
+        // OrderSigningUtils.hashOrder takes (chainId, order) and returns
+        // the same digest using ethers internally.
+        const cowSdkDigest = await OrderSigningUtils.hashOrder(1, orderData);
+
+        const all = [shimDigest, viemDigest, ethersDigest, cowSdkDigest].map(d => d.toLowerCase());
+        const matches = all.every(d => d === all[0]);
+        const body = {
+          shim:    shimDigest,
+          viem:    viemDigest,
+          ethers:  ethersDigest,
+          cowSdk:  cowSdkDigest,
+          matches,
+        };
+        if (!matches) throw new Error('digests diverge across libraries');
+        return { body, summary: `4 libraries agree on ${shimDigest.slice(0, 14)}…` };
+      });
+
+      // Panel 4: sign_eip712.
       runOnClick('run-sign', 'sign-status', 'sign-output', async () => {
         const pk = document.getElementById('signer-pk').value.trim();
         const orderData = {
