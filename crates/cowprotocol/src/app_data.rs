@@ -581,18 +581,38 @@ impl AppDataDoc {
     /// Builder: attach a *volume* partner fee (`bps` of the swap value
     /// to `recipient`). Shortcut for [`AppDataDoc::with_partner_fee_policy`]
     /// with a [`FeePolicy::Volume`].
-    pub const fn with_partner_fee(mut self, bps: u32, recipient: Address) -> Self {
-        self.metadata.partner_fee = Some(AppDataPartnerFee {
-            policy: FeePolicy::Volume { bps: bps as u64 },
-            recipient,
-        });
-        self
+    ///
+    /// Returns [`AppDataError::FeeOutOfRange`] when `bps` exceeds
+    /// [`PARTNER_FEE_BPS_MAX`] (`10_000`). The settlement contract caps
+    /// partner fees at 100 %, so an over-cap value would be either
+    /// silently clamped or rejected post-settle; the builder fails
+    /// closed so an attacker-controlled value cannot be folded into the
+    /// signed app-data digest unchecked.
+    pub fn with_partner_fee(
+        mut self,
+        bps: u32,
+        recipient: Address,
+    ) -> Result<Self, AppDataError> {
+        let policy = FeePolicy::Volume { bps: bps as u64 };
+        validate_fee_policy(&policy)?;
+        self.metadata.partner_fee = Some(AppDataPartnerFee { policy, recipient });
+        Ok(self)
     }
 
     /// Builder: attach a partner fee with an explicit [`FeePolicy`].
-    pub const fn with_partner_fee_policy(mut self, policy: FeePolicy, recipient: Address) -> Self {
+    ///
+    /// Returns [`AppDataError::FeeOutOfRange`] when any `bps` or
+    /// `maxVolumeBps` field of `policy` exceeds [`PARTNER_FEE_BPS_MAX`]
+    /// (`10_000`). See [`AppDataDoc::with_partner_fee`] for the
+    /// rationale.
+    pub fn with_partner_fee_policy(
+        mut self,
+        policy: FeePolicy,
+        recipient: Address,
+    ) -> Result<Self, AppDataError> {
+        validate_fee_policy(&policy)?;
         self.metadata.partner_fee = Some(AppDataPartnerFee { policy, recipient });
-        self
+        Ok(self)
     }
 
     /// Builder: attach a typed [`AppDataFlashloan`].
@@ -1192,6 +1212,7 @@ mod tests {
         let doc = AppDataDoc::new("app")
             .with_referrer(address!("0000000000000000000000000000000000000001"))
             .with_partner_fee(50, address!("0000000000000000000000000000000000000002"))
+            .unwrap()
             .with_order_class(OrderClass::Limit)
             .with_slippage_bips(25)
             .with_environment("prod");
@@ -1214,7 +1235,9 @@ mod tests {
     #[test]
     fn partner_fee_volume_round_trips_with_legacy_bps_key() {
         let recipient = address!("00000000219AB540356CBb839CbE05303D7705FA");
-        let doc = AppDataDoc::new("app").with_partner_fee(75, recipient);
+        let doc = AppDataDoc::new("app")
+            .with_partner_fee(75, recipient)
+            .unwrap();
         let json = doc.canonical_json();
         // Volume serialises with the legacy `"bps"` key so existing
         // app-data hashes stay stable. The `recipient` is in the same
@@ -1236,13 +1259,15 @@ mod tests {
     #[test]
     fn partner_fee_surplus_emits_typed_keys() {
         let recipient = address!("00000000219AB540356CBb839CbE05303D7705FA");
-        let doc = AppDataDoc::new("app").with_partner_fee_policy(
-            FeePolicy::Surplus {
-                bps: 25,
-                max_volume_bps: 100,
-            },
-            recipient,
-        );
+        let doc = AppDataDoc::new("app")
+            .with_partner_fee_policy(
+                FeePolicy::Surplus {
+                    bps: 25,
+                    max_volume_bps: 100,
+                },
+                recipient,
+            )
+            .unwrap();
         let json = doc.canonical_json();
         assert!(json.contains(r#""maxVolumeBps":100"#), "got: {json}");
         assert!(json.contains(r#""surplusBps":25"#), "got: {json}");
@@ -1263,13 +1288,15 @@ mod tests {
     #[test]
     fn partner_fee_price_improvement_emits_typed_keys() {
         let recipient = address!("00000000219AB540356CBb839CbE05303D7705FA");
-        let doc = AppDataDoc::new("app").with_partner_fee_policy(
-            FeePolicy::PriceImprovement {
-                bps: 30,
-                max_volume_bps: 150,
-            },
-            recipient,
-        );
+        let doc = AppDataDoc::new("app")
+            .with_partner_fee_policy(
+                FeePolicy::PriceImprovement {
+                    bps: 30,
+                    max_volume_bps: 150,
+                },
+                recipient,
+            )
+            .unwrap();
         let json = doc.canonical_json();
         assert!(json.contains(r#""priceImprovementBps":30"#), "got: {json}");
         assert!(json.contains(r#""maxVolumeBps":150"#), "got: {json}");
@@ -1294,6 +1321,70 @@ mod tests {
         let fee: AppDataPartnerFee = serde_json::from_str(&json).unwrap();
         assert!(matches!(fee.policy, FeePolicy::Volume { bps: 42 }));
         assert_eq!(fee.recipient, recipient);
+    }
+
+    /// The builder paths refuse to fold an over-cap `bps` into the
+    /// document. Locks R10 closed: a previous `const fn` builder
+    /// accepted `u32::MAX` without checking against
+    /// `PARTNER_FEE_BPS_MAX`, so an attacker-controlled partner-fee
+    /// tier could be committed to the signed app-data digest.
+    #[test]
+    fn partner_fee_builder_rejects_over_cap_bps() {
+        let recipient = address!("00000000219AB540356CBb839CbE05303D7705FA");
+
+        let err = AppDataDoc::new("app")
+            .with_partner_fee(10_001, recipient)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            AppDataError::FeeOutOfRange {
+                field: "bps",
+                value: 10_001,
+                max: PARTNER_FEE_BPS_MAX,
+            }
+        ));
+
+        // `with_partner_fee_policy` walks every typed variant.
+        let err = AppDataDoc::new("app")
+            .with_partner_fee_policy(
+                FeePolicy::Surplus {
+                    bps: 1,
+                    max_volume_bps: 10_001,
+                },
+                recipient,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            AppDataError::FeeOutOfRange {
+                field: "maxVolumeBps",
+                value: 10_001,
+                ..
+            }
+        ));
+
+        let err = AppDataDoc::new("app")
+            .with_partner_fee_policy(
+                FeePolicy::PriceImprovement {
+                    bps: 10_001,
+                    max_volume_bps: 1,
+                },
+                recipient,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            AppDataError::FeeOutOfRange {
+                field: "priceImprovementBps",
+                value: 10_001,
+                ..
+            }
+        ));
+
+        // At the cap is still accepted.
+        let _ = AppDataDoc::new("app")
+            .with_partner_fee(PARTNER_FEE_BPS_MAX as u32, recipient)
+            .expect("bps at the cap must be accepted");
     }
 
     /// Ambiguous policy combinations are rejected outright.
