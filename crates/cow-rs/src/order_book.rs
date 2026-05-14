@@ -1,7 +1,7 @@
 //! Thin client for the CoW Protocol orderbook HTTP API.
 //!
-//! The first surface implemented here is the quote endpoint —
-//! [`OrderBookApi::get_quote`] — which mirrors the `getQuote` flow exposed
+//! The first surface implemented here is [`OrderBookApi::get_quote`], which
+//! mirrors the `getQuote` flow exposed
 //! by `@cowprotocol/cow-sdk` and `cow-py`. The request and response shapes
 //! reflect the production orderbook OpenAPI as of 2026-05.
 
@@ -16,6 +16,87 @@ use crate::error::{ApiError, Error, Result};
 use crate::order::{BuyTokenDestination, Order, OrderData, OrderKind, OrderUid, SellTokenSource};
 use crate::signature::Signature;
 use crate::signing_scheme::SigningScheme;
+
+/// Settled trade as returned by `GET /api/v1/trades`.
+///
+/// The orderbook emits one record per `GPv2Settlement.Trade` log. Optional
+/// fields are populated only when the orderbook has enough context to
+/// surface them; callers should treat the absent state as informational.
+#[serde_as]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Trade {
+    /// Block in which the settlement transaction landed.
+    pub block_number: u64,
+    /// Index of the `Trade` log within the settlement transaction.
+    pub log_index: u32,
+    /// UID of the order that produced this trade.
+    pub order_uid: OrderUid,
+    /// Address that signed the order.
+    pub owner: Address,
+    /// Token the owner sold.
+    pub sell_token: Address,
+    /// Token the owner received.
+    pub buy_token: Address,
+    /// Sell amount, net of fee, in atomic units.
+    #[serde_as(as = "DisplayFromStr")]
+    pub sell_amount: U256,
+    /// Sell amount before the orderbook's fee was deducted.
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub sell_amount_before_fees: Option<U256>,
+    /// Buy amount delivered to the receiver.
+    #[serde_as(as = "DisplayFromStr")]
+    pub buy_amount: U256,
+    /// Settlement transaction hash, hex-encoded.
+    #[serde(default)]
+    pub tx_hash: Option<String>,
+}
+
+/// Price of one atomic unit of `token` denominated in the chain's native
+/// token, as returned by `GET /api/v1/token/{token}/native_price`.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct NativePrice {
+    /// Price ratio. Note: the orderbook returns this as a JSON number, not
+    /// a decimal string.
+    pub price: f64,
+}
+
+/// Cumulative user surplus reported by
+/// `GET /api/v1/users/{user}/total_surplus`. The field is a decimal string
+/// for precision; we keep it as-is and let callers feed it into their own
+/// big-number parser.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TotalSurplus {
+    /// User's cumulative surplus across all settled orders.
+    pub total_surplus: String,
+}
+
+/// Response of `GET /api/v1/app_data/{hash}` and input to
+/// [`OrderBookApi::put_app_data`]. Carries the canonical JSON string of
+/// the document; when hashed with `keccak256` this yields the [`AppDataHash`]
+/// stored on the signed order.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppDataDocument {
+    /// JSON string of the document. The orderbook does not re-format this
+    /// beyond verifying that it parses, so it round-trips byte-for-byte.
+    pub full_app_data: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OrdersByUidsRequest<'a> {
+    order_uids: &'a [OrderUid],
+}
+
+fn hex_string(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(2 + bytes.len() * 2);
+    out.push_str("0x");
+    out.push_str(&const_hex::encode(bytes));
+    out
+}
 
 /// Auction lifecycle stage returned by `GET /api/v1/orders/{uid}/status`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -267,7 +348,7 @@ impl OrderQuoteResponse {
     ///
     /// - For sell orders, `sell_amount` is the quoted `sellAmount +
     ///   feeAmount`. For buy orders, the quote values pass through.
-    /// - `fee_amount` is always `0` at submission — solvers price gas at
+    /// - `fee_amount` is always `0` at submission: solvers price gas at
     ///   settlement time.
     /// - `app_data` is the 32-byte digest of the canonical metadata JSON
     ///   the caller will submit (use [`EMPTY_APP_DATA_HASH`] for the empty
@@ -436,7 +517,7 @@ impl OrderBookApi {
         Self::new_with_base_url(ensure_trailing_slash(chain.orderbook_base_url()))
     }
 
-    /// Build a client against a custom base URL — useful for tests against
+    /// Build a client against a custom base URL: useful for tests against
     /// a recorded server or a staging deployment.
     pub fn new_with_base_url(base_url: url::Url) -> Self {
         Self {
@@ -451,35 +532,156 @@ impl OrderBookApi {
         &self.base_url
     }
 
-    /// `POST /api/v1/quote` — ask the orderbook for a quote that the
+    /// `POST /api/v1/quote`: ask the orderbook for a quote that the
     /// requester can sign and submit.
     pub async fn get_quote(&self, request: &QuoteRequest) -> Result<OrderQuoteResponse> {
         self.post_json("api/v1/quote", request).await
     }
 
-    /// `POST /api/v1/orders` — submit a signed order. Returns the
+    /// `POST /api/v1/orders`: submit a signed order. Returns the
     /// 56-byte UID assigned by the orderbook.
     pub async fn post_order(&self, order: &OrderCreation) -> Result<OrderUid> {
         self.post_json("api/v1/orders", order).await
     }
 
-    /// `GET /api/v1/orders/{uid}` — fetch the full order record, including
+    /// `GET /api/v1/orders/{uid}`: fetch the full order record, including
     /// execution counters and lifecycle status.
     pub async fn get_order(&self, uid: &OrderUid) -> Result<Order> {
         self.get_json(&format!("api/v1/orders/{uid}")).await
     }
 
-    /// `GET /api/v1/orders/{uid}/status` — fetch the auction lifecycle
+    /// `GET /api/v1/orders/{uid}/status`: fetch the auction lifecycle
     /// stage and any attached solver proposals.
     pub async fn get_order_status(&self, uid: &OrderUid) -> Result<AuctionStatus> {
         self.get_json(&format!("api/v1/orders/{uid}/status")).await
     }
 
-    /// `DELETE /api/v1/orders` — submit a signed cancellation collection.
+    /// `GET /api/v1/account/{owner}/orders`: list every order the
+    /// orderbook knows about for `owner`, most recent first. `offset` and
+    /// `limit` page the result; pass `None` for both to use the orderbook
+    /// defaults.
+    pub async fn account_orders(
+        &self,
+        owner: Address,
+        offset: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<Vec<Order>> {
+        let mut url = self
+            .base_url
+            .join(&format!("api/v1/account/{owner:?}/orders"))?;
+        {
+            let mut q = url.query_pairs_mut();
+            if let Some(offset) = offset {
+                q.append_pair("offset", &offset.to_string());
+            }
+            if let Some(limit) = limit {
+                q.append_pair("limit", &limit.to_string());
+            }
+        }
+        let response = self.client.get(url).send().await?;
+        Self::decode_response(response).await
+    }
+
+    /// `POST /api/v1/orders/by_uids`: fetch many orders in a single round
+    /// trip. The orderbook returns them in the order requested, with
+    /// unknown UIDs omitted (not nulled).
+    pub async fn get_orders_by_uids(&self, uids: &[OrderUid]) -> Result<Vec<Order>> {
+        self.post_json(
+            "api/v1/orders/by_uids",
+            &OrdersByUidsRequest { order_uids: uids },
+        )
+        .await
+    }
+
+    /// `GET /api/v1/trades?owner=...`: trades produced by orders signed
+    /// by `owner`.
+    pub async fn trades_by_owner(&self, owner: Address) -> Result<Vec<Trade>> {
+        let mut url = self.base_url.join("api/v1/trades")?;
+        url.query_pairs_mut()
+            .append_pair("owner", &format!("{owner:?}"));
+        let response = self.client.get(url).send().await?;
+        Self::decode_response(response).await
+    }
+
+    /// `GET /api/v1/trades?orderUid=...`: trades that filled a specific
+    /// order UID.
+    pub async fn trades_by_order_uid(&self, uid: &OrderUid) -> Result<Vec<Trade>> {
+        let mut url = self.base_url.join("api/v1/trades")?;
+        url.query_pairs_mut()
+            .append_pair("orderUid", &uid.to_string());
+        let response = self.client.get(url).send().await?;
+        Self::decode_response(response).await
+    }
+
+    /// `GET /api/v1/token/{token}/native_price`: price of one atomic
+    /// unit of `token` in the chain's native gas token. Used by solvers
+    /// to denominate gas costs uniformly across pairs.
+    pub async fn native_price(&self, token: Address) -> Result<NativePrice> {
+        self.get_json(&format!("api/v1/token/{token:?}/native_price"))
+            .await
+    }
+
+    /// `GET /api/v1/users/{user}/total_surplus`: cumulative surplus the
+    /// user has captured across all of their orders.
+    pub async fn total_surplus(&self, user: Address) -> Result<TotalSurplus> {
+        self.get_json(&format!("api/v1/users/{user:?}/total_surplus"))
+            .await
+    }
+
+    /// `GET /api/v1/app_data/{hash}`: retrieve the canonical JSON the
+    /// orderbook has on file for an app-data digest. Returns
+    /// [`Error::OrderbookApi`] with `NotFound` when the orderbook has not
+    /// seen the document.
+    pub async fn get_app_data(&self, hash: &AppDataHash) -> Result<AppDataDocument> {
+        self.get_json(&format!("api/v1/app_data/{}", hex_string(hash.as_ref())))
+            .await
+    }
+
+    /// `PUT /api/v1/app_data/{hash}`: pre-pin a document so the orderbook
+    /// can serve it back for the matching hash. Used to bind an order to
+    /// specific metadata before the order itself is submitted, notably for
+    /// the EIP-1271 owner-pinning replay defence.
+    pub async fn put_app_data(&self, hash: &AppDataHash, document: &AppDataDocument) -> Result<()> {
+        let url = self
+            .base_url
+            .join(&format!("api/v1/app_data/{}", hex_string(hash.as_ref())))?;
+        let response = self.client.put(url).json(document).send().await?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let text = response.text().await?;
+        serde_json::from_str::<ApiError>(&text).map_or_else(
+            |_| Err(Error::UnexpectedStatus { status, body: text }),
+            |api| Err(Error::OrderbookApi { status, api }),
+        )
+    }
+
+    /// `GET /api/v1/version`: the orderbook server's free-form version
+    /// string. Useful as a quick liveness probe; the format is plain text,
+    /// not JSON.
+    pub async fn version(&self) -> Result<String> {
+        let response = self
+            .client
+            .get(self.base_url.join("api/v1/version")?)
+            .send()
+            .await?;
+        let status = response.status();
+        let text = response.text().await?;
+        if status.is_success() {
+            Ok(text)
+        } else if let Ok(api) = serde_json::from_str::<ApiError>(&text) {
+            Err(Error::OrderbookApi { status, api })
+        } else {
+            Err(Error::UnexpectedStatus { status, body: text })
+        }
+    }
+
+    /// `DELETE /api/v1/orders`: submit a signed cancellation collection.
     ///
     /// Note that the endpoint is `/api/v1/orders` (collection), not
     /// `/api/v1/orders/{uid}`; the orders to cancel are identified by the
-    /// `orderUids` array in the body. The cancellation is "soft" — orders
+    /// `orderUids` array in the body. The cancellation is "soft": orders
     /// already in flight may still settle.
     pub async fn cancel_orders(&self, signed: &SignedOrderCancellations) -> Result<()> {
         let response = self
@@ -605,6 +807,45 @@ mod tests {
     }
 
     #[test]
+    fn hex_string_lowercases_with_prefix() {
+        assert_eq!(hex_string(&[0xab, 0xcd]), "0xabcd");
+        assert_eq!(hex_string(&[]), "0x");
+    }
+
+    #[test]
+    fn native_price_deserialises_float_number() {
+        let body = serde_json::json!({ "price": 1.23e9 });
+        let parsed: NativePrice = serde_json::from_value(body).unwrap();
+        assert!((parsed.price - 1.23e9).abs() < 1.0);
+    }
+
+    #[test]
+    fn app_data_document_round_trips() {
+        let doc = AppDataDocument {
+            full_app_data: "{}".into(),
+        };
+        let json = serde_json::to_value(&doc).unwrap();
+        assert_eq!(json, serde_json::json!({ "fullAppData": "{}" }));
+        let parsed: AppDataDocument = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.full_app_data, "{}");
+    }
+
+    #[test]
+    fn total_surplus_keeps_decimal_string() {
+        let body = serde_json::json!({ "totalSurplus": "1234567.89" });
+        let parsed: TotalSurplus = serde_json::from_value(body).unwrap();
+        assert_eq!(parsed.total_surplus, "1234567.89");
+    }
+
+    #[test]
+    fn orders_by_uids_request_serialises_with_camel_case_key() {
+        let uids = vec![OrderUid([0x11; 56])];
+        let req = OrdersByUidsRequest { order_uids: &uids };
+        let body = serde_json::to_value(&req).unwrap();
+        assert!(body["orderUids"].is_array());
+    }
+
+    #[test]
     fn chain_base_url_composes_correctly() {
         let api = OrderBookApi::new(Chain::Mainnet);
         let endpoint = api.base_url().join("api/v1/quote").unwrap();
@@ -638,7 +879,7 @@ mod tests {
     }
 
     /// `to_signed_order_data` for a sell-side quote adds `feeAmount` back
-    /// into `sellAmount` and zeroes the fee — the documented submission
+    /// into `sellAmount` and zeroes the fee: the documented submission
     /// adjustment.
     #[test]
     fn to_signed_order_data_adjusts_sell_amount_and_zeroes_fee() {
