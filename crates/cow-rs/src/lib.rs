@@ -63,7 +63,11 @@ pub mod signature;
 pub mod signing_scheme;
 
 pub use crate::{
-    app_data::{AppDataHash, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON},
+    app_data::{
+        AppDataDoc, AppDataHash, AppDataMetadata, AppDataOrderClass, AppDataPartnerFee,
+        AppDataQuote, AppDataReferrer, AppDataUtm, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON,
+        LATEST_APP_DATA_VERSION,
+    },
     cancellation::{OrderCancellation, OrderCancellations, SignedOrderCancellations},
     chain::{Chain, UnsupportedChain},
     domain::{DomainSeparator, hashed_eip712_message, hashed_ethsign_message},
