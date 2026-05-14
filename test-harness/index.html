@@ -89,14 +89,41 @@
   <section>
     <h2>5. Cross-library <em>signature</em> parity + round-trip</h2>
     <p>
-      Signs the same payload with viem's <code>privateKeyToAccount</code>,
-      ethers' <code>Wallet</code>, and the shim's
-      <code>sign_eip712</code>, each from anvil account #1's PK. All
-      three ECDSA implementations are deterministic (RFC 6979), so the
-      <code>(r, s, v)</code> tuples must be byte-identical. Run all
-      three and the panel asserts equality. The last-clicked signature
-      is fed back through <code>build_order_creation</code> to prove
-      the wasm shim accepts externally-produced signatures.
+      Signs the same payload three different ways and asserts
+      <code>(r, s, v)</code> parity.
+    </p>
+    <ul>
+      <li>
+        <strong>Anvil PK mode</strong>: viem (<code>privateKeyToAccount</code>),
+        ethers (<code>Wallet</code>), and shim (<code>sign_eip712</code>) all
+        sign with the same inline key. RFC 6979 deterministic ECDSA means the
+        signatures must be byte-identical.
+      </li>
+      <li>
+        <strong>MetaMask mode</strong>: viem uses
+        <code>createWalletClient + custom(window.ethereum)</code>; ethers uses
+        <code>BrowserProvider</code>; <code>shim</code> uses raw EIP-1193
+        (<code>window.ethereum.request</code>) with no JS signing library — the
+        shim only builds the payload via <code>eip712_payload</code> and consumes
+        the signature via <code>build_order_creation</code>. Signatures
+        produced by the same account match across all three.
+      </li>
+    </ul>
+    <p>
+      The last-clicked signature is fed through
+      <code>build_order_creation</code> to prove the shim accepts
+      externally-produced signatures end-to-end.
+    </p>
+    <p style="margin: 0.5rem 0;">
+      <label>
+        <input type="radio" name="sign-source" id="sign-source-pk" value="pk" checked>
+        Anvil PK (deterministic; all three agree)
+      </label>
+      <br>
+      <label>
+        <input type="radio" name="sign-source" id="sign-source-mm" value="mm">
+        MetaMask (real wallet popup; shim disabled)
+      </label>
     </p>
     <button id="sign-viem">Sign (viem)</button>
     <button id="sign-ethers">Sign (ethers)</button>
@@ -146,9 +173,10 @@
       sign_eip712,
       version,
     } from '../crates/cow-sdk-wasm/pkg/cow_sdk_wasm.js';
-    import { hashTypedData, hexToBytes } from 'https://esm.sh/viem@2.21.0';
+    import { hashTypedData, hexToBytes, createWalletClient, custom } from 'https://esm.sh/viem@2.21.0';
     import { privateKeyToAccount } from 'https://esm.sh/viem@2.21.0/accounts';
-    import { TypedDataEncoder, Wallet, getBytes } from 'https://esm.sh/ethers@6.13.4';
+    import { mainnet } from 'https://esm.sh/viem@2.21.0/chains';
+    import { TypedDataEncoder, Wallet, BrowserProvider } from 'https://esm.sh/ethers@6.13.4';
     // @cowprotocol/cow-sdk v9 routes EIP-712 hashing through an
     // AdapterContext-installed provider, which delegates to ethers's
     // TypedDataEncoder. So cow-sdk parity is transitive: if ethers
@@ -273,8 +301,13 @@
         };
       }
 
+      let signRoundTrip = null;
       function renderSignResults() {
-        signOutputEl.textContent = JSON.stringify(signResults, null, 2);
+        signOutputEl.textContent = JSON.stringify(
+          { ...signResults, ...(signRoundTrip ? { roundTrip: signRoundTrip } : {}) },
+          null,
+          2,
+        );
         const labels = Object.keys(signResults);
         if (labels.length < 2) {
           setStatus(signStatusEl, true, `⏳ ${labels.length}/3 signed; need more to compare`);
@@ -290,18 +323,22 @@
           setStatus(signStatusEl, false, `❌ ${labels.length} signatures disagree`);
           return;
         }
-        // Round-trip the last signature through build_order_creation.
+        // Round-trip the last-clicked signature through build_order_creation.
         try {
           const last = signResults[labels[labels.length - 1]];
           const creation = build_order_creation(SIGN_ORDER, {
             signingScheme: 'eip712', ...last.sig,
           }, OWNER, '{}', null);
-          signResults.roundTrip = {
+          signRoundTrip = {
             signatureWire: creation.signature,
             from: creation.from,
             ok: typeof creation.signature === 'string' && creation.signature.startsWith('0x'),
           };
-          signOutputEl.textContent = JSON.stringify(signResults, null, 2);
+          signOutputEl.textContent = JSON.stringify(
+            { ...signResults, roundTrip: signRoundTrip },
+            null,
+            2,
+          );
           setStatus(signStatusEl, true,
             `✅ ${labels.length}/3 agree on (r,s,v); build_order_creation accepted the bag`);
         } catch (err) {
@@ -309,12 +346,30 @@
         }
       }
 
+      function sourceMode() {
+        return document.querySelector('input[name="sign-source"]:checked')?.value ?? 'pk';
+      }
+
+      function ensureWallet() {
+        if (typeof window.ethereum === 'undefined') {
+          throw new Error('window.ethereum not found; install MetaMask or similar');
+        }
+      }
+
       document.getElementById('sign-viem').addEventListener('click', async () => {
         try {
-          const account = privateKeyToAccount(SIGN_PK);
           const payload = eip712_payload(SIGN_ORDER, 'mainnet');
-          const hex = await account.signTypedData(payload);
-          signResults.viem = { hex, sig: splitSig(hex) };
+          let hex;
+          if (sourceMode() === 'mm') {
+            ensureWallet();
+            const client = createWalletClient({ chain: mainnet, transport: custom(window.ethereum) });
+            const [account] = await client.requestAddresses();
+            hex = await client.signTypedData({ account, ...payload });
+          } else {
+            const account = privateKeyToAccount(SIGN_PK);
+            hex = await account.signTypedData(payload);
+          }
+          signResults.viem = { hex, sig: splitSig(hex), source: sourceMode() };
           renderSignResults();
         } catch (err) {
           setStatus(signStatusEl, false, `❌ viem: ${err.message ?? err}`);
@@ -323,24 +378,68 @@
 
       document.getElementById('sign-ethers').addEventListener('click', async () => {
         try {
-          const wallet = new Wallet(SIGN_PK);
           const payload = eip712_payload(SIGN_ORDER, 'mainnet');
-          // ethers wants types WITHOUT the EIP712Domain entry; payload.types only has Order so we're fine.
-          const hex = await wallet.signTypedData(payload.domain, payload.types, payload.message);
-          signResults.ethers = { hex, sig: splitSig(hex) };
+          let hex;
+          if (sourceMode() === 'mm') {
+            ensureWallet();
+            const provider = new BrowserProvider(window.ethereum);
+            const signer = await provider.getSigner();
+            hex = await signer.signTypedData(payload.domain, payload.types, payload.message);
+          } else {
+            const wallet = new Wallet(SIGN_PK);
+            hex = await wallet.signTypedData(payload.domain, payload.types, payload.message);
+          }
+          signResults.ethers = { hex, sig: splitSig(hex), source: sourceMode() };
           renderSignResults();
         } catch (err) {
           setStatus(signStatusEl, false, `❌ ethers: ${err.message ?? err}`);
         }
       });
 
-      document.getElementById('sign-shim').addEventListener('click', () => {
+      const shimBtn = document.getElementById('sign-shim');
+      shimBtn.addEventListener('click', async () => {
         try {
-          const bag = sign_eip712(SIGN_ORDER, 'mainnet', SIGN_PK);
-          signResults.shim = {
-            hex: '(shim returns the r/s/v bag directly, no concatenated hex)',
-            sig: { r: bag.r, s: bag.s, v: bag.v },
-          };
+          if (sourceMode() === 'mm') {
+            // Shim-orchestrated wallet flow: shim builds the payload via
+            // eip712_payload, raw EIP-1193 prompts MetaMask (no viem /
+            // ethers needed), shim consumes the signature via
+            // build_order_creation.
+            ensureWallet();
+            const payload = eip712_payload(SIGN_ORDER, 'mainnet');
+            // eth_signTypedData_v4 requires `EIP712Domain` in `types`;
+            // viem and ethers throw on it, so the shim deliberately
+            // omits it. Inject it here for the raw wallet RPC.
+            const rpcPayload = {
+              ...payload,
+              types: {
+                EIP712Domain: [
+                  { name: 'name',              type: 'string'  },
+                  { name: 'version',           type: 'string'  },
+                  { name: 'chainId',           type: 'uint256' },
+                  { name: 'verifyingContract', type: 'address' },
+                ],
+                ...payload.types,
+              },
+            };
+            const [account] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+            const hex = await window.ethereum.request({
+              method: 'eth_signTypedData_v4',
+              params: [account, JSON.stringify(rpcPayload)],
+            });
+            signResults.shim = {
+              hex,
+              sig: splitSig(hex),
+              source: 'mm',
+              note: 'shim built payload + consumed signature; window.ethereum signed',
+            };
+          } else {
+            const bag = sign_eip712(SIGN_ORDER, 'mainnet', SIGN_PK);
+            signResults.shim = {
+              hex: '(shim returns the r/s/v bag directly, no concatenated hex)',
+              sig: { r: bag.r, s: bag.s, v: bag.v },
+              source: 'pk',
+            };
+          }
           renderSignResults();
         } catch (err) {
           setStatus(signStatusEl, false, `❌ shim: ${err.message ?? err}`);

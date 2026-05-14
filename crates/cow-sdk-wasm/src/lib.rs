@@ -168,6 +168,36 @@ pub fn domain_separator(chain: &str) -> Result<String, JsValue> {
 /// Returns `{ domain, primaryType, types, message }`. The `message`
 /// normalises `receiver: null` to `address(0)` so the hash the wallet
 /// signs matches what `OrderData::hash_struct` computes server-side.
+///
+/// # Raw `eth_signTypedData_v4` callers
+///
+/// `types` deliberately omits the `EIP712Domain` entry: ethers v6 and
+/// viem build the domain typedef from the `domain` object and throw on
+/// a duplicate. Callers using the raw EIP-1193 RPC (`window.ethereum`,
+/// WalletConnect, Safe SDK) must inject `EIP712Domain` before
+/// stringifying the payload for the wallet, otherwise the wallet
+/// hashes the domain with the wrong typedef and the signature won't
+/// verify. Example:
+///
+/// ```js
+/// const payload = eip712_payload(order, 'mainnet');
+/// const v4 = {
+///   ...payload,
+///   types: {
+///     EIP712Domain: [
+///       { name: 'name',              type: 'string'  },
+///       { name: 'version',           type: 'string'  },
+///       { name: 'chainId',           type: 'uint256' },
+///       { name: 'verifyingContract', type: 'address' },
+///     ],
+///     ...payload.types,
+///   },
+/// };
+/// await window.ethereum.request({
+///   method: 'eth_signTypedData_v4',
+///   params: [account, JSON.stringify(v4)],
+/// });
+/// ```
 #[wasm_bindgen]
 pub fn eip712_payload(order_data: JsValue, chain: &str) -> Result<JsValue, JsValue> {
     let order: OrderData = from_js(order_data)?;
@@ -189,6 +219,13 @@ pub fn eip712_payload(order_data: JsValue, chain: &str) -> Result<JsValue, JsVal
             "verifyingContract": c.settlement().to_string(),
         },
         "primaryType": "Order",
+        // `EIP712Domain` is deliberately not in `types`: ethers v6 and
+        // viem build the domain typedef from the `domain` object and
+        // throw on a duplicate entry. Raw `eth_signTypedData_v4`
+        // callers (window.ethereum.request, WalletConnect, Safe SDK)
+        // must inject EIP712Domain themselves before stringifying for
+        // the wallet RPC. See `test-harness/index.html`'s shim button
+        // for an example.
         "types": {
             "Order": [
                 {"name": "sellToken",          "type": "address"},

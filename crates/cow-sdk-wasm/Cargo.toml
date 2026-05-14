@@ -51,6 +51,14 @@ js-sys = "0.3"
 # `AssumeSingleThreaded` to skip the lock.
 lol_alloc = "0.4"
 
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# Runs the `#[wasm_bindgen_test]` suite in a real headless browser via
+# `wasm-pack test --headless --firefox`. Catches JS-marshalling and
+# transport regressions that `cargo test` cannot see (the unit tests run
+# on the host, not wasm32). Gated to wasm32 so plain `cargo test` on
+# native does not try to pull it in.
+wasm-bindgen-test = "0.3"
+
 [package.metadata.wasm-pack.profile.release]
 # -Oz biases binaryen for binary size over speed (~30% smaller than
 # the default -O). Hot paths in this shim are network-bound (reqwest)

@@ -103,6 +103,34 @@ jobs:
         # 665600 bytes = 650 KB; current ~584 KB leaves ~66 KB of headroom.
         run: bash scripts/wasm-size-check.sh 665600
 
+  wasm-test:
+    name: wasm-test
+    runs-on: ubuntu-latest
+    # Runs `#[wasm_bindgen_test]` tests in a real headless Firefox via
+    # wasm-pack. Catches JS-marshalling and transport regressions that
+    # `cargo test --target wasm32` cannot see (the unit suite runs on
+    # the host, not in the browser runtime).
+    #
+    # `RUSTFLAGS=""` because the upstream wasm-bindgen JS glue carries
+    # warnings under our strict workspace lint set, and we don't want
+    # the deny-warnings flag from the global env to fail the build.
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-04
+        with:
+          toolchain: "1.91.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          key: wasm-test
+      - run: cargo install --locked wasm-pack
+      - name: Headless browser test
+        # Firefox is preinstalled on ubuntu-latest; wasm-pack installs
+        # geckodriver on first run.
+        run: wasm-pack test --headless --firefox crates/cow-sdk-wasm
+
   docs:
     name: docs
     runs-on: ubuntu-latest
