@@ -30,8 +30,8 @@ use {
 
 use cow_sdk_wasm::{
     app_data_cid_from_hash, app_data_hash_from_json, chain_info, domain_separator,
-    empty_app_data_hash, get_quote_simple, order_uid, sdk_app_data_hash, sdk_app_data_json,
-    version,
+    empty_app_data_hash, get_quote, get_quote_simple, order_uid, sdk_app_data_hash,
+    sdk_app_data_json, to_signed_order_data, version,
 };
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -286,6 +286,108 @@ async fn get_quote_simple_parses_response_via_mock_fetch() {
         .expect("buyAmount string");
     assert_eq!(buy_amount, "99000000000000000000");
     restore_real_fetch();
+}
+
+/// `get_quote` cross-checks the response against the request before
+/// returning. A hostile orderbook that swaps `sellToken` between
+/// request and response gets rejected at the wasm boundary, so JS
+/// callers cannot feed a swapped-token response into
+/// `to_signed_order_data` / `build_order_creation` downstream.
+#[wasm_bindgen_test]
+async fn get_quote_rejects_swapped_sell_token_in_response() {
+    // Request asks for USDC -> DAI, but the mocked response returns
+    // WETH as `sellToken`. The native `OrderQuoteResponse::to_signed_order_data`
+    // guard fires through the wasm boundary as a `JsValue` error.
+    let body = r#"{
+        "quote": {
+            "sellToken": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+            "buyToken": "0x6b175474e89094c44da98b954eedeac495271d0f",
+            "receiver": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+            "sellAmount": "99500000",
+            "buyAmount": "99000000000000000000",
+            "validTo": 4294967295,
+            "appData": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "feeAmount": "500000",
+            "kind": "sell",
+            "partiallyFillable": false,
+            "sellTokenBalance": "erc20",
+            "buyTokenBalance": "erc20",
+            "signingScheme": "eip712"
+        },
+        "from": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+        "id": 42,
+        "expiration": "1700000000",
+        "verified": false
+    }"#;
+    let _mock = install_mock_fetch(200, Box::leak(body.to_string().into_boxed_str()));
+    let request = JSON::parse(
+        r#"{
+            "sellToken": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+            "buyToken":  "0x6b175474e89094c44da98b954eedeac495271d0f",
+            "from":      "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+            "kind":      "sell",
+            "sellAmountBeforeFee": "100000000"
+        }"#,
+    )
+    .unwrap();
+    let err = get_quote("mainnet", request)
+        .await
+        .expect_err("expected QuoteFieldMismatch on swapped sellToken");
+    let msg = err.as_string().unwrap_or_default();
+    assert!(
+        msg.contains("sellToken") && msg.contains("mismatch"),
+        "expected sellToken mismatch error, got: {msg}",
+    );
+    restore_real_fetch();
+}
+
+/// `to_signed_order_data` is the JS-side chokepoint: feed it a
+/// hand-built request + a tampered response and it must refuse to
+/// project, matching the native guard. Pure compute, no fetch.
+#[wasm_bindgen_test]
+fn to_signed_order_data_rejects_tampered_response() {
+    let request = JSON::parse(
+        r#"{
+            "sellToken": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+            "buyToken":  "0x6b175474e89094c44da98b954eedeac495271d0f",
+            "from":      "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+            "kind":      "sell",
+            "sellAmountBeforeFee": "100000000"
+        }"#,
+    )
+    .unwrap();
+    // Response advertises WETH instead of the requested USDC.
+    let response = JSON::parse(
+        r#"{
+            "quote": {
+                "sellToken": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "buyToken": "0x6b175474e89094c44da98b954eedeac495271d0f",
+                "receiver": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+                "sellAmount": "99500000",
+                "buyAmount": "99000000000000000000",
+                "validTo": 4294967295,
+                "appData": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "feeAmount": "500000",
+                "kind": "sell",
+                "partiallyFillable": false,
+                "sellTokenBalance": "erc20",
+                "buyTokenBalance": "erc20",
+                "signingScheme": "eip712"
+            },
+            "from": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+            "id": 42,
+            "expiration": "1700000000",
+            "verified": false
+        }"#,
+    )
+    .unwrap();
+    let err = to_signed_order_data(request, response, &empty_app_data_hash())
+        .expect_err("expected QuoteFieldMismatch on swapped sellToken");
+    let msg = err.as_string().unwrap_or_default();
+    assert!(
+        msg.contains("sellToken") && msg.contains("mismatch"),
+        "expected sellToken mismatch error, got: {msg}",
+    );
 }
 
 /// Non-2xx responses surface as `Err(JsValue)` carrying the HTTP status

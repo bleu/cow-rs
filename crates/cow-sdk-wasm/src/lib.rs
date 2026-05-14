@@ -512,6 +512,39 @@ pub fn sdk_app_data_hash() -> String {
         .to_string()
 }
 
+/// Project an `OrderQuoteResponse` into the 12-field `OrderData` the
+/// owner will sign, after cross-checking the response against the
+/// originating `QuoteRequest`.
+///
+/// The single chokepoint for assembling signable bytes from a quote
+/// in JS-land. Mirrors the native
+/// [`cowprotocol::OrderQuoteResponse::to_signed_order_data`]: rejects
+/// any response whose `sellToken`, `buyToken`, normalised `receiver`,
+/// `from`, `kind`, or pinned `appData` disagrees with the request,
+/// plus `validTo` / `partiallyFillable` / `sellTokenBalance` /
+/// `buyTokenBalance` / `signingScheme` when the caller pinned them.
+/// Use this instead of hand-copying `response.quote.*` into an
+/// `orderData` object before passing it to `eip712_payload` and
+/// `build_order_creation`.
+///
+/// `app_data_hash_hex` is the 32-byte digest of the app-data document
+/// the caller will submit (commonly [`sdk_app_data_hash`] for SDK
+/// attribution, or [`empty_app_data_hash`] for the empty document).
+#[wasm_bindgen]
+pub fn to_signed_order_data(
+    request: JsValue,
+    response: JsValue,
+    app_data_hash_hex: &str,
+) -> Result<JsValue, JsValue> {
+    let request: QuoteRequest = from_js(request)?;
+    let response: cowprotocol::OrderQuoteResponse = from_js(response)?;
+    let app_data = parse_b256(app_data_hash_hex).map(|b| AppDataHash(b.0))?;
+    let order_data = response
+        .to_signed_order_data(&request, app_data)
+        .map_err(|err| JsValue::from_str(&format!("to_signed_order_data failed: {err}")))?;
+    to_js(&order_data)
+}
+
 // ===== Networked endpoints =============================================
 //
 // All requests go through `transport::*` (a thin wrapper over the JS
@@ -520,12 +553,24 @@ pub fn sdk_app_data_hash() -> String {
 // reqwest-using code in `cowprotocol` that is not reached from a
 // wasm-bindgen export gets pruned during linking.
 
-/// `GET /api/v1/quote`. Accepts a `QuoteRequest` JSON object.
+/// `POST /api/v1/quote`. Accepts a `QuoteRequest` JSON object.
+///
+/// Cross-checks the response against the request via
+/// [`cowprotocol::OrderQuoteResponse::to_signed_order_data`] before
+/// returning, so a hostile orderbook cannot hand JS callers a swapped
+/// `sellToken` / `buyToken` / `receiver` / `from` / `kind` they would
+/// then pass into [`to_signed_order_data`] / [`build_order_creation`].
+/// The empty-document app-data hash is used for the bind check; the
+/// caller's eventual signing-time digest is checked again when they
+/// call [`to_signed_order_data`].
 #[wasm_bindgen]
 pub async fn get_quote(chain: &str, request: JsValue) -> Result<JsValue, JsValue> {
     let request: QuoteRequest = from_js(request)?;
     let url = endpoint(parse_chain(chain)?, "api/v1/quote");
     let response: cowprotocol::OrderQuoteResponse = transport::post_json(&url, &request).await?;
+    response
+        .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
+        .map_err(|err| JsValue::from_str(&format!("quote response binding failed: {err}")))?;
     to_js(&response)
 }
 

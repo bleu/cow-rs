@@ -24,9 +24,16 @@ every protocol-critical path byte-for-byte against
 - **All eleven chains**: Mainnet, BNB, Gnosis, Polygon, Base, Plasma,
   Arbitrum One, Avalanche, Ink, Linea, Sepolia, plus their barn
   staging endpoints where the orderbook team publishes them.
-- **Conformance-locked**: 170 tests, with byte-exact goldens
+- **Conformance-locked**: 218 native tests (179 lib + 26 wiremock + 5
+  schema-drift + 3 source-lock + 1 trading-mock + 4 doctests) plus 10
+  headless-Firefox wasm-bindgen cases, with byte-exact goldens
   cross-checked against `cowprotocol/services`, `cowprotocol/contracts`,
   ethers, cow-sdk and cow-py.
+- **Hostile-orderbook hardened**: every quote response is bound to the
+  originating `QuoteRequest` before the SDK produces signable bytes,
+  app-data digests round-trip on get/put, fee-math fails closed via
+  `checked_*` (no saturation), and `EthFlowOrder::receiver` is
+  non-zero by construction.
 - **Sync core, async client**: hashing, signing and contract decoding
   are pure-compute and need no runtime; the HTTP client is async-tokio
   and the only piece that depends on one.
@@ -71,7 +78,10 @@ let request = QuoteRequest::sell_amount_before_fee(
 let quote = api.get_quote(&request).await?;
 
 // 2. Build the order, sign it under the chain's GPv2Settlement domain.
-let order_data = quote.to_signed_order_data(EMPTY_APP_DATA_HASH)?;
+//    The SDK cross-checks the response against `request` (sellToken,
+//    buyToken, receiver, from, kind, plus any field the caller pinned)
+//    and refuses to project mismatched fields into signable bytes.
+let order_data = quote.to_signed_order_data(&request, EMPTY_APP_DATA_HASH)?;
 let domain = DomainSeparator::new(Chain::Mainnet.id(), Chain::Mainnet.settlement());
 let signature = order_data.sign(EcdsaSigningScheme::Eip712, &domain, &signer)?;
 
@@ -127,14 +137,17 @@ assert_eq!(uid.0.len(), 56);
 | Module | What it exposes |
 |---|---|
 | `order` | `OrderData` (12-field signed payload), `OrderBuilder`, `OrderUid`, `OrderKind`, `SellTokenSource`, `BuyTokenDestination`, `BUY_ETH_ADDRESS`, plus the full GET-orders `Order`, `OrderStatus`, `OrderClass` |
-| `order_book` | `OrderBookApi` with quote / submit / lookup / status / cancel, trades, native price, account orders, app-data PUT / GET, version, total surplus; the runtime-agnostic `poll_until` helper and the tokio-bound `wait_for_order_fulfilled` convenience |
+| `order_book` | `OrderBookApi` with quote / submit / lookup / status / cancel, trades, native price, account orders, app-data PUT / GET (with digest round-trip), version, total surplus; the runtime-agnostic `poll_until` helper and the tokio-bound `wait_for_order_fulfilled` convenience |
+| `trading` | `TradingClient::post_swap_order`, the one-call quote → bind → sign → put-app-data → submit facade. Mirrors `TradingSdk.postSwapOrder` in `@cowprotocol/cow-sdk` |
+| `quote_amounts` | `compute()` (the partner-fee + protocol-fee + slippage composition the TS SDK uses, byte-for-byte against `cow-sdk` PR #867); fail-closed via `Error::QuoteFeeMathOverflow { stage }` on every intermediate |
 | `signature` | `Signature` (all four schemes), `EcdsaSignature`, `Recovered`, `SignatureError` |
 | `domain` | `DomainSeparator`, `hashed_eip712_message`, `hashed_ethsign_message` |
 | `chain` | `Chain` (eleven networks) with `orderbook_base_url`, `orderbook_barn_url`, `settlement`, `vault_relayer`, `subgraph_studio_url` |
 | `cancellation` | `OrderCancellation` (single), `OrderCancellations` (collection), `SignedOrderCancellations` |
-| `app_data` | `AppDataHash`, `AppDataDoc` (canonical JSON + keccak digest), `AppDataCid` (IPFS CIDv1 derivation) |
-| `eth_flow` | `EthFlowOrder`, `ETH_FLOW_PRODUCTION`, `ETH_FLOW_STAGING` |
-| `composable` | `ConditionalOrderParams`, `Proof`, `PollOutcome`, `ComposableCoW` events plus deployment addresses |
+| `app_data` | `AppDataHash`, `AppDataDoc` (canonical JSON + keccak digest), `AppDataCid` (IPFS CIDv1 derivation), `AppDataDoc::sdk_attribution` for the SDK's `appCode` tag |
+| `eth_flow` | `EthFlowOrder` (non-zero `receiver` enforced at construction), `ETH_FLOW_PRODUCTION`, `ETH_FLOW_STAGING` |
+| `composable` | `ConditionalOrderParams`, `Proof`, `PollOutcome`, `ComposableCoW` events, `TwapData` + `TwapStaticInput`, plus deployment addresses |
+| `multiplexer` | OZ-style commutative double-hashed merkle leaves, watch-tower-side proof verification |
 | `contracts` | `GPv2Settlement` (settle + events), `CoWSwapOnchainOrders` (ETH-flow events), `ERC20`, `WETH9`, `GPV2_SETTLEMENT`, `GPV2_VAULT_RELAYER` |
 | `subgraph` | `SubgraphClient` typed access to CoW's subgraph; totals, daily / hourly volume; opt-in bearer-token auth for the gateway URL |
 

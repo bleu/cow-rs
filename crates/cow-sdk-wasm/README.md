@@ -50,7 +50,8 @@ version in `metadata.quote.version`.
 
 ```js
 import init, {
-  get_quote_simple,
+  get_quote,
+  to_signed_order_data,
   eip712_payload,
   build_order_creation,
   post_order,
@@ -64,39 +65,29 @@ await init();
 
 const account = '0x26394373F96950025DA55b07809c976a4768c995';
 
-// 1. Quote. Hands back the orderbook response plus the UID the next
-//    signing step would consume (computed against an empty app-data
-//    digest -- we replace it below with the SDK-attribution doc).
-const { response } = await get_quote_simple(
-  'base',
-  '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
-  '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE', // ETH placeholder
-  account,
-  '25000000', // 25 USDC, 6 decimals
-);
+// 1. Quote. The shim cross-checks the response against the request
+//    before returning, so a hostile orderbook cannot hand us a swapped
+//    sellToken / buyToken / receiver / from / kind to feed downstream.
+const request = {
+  sellToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
+  buyToken:  '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE', // ETH placeholder
+  from:      account,
+  kind:      'sell',
+  sellAmountBeforeFee: '25000000', // 25 USDC, 6 decimals
+};
+const response = await get_quote('base', request);
 
-// 2. Replace the empty app-data with this SDK's attribution doc so the
-//    orderbook indexer can count it. Pure compute, no network.
+// 2. Build this SDK's attribution app-data so the orderbook indexer
+//    can count the order. Pure compute, no network.
 const appDataJson = sdk_app_data_json();   // canonical JSON string
 const appDataHash = sdk_app_data_hash();   // keccak256 hex
 
-// 3. Build the OrderData the wallet will sign. Take the orderbook's
-//    quote as-is, swap in the attribution app-data digest, and pin
-//    the validity window the response advertised.
-const orderData = {
-  sellToken:           response.quote.sellToken,
-  buyToken:            response.quote.buyToken,
-  receiver:            response.quote.receiver,
-  sellAmount:          response.quote.sellAmount,
-  buyAmount:           response.quote.buyAmount,
-  validTo:             response.quote.validTo,
-  appData:             appDataHash,
-  feeAmount:           response.quote.feeAmount,
-  kind:                response.quote.kind,
-  partiallyFillable:   response.quote.partiallyFillable,
-  sellTokenBalance:    response.quote.sellTokenBalance,
-  buyTokenBalance:     response.quote.buyTokenBalance,
-};
+// 3. Project the response into the 12-field OrderData the wallet will
+//    sign. `to_signed_order_data` is the only blessed assembly path:
+//    it re-validates the response against `request` (now also against
+//    the pinned appData hash) and refuses to project mismatched
+//    fields, so a swapped-token response never reaches `signTypedData`.
+const orderData = to_signed_order_data(request, response, appDataHash);
 
 // 4. Ask the SDK for the EIP-712 typed-data envelope; sign it with
 //    whatever wallet you have. viem returns a 0x-prefixed 65-byte hex.

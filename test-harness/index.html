@@ -208,6 +208,7 @@
       eip712_message_hash,
       eip712_payload,
       empty_app_data_hash,
+      get_quote,
       get_quote_simple,
       order_struct_hash,
       order_uid,
@@ -215,6 +216,7 @@
       sdk_app_data_hash,
       sdk_app_data_json,
       sign_eip712,
+      to_signed_order_data,
       version,
     } from '../crates/cow-sdk-wasm/pkg/cow_sdk_wasm.js';
     import { hashTypedData, hexToBytes, createWalletClient, custom } from 'https://esm.sh/viem@2.21.0';
@@ -720,36 +722,28 @@
             throw new Error('enter a positive integer USDC amount');
           }
           const sellAmountAtomic = (sellAmountInteger * 1_000_000n).toString();
-          const quote = await get_quote_simple(
-            'base',
-            USDC_BASE,
-            ETH_PLACEHOLDER,
-            account,
-            sellAmountAtomic,
-          );
-          const q = quote.response.quote;
+          const request = {
+            sellToken: USDC_BASE,
+            buyToken:  ETH_PLACEHOLDER,
+            from:      account,
+            kind:      'sell',
+            sellAmountBeforeFee: sellAmountAtomic,
+          };
+          const response = await get_quote('base', request);
 
           // 2. SDK attribution app-data.
           const appDataJson = sdk_app_data_json();
           const appDataHash = sdk_app_data_hash();
 
-          // 3. The OrderData the wallet will sign. The orderbook
-          //    expects sellAmount + feeAmount split out and the
-          //    attribution digest in `appData`.
-          const orderData = {
-            sellToken:         q.sellToken,
-            buyToken:          q.buyToken,
-            receiver:          q.receiver,
-            sellAmount:        (BigInt(q.sellAmount) + BigInt(q.feeAmount)).toString(),
-            buyAmount:         q.buyAmount,
-            validTo:           q.validTo,
-            appData:           appDataHash,
-            feeAmount:         '0',
-            kind:              q.kind,
-            partiallyFillable: q.partiallyFillable,
-            sellTokenBalance:  q.sellTokenBalance,
-            buyTokenBalance:   q.buyTokenBalance,
-          };
+          // 3. Project the response into the OrderData the wallet will
+          //    sign. `to_signed_order_data` is the only blessed
+          //    assembly path: it cross-checks the response against
+          //    `request` (sellToken / buyToken / receiver / from /
+          //    kind, plus the pinned appData hash) and applies the
+          //    documented sell-side fee adjustment, so a hostile
+          //    orderbook cannot smuggle a swapped field into what we
+          //    sign.
+          const orderData = to_signed_order_data(request, response, appDataHash);
 
           // 4. Build the EIP-712 typed-data payload + sign with the
           //    raw EIP-1193 RPC. `eth_signTypedData_v4` requires
@@ -785,7 +779,7 @@
           // JS Number (Number tops out at 53 bits of precision so the
           // binding refuses it). Coerce defensively.
           setStatus(submitStatus, true, '⏳ posting to api.cow.fi/base…');
-          const quoteIdRaw = quote.response.id;
+          const quoteIdRaw = response.id;
           const quoteId = quoteIdRaw == null ? undefined : BigInt(quoteIdRaw);
           const creation = build_order_creation(
             orderData,
@@ -803,7 +797,7 @@
               explorer: `https://explorer.cow.fi/base/orders/${uid}`,
               appCode: JSON.parse(appDataJson).appCode,
               appDataHash,
-              quoteId: quote.response.id,
+              quoteId: response.id,
               sellAmountAtomic: orderData.sellAmount,
               buyAmountAtomic: orderData.buyAmount,
               vaultRelayerToApprove: BASE_VAULT_RELAYER,
