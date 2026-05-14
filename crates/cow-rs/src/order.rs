@@ -498,30 +498,54 @@ mod tests {
     }
 
     /// Locks `DomainSeparator::new` against ethers
-    /// `TypedDataEncoder.hashDomain` for every chain cow-rs supports, using
-    /// the canonical GPv2Settlement deployment. Regenerate via
-    /// `tools/vector-gen`.
+    /// `TypedDataEncoder.hashDomain` for every one of the eleven chains
+    /// cow-rs supports, using the canonical GPv2Settlement deployment.
+    /// Regenerate via `tools/vector-gen`.
     #[test]
     fn cross_chain_domain_separators_match_ethers() {
-        let cases: [(u64, [u8; 32]); 5] = [
+        let cases: [(u64, [u8; 32]); 11] = [
             (
                 1,
                 hex!("c078f884a2676e1345748b1feace7b0abee5d00ecadb6e574dcdd109a63e8943"),
+            ),
+            (
+                56,
+                hex!("0cbb18dfca28d2ceac8c72a17289168e03c1ad121338f5573e3b0c3255207fc7"),
             ),
             (
                 100,
                 hex!("8f05589c4b810bc2f706854508d66d447cd971f8354a4bb0b3471ceb0a466bc7"),
             ),
             (
+                137,
+                hex!("132e0e39721b0cb53216fc42764f69c300d4d21e0caf24e0713b1e3e11120dc2"),
+            ),
+            (
                 8453,
                 hex!("d72ffa789b6fae41254d0b5a13e6e1e92ed947ec6a251edf1cf0b6c02c257b4b"),
+            ),
+            (
+                9745,
+                hex!("e1f9c97768e45812440cd3317c07069178cc2f69971fb204c0211d8bfb1f8e76"),
             ),
             (
                 42161,
                 hex!("69d78e7a7cafcaf924483f99f65e8f4e303a99a446db7ab319f9d40e940bced2"),
             ),
             (
-                11155111,
+                43114,
+                hex!("81fd4ff99b8f80b96c946c146cd5b79181aaf08ecb5808eeee1d047c1de267a5"),
+            ),
+            (
+                57073,
+                hex!("5aced6090755c424bc1d6bbd39a2cdf57e6abfb4663598f4c3c821fb942d52e0"),
+            ),
+            (
+                59144,
+                hex!("b219bb2b8733b80b7ebef0229e7f0c91436f9a0a5b9705fa519237ae0493addb"),
+            ),
+            (
+                11_155_111,
                 hex!("daee378bd0eb30ddf479272accf91761e697bc00e067a268f95f1d2732ed230b"),
             ),
         ];
@@ -537,29 +561,54 @@ mod tests {
 
     /// Locks the full UID pipeline against ethers
     /// `TypedDataEncoder.hash(domain, types, sample_order)` packed with the
-    /// sample owner and `validTo`. Regenerate via `tools/vector-gen`.
+    /// sample owner and `validTo`, for every chain cow-rs supports.
+    /// Regenerate via `tools/vector-gen`.
     #[test]
     fn cross_chain_uids_match_ethers() {
         const TAIL: [u8; 24] = hex!("70997970c51812dc3a010c7d01b50e0d17dc79c8ffffffff");
-        let cases: [(u64, [u8; 32]); 5] = [
+        let cases: [(u64, [u8; 32]); 11] = [
             (
                 1,
                 hex!("8295b35c74972663a29a02be0fa8de8a157215b36938caa461fdf183e02cd82e"),
+            ),
+            (
+                56,
+                hex!("f676f63e14dc6a9da6bbe9e57398f060a2cc24d79e12345709ac15c8e4f5b8c1"),
             ),
             (
                 100,
                 hex!("3dee66b2accacd71dd607b281d1485ef960c37beff85374f4b7c65eb05ed1252"),
             ),
             (
+                137,
+                hex!("f2a78d43cf0922ef45e56a7f36d7eba13a8eb9407c1dc59e087322388e622fbb"),
+            ),
+            (
                 8453,
                 hex!("28862a0c28aab4b8a4403fdf5cfd71686e7dd665db1469ec7f84bf45d1a3dd9b"),
+            ),
+            (
+                9745,
+                hex!("f7941fdf92e8d5b4815995973c1cdf0e58cbe3f404ba4a8f672da5a951832e4c"),
             ),
             (
                 42161,
                 hex!("c5677211ea383a13f4d47c092fc48fb3a0a5ade451c82f19dff69a400080f34b"),
             ),
             (
-                11155111,
+                43114,
+                hex!("310880582f800792d606e89b94c8f23529469003cf71da6aa172737702b8a4be"),
+            ),
+            (
+                57073,
+                hex!("7daedf408aec4bacb29278b0febf3c40ce52c7911d0a23eb5c4c116a8dd44852"),
+            ),
+            (
+                59144,
+                hex!("5aa640f484ef090ab25171d6cbc6adff0cbda7a342ed7ef6371636a1575eca40"),
+            ),
+            (
+                11_155_111,
                 hex!("d69c063b99b74a6690df5541787acc942828219a0ba12fded27eff853da8f6fd"),
             ),
         ];
@@ -574,6 +623,61 @@ mod tests {
             expected[32..56].copy_from_slice(&TAIL);
             assert_eq!(uid, expected, "uid for chain {chain_id}");
         }
+    }
+
+    /// Locks `OrderData::hash_struct` against ethers for permutations
+    /// that exercise specific byte slots: `kind = Buy`,
+    /// `partiallyFillable = true`, the three `SellTokenSource` variants,
+    /// the two `BuyTokenDestination` variants, and `receiver = None`.
+    /// Regenerate via `tools/vector-gen`.
+    #[test]
+    fn hash_struct_byte_permutations_match_ethers() {
+        let mut buy = sample_order();
+        buy.kind = OrderKind::Buy;
+        assert_eq!(
+            buy.hash_struct(),
+            hex!("7f6ff8bfee1c5f54ca8ac13dabf84e6646592775700fce0e5ead7049620f9ea5")
+        );
+
+        let mut partial = sample_order();
+        partial.partially_fillable = true;
+        assert_eq!(
+            partial.hash_struct(),
+            hex!("4a7892b4e3cc787cc8dbb22afb249a52b144ae7aec066d2f41f521aa05c7388c")
+        );
+
+        let mut external = sample_order();
+        external.sell_token_balance = SellTokenSource::External;
+        assert_eq!(
+            external.hash_struct(),
+            hex!("250972eafa5a01e4103f50f3987422339582583b36d2a47e3c6920b4acca3509")
+        );
+
+        let mut internal_sell = sample_order();
+        internal_sell.sell_token_balance = SellTokenSource::Internal;
+        assert_eq!(
+            internal_sell.hash_struct(),
+            hex!("c94d0a2b1c1b41042d41e0d9f2d05bc91fbe1cb053b716176850029cdb88f679")
+        );
+
+        let mut internal_buy = sample_order();
+        internal_buy.buy_token_balance = BuyTokenDestination::Internal;
+        assert_eq!(
+            internal_buy.hash_struct(),
+            hex!("4d19213af5ed0adb5ec3d67b00cdcd360ea0f9378a9392f599de132106a558d9")
+        );
+
+        // None-receiver should encode the same 20 zero bytes that an
+        // explicit Address::ZERO does.
+        let mut no_receiver = sample_order();
+        no_receiver.receiver = None;
+        let mut zero_receiver = sample_order();
+        zero_receiver.receiver = Some(Address::ZERO);
+        assert_eq!(no_receiver.hash_struct(), zero_receiver.hash_struct());
+        assert_eq!(
+            no_receiver.hash_struct(),
+            hex!("5388e8a0f9cf9129fd0fd54d3192e502cf5519ee4316f0c77860bfc0c3f42994")
+        );
     }
 
     /// Locks `OrderData::TYPE_HASH` against the canonical EIP-712 type

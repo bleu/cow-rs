@@ -183,6 +183,27 @@ mod tests {
 
     use super::*;
 
+    /// Locks `keccak256(abi.encode(ConditionalOrderParams))` against the
+    /// `ConditionalOrder.id` vector lifted from
+    /// `cowdao-grants/cow-py::tests/composable/test_conditional_order.py:119`.
+    /// This is the canonical single-order leaf-id derivation; if our ABI
+    /// encoding ever drifts from cow-py / Solidity, the id mismatches.
+    #[test]
+    fn conditional_order_leaf_id_matches_cow_py_vector() {
+        let params = ConditionalOrderParams {
+            handler: address!("910d00a310f7Dc5B29FE73458F47f519be547D3d"),
+            salt: B256::from(hex!(
+                "9379a0bf532ff9a66ffde940f94b1a025d6f18803054c1aef52dc94b15255bbe"
+            )),
+            staticInput: Bytes::new(),
+        };
+        let id = keccak256(params.abi_encode());
+        assert_eq!(
+            id.0,
+            hex!("88ca0698d8c5500b31015d84fa0166272e1812320d9af8b60e29ae00153363b3"),
+        );
+    }
+
     #[test]
     fn conditional_order_params_round_trips_via_abi() {
         let params = ConditionalOrderParams {

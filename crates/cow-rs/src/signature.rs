@@ -474,6 +474,46 @@ mod tests {
         }
     }
 
+    /// Locks `EcdsaSignature::sign` against the golden vector produced
+    /// by ethers `Wallet.signTypedData` for the mainnet `sample_order` +
+    /// the Hardhat #0 account. Regenerate via `tools/vector-gen`.
+    ///
+    /// Catches drift between alloy's signer and ethers' signer (which
+    /// the round-trip-only test cannot, since both sides would drift
+    /// together).
+    #[test]
+    fn eip712_signature_matches_ethers_golden() {
+        use alloy_primitives::B256;
+
+        // Hardhat account #0; same key the vector-gen tool uses.
+        let private_key = B256::from(hex!(
+            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+        ));
+        let signer = PrivateKeySigner::from_bytes(&private_key).unwrap();
+        // Mainnet domain separator from tools/vector-gen.
+        let domain = DomainSeparator(hex!(
+            "c078f884a2676e1345748b1feace7b0abee5d00ecadb6e574dcdd109a63e8943"
+        ));
+        // Sample-order struct hash from tools/vector-gen.
+        let struct_hash = hex!("7d9bf070168f9950003bdad00194ef63a5389dd0b594a1288407d551abf147d5");
+
+        let ecdsa =
+            EcdsaSignature::sign(EcdsaSigningScheme::Eip712, &domain, &struct_hash, &signer)
+                .unwrap();
+
+        // Expected (r, s, v) from ethers Wallet.signTypedData on the same
+        // inputs. v=28 (the high-order normalised form).
+        let expected_r = B256::from(hex!(
+            "78bd3f7f240eb91bf94264f1bab99a5efaf97e8c76b9f76eeb4520f46861ed13"
+        ));
+        let expected_s = B256::from(hex!(
+            "70c2f3362f17d4668a02ad82f61bff52bd33a785afeff727ddab43210dfebea2"
+        ));
+        assert_eq!(ecdsa.r, expected_r, "r component");
+        assert_eq!(ecdsa.s, expected_s, "s component");
+        assert_eq!(ecdsa.v, 28, "v component");
+    }
+
     #[test]
     fn recover_returns_none_for_onchain_schemes() {
         for signature in [Signature::PreSign, Signature::Eip1271(Vec::new())] {
