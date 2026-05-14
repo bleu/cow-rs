@@ -98,6 +98,7 @@ pub mod signature;
 pub mod signing_scheme;
 #[cfg(feature = "subgraph")]
 pub mod subgraph;
+pub mod trading;
 
 pub use crate::{
     app_data::{
@@ -135,6 +136,7 @@ pub use crate::{
     },
     signature::{EcdsaSignature, Recovered, Signature, SignatureError},
     signing_scheme::{EcdsaSigningScheme, SigningScheme},
+    trading::{PostedSwapOrder, SwapOrder, TradingClient},
 };
 
 #[cfg(feature = "subgraph")]
