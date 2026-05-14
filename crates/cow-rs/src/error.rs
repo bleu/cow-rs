@@ -1,6 +1,6 @@
 //! Error and `Result` types for the `cow-rs` crate.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::{chain::UnsupportedChain, signature::SignatureError, subgraph::SubgraphError};
@@ -108,7 +108,7 @@ pub enum Error {
 
 /// Structured error envelope returned by the CoW orderbook for 4xx / 5xx
 /// responses. Mirrors the `Error` schema declared by the orderbook OpenAPI.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ApiError {
     /// Short machine-readable code (e.g. `"InvalidSignature"`).
     #[serde(rename = "errorType")]

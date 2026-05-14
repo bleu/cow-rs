@@ -862,7 +862,7 @@ pub enum AppDataCidError {
     /// The multihash length byte was not `0x20`.
     #[error("expected 32-byte digest (0x20), got 0x{0:02x}")]
     UnexpectedDigestLength(u8),
-    /// The CID string was longer than [`CID_STRING_MAX_LEN`]. Real CIDs
+    /// The CID string was longer than `CID_STRING_MAX_LEN`. Real CIDs
     /// are at most 73 chars; longer inputs are rejected before any
     /// attacker-driven allocation runs.
     #[error("cid string too long: {len} chars (max {max})")]

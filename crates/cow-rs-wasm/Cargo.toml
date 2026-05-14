@@ -1,0 +1,25 @@
+[package]
+name = "cow-rs-wasm"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Thin wasm-bindgen shim exposing cowprotocol to JavaScript for in-browser end-to-end testing."
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cowprotocol = { path = "../cow-rs", version = "1.0.0-alpha" }
+alloy-primitives.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+serde-wasm-bindgen = "0.6"
+console_error_panic_hook = "0.1"

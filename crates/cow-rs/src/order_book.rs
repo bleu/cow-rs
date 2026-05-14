@@ -88,7 +88,7 @@ pub enum PriceQuality {
 /// fields are populated only when the orderbook has enough context to
 /// surface them; callers should treat the absent state as informational.
 #[serde_as]
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Trade {
     /// Block in which the settlement transaction landed.
@@ -120,7 +120,7 @@ pub struct Trade {
 
 /// Price of one atomic unit of `token` denominated in the chain's native
 /// token, as returned by `GET /api/v1/token/{token}/native_price`.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct NativePrice {
     /// Price ratio. Note: the orderbook returns this as a JSON number, not
     /// a decimal string.
@@ -131,7 +131,7 @@ pub struct NativePrice {
 /// `GET /api/v1/users/{user}/total_surplus`. The field is a decimal string
 /// for precision; we keep it as-is and let callers feed it into their own
 /// big-number parser.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TotalSurplus {
     /// User's cumulative surplus across all settled orders.
@@ -147,7 +147,7 @@ pub struct TotalSurplus {
 /// fields that drift across CIP changes and that we have no way to lock
 /// byte-conformance for without solver access.
 #[serde_as]
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Auction {
     /// Monotonically increasing auction identifier (absent during reorgs).
@@ -177,7 +177,7 @@ pub struct Auction {
 ///
 /// Both fields are absent for tokens the orderbook has never seen.
 #[serde_as]
-#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenMetadata {
     /// Block at which the first trade of this token was indexed, or
@@ -253,7 +253,7 @@ pub enum AuctionStatusType {
 /// (`solved`/`executing`), and is empty for `open`/`cancelled`. We surface
 /// it as opaque JSON to stay forward-compatible with solver-side schema
 /// additions.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuctionStatus {
     /// Stage of the auction lifecycle.
@@ -673,7 +673,7 @@ impl OrderQuoteResponse {
 }
 
 /// Full response body of `POST /api/v1/quote`.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderQuoteResponse {
     /// The order the orderbook is willing to settle.

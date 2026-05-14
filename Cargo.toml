@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cow-rs"]
+members = ["crates/cow-rs", "crates/cow-rs-wasm"]
 
 [workspace.package]
 edition = "2024"
