@@ -28,6 +28,10 @@
 //! - [`GPv2Settlement`] and [`GPv2OrderData`] for typed contract bindings,
 //!   plus [`GPV2_SETTLEMENT`], [`GPV2_VAULT_RELAYER`], [`WETH9`] and
 //!   [`ERC20`] address constants.
+//! - [`ConditionalOrderParams`], [`Proof`] and [`PollOutcome`] for the
+//!   `ComposableCoW` conditional-order primitives, plus the
+//!   [`COMPOSABLE_COW`], [`EXTENSIBLE_FALLBACK_HANDLER`] and
+//!   [`CURRENT_BLOCK_TIMESTAMP_FACTORY`] address constants.
 //!
 //! ## Quote example
 //!
@@ -71,6 +75,7 @@ pub mod app_data;
 pub mod bytes_hex;
 pub mod cancellation;
 pub mod chain;
+pub mod composable;
 pub mod contracts;
 pub mod domain;
 pub mod error;
@@ -88,6 +93,10 @@ pub use crate::{
     },
     cancellation::{OrderCancellation, OrderCancellations, SignedOrderCancellations},
     chain::{Chain, UnsupportedChain},
+    composable::{
+        COMPOSABLE_COW, CURRENT_BLOCK_TIMESTAMP_FACTORY, ConditionalOrderParams,
+        EXTENSIBLE_FALLBACK_HANDLER, PollOutcome, Proof,
+    },
     contracts::{ERC20, GPV2_SETTLEMENT, GPV2_VAULT_RELAYER, GPv2OrderData, GPv2Settlement, WETH9},
     domain::{DomainSeparator, hashed_eip712_message, hashed_ethsign_message},
     error::{ApiError, Error, Result},
