@@ -66,6 +66,7 @@ pub mod app_data;
 pub mod bytes_hex;
 pub mod cancellation;
 pub mod chain;
+pub mod contracts;
 pub mod domain;
 pub mod error;
 pub mod eth_flow;
@@ -82,6 +83,7 @@ pub use crate::{
     },
     cancellation::{OrderCancellation, OrderCancellations, SignedOrderCancellations},
     chain::{Chain, UnsupportedChain},
+    contracts::{ERC20, GPV2_SETTLEMENT, GPV2_VAULT_RELAYER, GPv2OrderData, GPv2Settlement, WETH9},
     domain::{DomainSeparator, hashed_eip712_message, hashed_ethsign_message},
     error::{ApiError, Error, Result},
     eth_flow::{ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowOrder},
