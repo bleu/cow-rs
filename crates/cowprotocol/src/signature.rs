@@ -18,58 +18,46 @@ use std::fmt::{self, Debug, Formatter};
 use crate::domain::{DomainSeparator, hashed_eip712_message, hashed_ethsign_message};
 use crate::signing_scheme::{EcdsaSigningScheme, SigningScheme};
 
-/// Maximum accepted length for an EIP-1271 signature payload, in bytes.
-///
-/// Matches the cap enforced by `cowprotocol/services` (32 KiB). A hostile
-/// orderbook can otherwise return a multi-megabyte EIP-1271 payload that
-/// the SDK would happily buffer as a `Vec<u8>`, ballooning process memory.
+/// Maximum accepted EIP-1271 payload, in bytes. Matches the
+/// `cowprotocol/services` cap (32 KiB); a hostile orderbook could
+/// otherwise return a multi-MB payload that buffers as a `Vec<u8>`.
 pub const EIP1271_MAX_LEN: usize = 32 * 1024;
 
 /// Errors specific to signature parsing or verification.
 #[derive(Debug, thiserror::Error)]
 pub enum SignatureError {
-    /// ECDSA signature payload was the wrong length (must be 65 bytes:
-    /// `r || s || v`).
+    /// ECDSA payload was not 65 bytes (`r || s || v`).
     #[error("expected 65 ecdsa signature bytes, got {0}")]
     Length(usize),
-    /// PreSign payload was non-empty and not the legacy 20-byte owner.
+    /// PreSign payload was neither empty nor a 20-byte owner.
     #[error("presign payload must be empty or a 20-byte owner, got {0} bytes")]
     PreSignLength(usize),
-    /// EIP-1271 signature payload exceeded the per-order cap.
+    /// EIP-1271 payload exceeded [`EIP1271_MAX_LEN`].
     #[error("eip1271 signature payload too long: {len} bytes (max {max})")]
-    Eip1271TooLong {
-        /// Length of the offending payload.
-        len: usize,
-        /// Maximum accepted length (see [`EIP1271_MAX_LEN`]).
-        max: usize,
-    },
-    /// The `v` recovery byte was not in `{0, 1, 27, 28}`.
+    Eip1271TooLong { len: usize, max: usize },
+    /// `v` recovery byte was not in `{0, 1, 27, 28}`.
     #[error("invalid signature v value: {0}; expected 0, 1, 27 or 28")]
     InvalidV(u8),
-    /// ECDSA recovery failed (malformed signature bytes).
+    /// ECDSA recovery failed.
     #[error("ecdsa recovery failed: {0}")]
     Recovery(#[from] alloy_primitives::SignatureError),
-    /// Underlying signer reported a `k256` error during signing.
+    /// `k256` signer error.
     #[error("k256 signer error: {0}")]
     Signer(#[from] K256Error),
-    /// Underlying signer reported a non-`k256` error (network signer
-    /// timeout, hardware wallet glitch, KMS rate limit, etc.). Carries an
-    /// owned message so we never `Box::leak` attacker-controllable bytes.
+    /// Non-`k256` signer error (remote signer, hardware wallet, KMS).
+    /// Owned message so attacker-controllable bytes are never leaked.
     #[error("signer error: {0}")]
     SignerOther(String),
-    /// Recovered signer address did not match the address declared on
-    /// the order. Raised by
+    /// Recovered signer ≠ declared. Raised by
     /// [`crate::OrderCreation::verify_owner`].
     #[error("signer mismatch: declared {declared}, recovered {recovered}")]
     SignerMismatch {
-        /// Address the caller said signed the order (`OrderCreation::from`).
         declared: Address,
-        /// Address actually recovered from the signature.
         recovered: Address,
     },
 }
 
-/// Off-chain or on-chain signature over the EIP-712 order hash.
+/// Signature over the EIP-712 order hash.
 #[derive(Clone, Eq, PartialEq, Hash)]
 pub enum Signature {
     /// EIP-712 typed-data signature.
@@ -78,7 +66,7 @@ pub enum Signature {
     EthSign(EcdsaSignature),
     /// EIP-1271 contract signature payload.
     Eip1271(Vec<u8>),
-    /// On-chain pre-signature recorded via `GPv2Signing::setPreSignature`.
+    /// On-chain pre-signature via `GPv2Signing::setPreSignature`.
     PreSign,
 }
 

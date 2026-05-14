@@ -46,12 +46,18 @@ pub enum QuoteAppData {
 }
 
 impl QuoteAppData {
-    pub const fn hash(digest: AppDataHash) -> Self { Self::Hash(digest) }
-    pub const fn full(full: String) -> Self { Self::Full(full) }
+    pub const fn hash(digest: AppDataHash) -> Self {
+        Self::Hash(digest)
+    }
+    pub const fn full(full: String) -> Self {
+        Self::Full(full)
+    }
 }
 
 impl From<AppDataHash> for QuoteAppData {
-    fn from(digest: AppDataHash) -> Self { Self::Hash(digest) }
+    fn from(digest: AppDataHash) -> Self {
+        Self::Hash(digest)
+    }
 }
 
 /// Quote price-quality hint. Trades off solver latency against depth.
@@ -730,11 +736,16 @@ impl OrderBookApi {
     /// Client around a pre-configured [`reqwest::Client`]. Use for
     /// custom timeouts, proxies, TLS roots, or auth middleware.
     pub fn with_client(base_url: url::Url, client: reqwest::Client) -> Self {
-        Self { base_url: ensure_trailing_slash(base_url), client }
+        Self {
+            base_url: ensure_trailing_slash(base_url),
+            client,
+        }
     }
 
     /// Base URL with the trailing slash path joining relies on.
-    pub const fn base_url(&self) -> &url::Url { &self.base_url }
+    pub const fn base_url(&self) -> &url::Url {
+        &self.base_url
+    }
 
     /// `POST /api/v1/quote`.
     pub async fn get_quote(&self, request: &QuoteRequest) -> Result<OrderQuoteResponse> {

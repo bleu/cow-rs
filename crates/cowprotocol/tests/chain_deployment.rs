@@ -70,10 +70,8 @@ fn redact_reqwest(e: reqwest::Error) -> String {
     } else {
         "other"
     };
-    match e.status() {
-        Some(s) => format!("{kind} (status {s})"),
-        None => kind.to_string(),
-    }
+    e.status()
+        .map_or_else(|| kind.to_string(), |s| format!("{kind} (status {s})"))
 }
 
 async fn eth_get_code(rpc: &str, address: Address) -> Result<Vec<u8>, String> {
@@ -133,9 +131,9 @@ async fn settlement_and_vault_relayer_are_deployed_on_every_configured_chain() {
             ("vault_relayer", chain.vault_relayer()),
         ] {
             match eth_get_code(&rpc, addr).await {
-                Ok(code) if code.is_empty() => failures.push(format!(
-                    "{chain} {label} at {addr:#x}: no bytecode"
-                )),
+                Ok(code) if code.is_empty() => {
+                    failures.push(format!("{chain} {label} at {addr:#x}: no bytecode"))
+                }
                 Ok(_) => {}
                 Err(e) => failures.push(format!("{chain} {label}: {e}")),
             }

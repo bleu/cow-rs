@@ -44,21 +44,25 @@ wasm_bindgen_test_configure!(run_in_browser);
 /// a wasm-bindgen marshalling regression that silently shifts bytes.
 #[wasm_bindgen_test]
 fn order_uid_returns_56_byte_hex() {
-    let order = serde_wasm_bindgen::to_value(&serde_json::json!({
+    let order = serde_json::json!({
         "sellToken": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC
         "buyToken":  "0x6B175474E89094C44Da98b954EedeAC495271d0F", // DAI
         "receiver": null,
         "sellAmount": "100000000",
         "buyAmount":  "99000000000000000000",
-        "validTo": 4294967295u32,
+        "validTo": 4_294_967_295u32,
         "appData": empty_app_data_hash(),
         "feeAmount": "0",
         "kind": "sell",
         "partiallyFillable": false,
         "sellTokenBalance": "erc20",
         "buyTokenBalance":  "erc20",
-    }))
-    .unwrap();
+    });
+    // Round-trip through JSON.parse so the JsValue is a plain JS Object
+    // (not a Map). `from_js<OrderData>` expects sibling fields, which
+    // serde-wasm-bindgen's default Map serialisation does not satisfy.
+    let order_json = serde_json::to_string(&order).expect("order to json");
+    let order = JSON::parse(&order_json).expect("JSON.parse order");
     let uid = order_uid(
         order,
         "mainnet",

@@ -44,16 +44,22 @@ impl fmt::Display for AppDataHash {
 }
 
 impl From<[u8; 32]> for AppDataHash {
-    fn from(bytes: [u8; 32]) -> Self { Self(bytes) }
+    fn from(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
 }
 
 impl AsRef<[u8]> for AppDataHash {
-    fn as_ref(&self) -> &[u8] { &self.0 }
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
 }
 
 impl AppDataHash {
     /// Shortcut for [`AppDataCid::from_hash`].
-    pub fn to_cid(&self) -> AppDataCid { AppDataCid::from_hash(*self) }
+    pub fn to_cid(&self) -> AppDataCid {
+        AppDataCid::from_hash(*self)
+    }
 }
 
 /// `keccak256("{}")`: digest of the canonical empty app-data document.
@@ -655,7 +661,9 @@ impl AppDataCid {
     }
 
     /// Canonical `b...` string.
-    pub fn as_str(&self) -> &str { &self.0 }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 
     /// Extract the embedded [`AppDataHash`]. Accepts `b`-prefixed
     /// (base32) and `f`-prefixed (base16) multibase encodings; cow-rs
