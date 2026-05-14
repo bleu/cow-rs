@@ -9,7 +9,7 @@
 //! to encode calldata, decode return data or compute selectors can use these
 //! types directly.
 //!
-//! ## Surface
+//! ## What this module exposes
 //!
 //! - [`GPv2Settlement`]: the `setPreSignature` / `setPreSignatures` entry
 //!   points used to authorise pre-signed orders, the `settle` entry point
@@ -22,7 +22,7 @@
 //!   approving the vault relayer, checking balances or decimals, and pushing
 //!   simple transfers.
 //! - [`WETH9`]: `deposit()` and `withdraw(uint256)` on top of the ERC-20
-//!   surface, for wrapping and unwrapping the chain's native gas token.
+//!   API, for wrapping and unwrapping the chain's native gas token.
 //! - [`GPV2_SETTLEMENT`] and [`GPV2_VAULT_RELAYER`]: the two singleton
 //!   addresses that share a deployment across every chain CoW Protocol
 //!   supports (CREATE2 with the same salt and bytecode).
@@ -257,8 +257,8 @@ sol! {
 
     /// The two non-ERC-20 entry points on canonical
     /// [WETH9](https://etherscan.io/address/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2#code).
-    /// The ERC-20 surface (`approve`, `balanceOf`, etc.) is exposed through
-    /// [`ERC20`].
+    /// The ERC-20 functions (`approve`, `balanceOf`, etc.) are exposed
+    /// through [`ERC20`].
     #[derive(Debug)]
     interface WETH9 {
         /// Wrap `msg.value` of the chain's native gas token into WETH credited

@@ -206,7 +206,7 @@ fn restore_real_fetch() {
 
 /// `version()` is the smallest transport-touching export: GET
 /// `/api/v1/version`, response is a bare string. Mock fetch to return
-/// `"1.2.3"` and assert the SDK surface returns the same.
+/// `"1.2.3"` and assert the SDK returns the same.
 #[wasm_bindgen_test]
 async fn version_returns_text_body() {
     let _mock = install_mock_fetch(200, "1.2.3");

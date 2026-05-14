@@ -160,6 +160,38 @@
     <pre id="version-output"></pre>
   </section>
 
+  <section>
+    <h2>8. Submit an order through your wallet (USDC → ETH on Base)</h2>
+    <p>
+      Full end-to-end flow against <code>api.cow.fi/base</code>:
+    </p>
+    <ol>
+      <li>Quote 25 USDC → ETH for your connected address.</li>
+      <li>Swap the orderbook's empty <code>appData</code> for
+        <code>sdk_app_data_*()</code> so the order is attributed to
+        <code>cow-rs-wasm</code> in the indexer.</li>
+      <li>Build the EIP-712 typed-data via <code>eip712_payload</code>,
+        sign with MetaMask (raw <code>eth_signTypedData_v4</code>; no
+        viem / ethers needed).</li>
+      <li>POST the signed body via <code>post_order</code> and surface
+        the order UID + explorer URL.</li>
+    </ol>
+    <p>
+      <strong>Submission only.</strong> The orderbook accepts the
+      signed payload immediately; settlement requires you to actually
+      hold the sell-side USDC on Base and to have approved the GPv2
+      Vault relayer
+      (<code>0xC92E8bdf79f0507f65a392b0ab4667716BFE0110</code>).
+      Without that, the order stays in
+      <code>cancelled</code> / <code>expired</code> rather than
+      <code>traded</code>, but submission still records.
+    </p>
+    <button id="connect-wallet">Connect wallet</button>
+    <button id="submit-base-order" disabled>Sign &amp; submit (Base)</button>
+    <p id="submit-status" class="pending">click <em>Connect wallet</em> first</p>
+    <pre id="submit-output"></pre>
+  </section>
+
   <script type="module">
     import init, {
       build_order_creation,
@@ -170,6 +202,9 @@
       eip712_payload,
       get_quote_simple,
       order_struct_hash,
+      post_order,
+      sdk_app_data_hash,
+      sdk_app_data_json,
       sign_eip712,
       version,
     } from '../crates/cow-sdk-wasm/pkg/cow_sdk_wasm.js';
@@ -499,6 +534,156 @@
           throw new Error('empty version response');
         }
         return { body: v, summary: v.slice(0, 32) };
+      });
+
+      // Panel 8: submit a real order through MetaMask on Base.
+      //
+      // Mirrors the cowswap frontend's `POST /base/api/v1/quote` payload
+      // (USDC -> ETH, 25 USDC) so the resulting order is comparable to
+      // what swap.cow.fi would build, with one difference: the appData
+      // points at `sdk_app_data_*()` so the indexer attributes this
+      // order back to `cow-rs-wasm`.
+      const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+      const ETH_PLACEHOLDER = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+      const BASE_CHAIN_ID_HEX = '0x2105'; // 8453
+      const BASE_VAULT_RELAYER = '0xC92E8bdf79f0507f65a392b0ab4667716BFE0110';
+      const submitStatus = document.getElementById('submit-status');
+      const submitOutput = document.getElementById('submit-output');
+      const submitButton = document.getElementById('submit-base-order');
+      const connectButton = document.getElementById('connect-wallet');
+      let connectedAccount = null;
+
+      connectButton.addEventListener('click', async () => {
+        try {
+          if (typeof window.ethereum === 'undefined') {
+            throw new Error('window.ethereum not found; install MetaMask or similar');
+          }
+          const [account] = await window.ethereum.request({
+            method: 'eth_requestAccounts',
+          });
+          // Make sure the wallet is on Base; prompt to switch if not.
+          const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+          if (chainId !== BASE_CHAIN_ID_HEX) {
+            try {
+              await window.ethereum.request({
+                method: 'wallet_switchEthereumChain',
+                params: [{ chainId: BASE_CHAIN_ID_HEX }],
+              });
+            } catch (switchErr) {
+              throw new Error(
+                `wallet on chain ${chainId}, expected ${BASE_CHAIN_ID_HEX} (Base). `
+                  + 'Switch manually and try again. '
+                  + `Underlying error: ${switchErr.message ?? switchErr}`,
+              );
+            }
+          }
+          connectedAccount = account;
+          submitButton.disabled = false;
+          setStatus(submitStatus, true, `✅ wallet connected: ${account}`);
+        } catch (err) {
+          setStatus(submitStatus, false, `❌ ${err.message ?? err}`);
+        }
+      });
+
+      submitButton.addEventListener('click', async () => {
+        if (!connectedAccount) {
+          setStatus(submitStatus, false, '❌ connect a wallet first');
+          return;
+        }
+        const account = connectedAccount;
+        setStatus(submitStatus, true, '⏳ quoting…');
+        submitOutput.textContent = '';
+        try {
+          // 1. Quote.
+          const quote = await get_quote_simple(
+            'base',
+            USDC_BASE,
+            ETH_PLACEHOLDER,
+            account,
+            '25000000', // 25 USDC, 6 decimals
+          );
+          const q = quote.response.quote;
+
+          // 2. SDK attribution app-data.
+          const appDataJson = sdk_app_data_json();
+          const appDataHash = sdk_app_data_hash();
+
+          // 3. The OrderData the wallet will sign. The orderbook
+          //    expects sellAmount + feeAmount split out and the
+          //    attribution digest in `appData`.
+          const orderData = {
+            sellToken:         q.sellToken,
+            buyToken:          q.buyToken,
+            receiver:          q.receiver,
+            sellAmount:        (BigInt(q.sellAmount) + BigInt(q.feeAmount)).toString(),
+            buyAmount:         q.buyAmount,
+            validTo:           q.validTo,
+            appData:           appDataHash,
+            feeAmount:         '0',
+            kind:              q.kind,
+            partiallyFillable: q.partiallyFillable,
+            sellTokenBalance:  q.sellTokenBalance,
+            buyTokenBalance:   q.buyTokenBalance,
+          };
+
+          // 4. Build the EIP-712 typed-data payload + sign with the
+          //    raw EIP-1193 RPC. `eth_signTypedData_v4` requires
+          //    `EIP712Domain` in `types`; the shim omits it
+          //    (viem / ethers reject duplicates), so we inject it here
+          //    before stringifying for MetaMask.
+          setStatus(submitStatus, true, '⏳ awaiting MetaMask signature…');
+          const payload = eip712_payload(orderData, 'base');
+          const rpcPayload = {
+            ...payload,
+            types: {
+              EIP712Domain: [
+                { name: 'name',              type: 'string'  },
+                { name: 'version',           type: 'string'  },
+                { name: 'chainId',           type: 'uint256' },
+                { name: 'verifyingContract', type: 'address' },
+              ],
+              ...payload.types,
+            },
+          };
+          const sigHex = await window.ethereum.request({
+            method: 'eth_signTypedData_v4',
+            params: [account, JSON.stringify(rpcPayload)],
+          });
+          const r = '0x' + sigHex.slice(2, 66);
+          const s = '0x' + sigHex.slice(66, 130);
+          const v = parseInt(sigHex.slice(130, 132), 16);
+
+          // 5. Build the OrderCreation body and submit.
+          setStatus(submitStatus, true, '⏳ posting to api.cow.fi/base…');
+          const creation = build_order_creation(
+            orderData,
+            { signingScheme: 'eip712', r, s, v },
+            account,
+            appDataJson,
+            quote.response.id,
+          );
+          const uid = await post_order('base', creation);
+
+          submitOutput.textContent = JSON.stringify(
+            {
+              uid,
+              explorer: `https://explorer.cow.fi/base/orders/${uid}`,
+              appCode: JSON.parse(appDataJson).appCode,
+              appDataHash,
+              quoteId: quote.response.id,
+              sellAmountAtomic: orderData.sellAmount,
+              buyAmountAtomic: orderData.buyAmount,
+              vaultRelayerToApprove: BASE_VAULT_RELAYER,
+            },
+            null,
+            2,
+          );
+          setStatus(submitStatus, true,
+            `✅ submitted — open https://explorer.cow.fi/base/orders/${uid}`);
+        } catch (err) {
+          setStatus(submitStatus, false, `❌ ${err.message ?? err}`);
+          submitOutput.textContent = String(err);
+        }
       });
     }
 

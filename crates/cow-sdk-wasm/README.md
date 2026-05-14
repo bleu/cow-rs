@@ -9,9 +9,9 @@ crates.io.
 
 ## Status
 
-Alpha. The surface mirrors the cow-py / cow-sdk feature set we considered
-most useful for browser and Node consumers, but the binding is young and
-the API may evolve before a 1.0.
+Alpha. The exported functions mirror the cow-py / cow-sdk feature set
+we considered most useful for browser and Node consumers, but the
+binding is young and the API may evolve before a 1.0.
 
 ## Quick example
 

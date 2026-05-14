@@ -1,4 +1,4 @@
-//! `@cowdao-grants/cow-sdk-wasm`: JavaScript-facing surface of the
+//! `@cowdao-grants/cow-sdk-wasm`: JavaScript-facing bindings for the
 //! `cowprotocol` Rust SDK, generated via `wasm-bindgen`.
 //!
 //! Every exported function takes / returns JSON-compatible values

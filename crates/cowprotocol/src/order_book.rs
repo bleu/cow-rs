@@ -1,14 +1,15 @@
 //! Thin client for the CoW Protocol orderbook HTTP API.
 //!
-//! The first surface implemented here is [`OrderBookApi::get_quote`], which
-//! mirrors the `getQuote` flow exposed
-//! by `@cowprotocol/cow-sdk` and `cow-py`. The request and response shapes
-//! reflect the production orderbook OpenAPI as of 2026-05.
+//! The first endpoint implemented here is [`OrderBookApi::get_quote`],
+//! which mirrors the `getQuote` flow exposed by `@cowprotocol/cow-sdk`
+//! and `cow-py`. The request and response shapes reflect the
+//! production orderbook OpenAPI as of 2026-05.
 
 use alloy_primitives::{Address, B256, U256};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use crate::app_data::AppDataHash;
 use crate::cancellation::{OrderCancellation, SignedOrderCancellations};
@@ -17,6 +18,21 @@ use crate::error::{ApiError, Error, Result};
 use crate::order::{BuyTokenDestination, Order, OrderData, OrderKind, OrderUid, SellTokenSource};
 use crate::signature::{EcdsaSignature, Signature};
 use crate::signing_scheme::{EcdsaSigningScheme, SigningScheme};
+
+/// Wall-clock cap applied to every request the default
+/// [`OrderBookApi`] client issues. A hostile or stuck orderbook cannot
+/// otherwise hold a caller's task open indefinitely. Override by
+/// constructing the client manually and passing
+/// [`OrderBookApi::with_client`].
+pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Maximum byte length the SDK will accept for any single HTTP response
+/// body. Larger payloads are rejected with [`Error::ResponseTooLarge`]
+/// before they can exhaust process memory. Eight MiB is generous for
+/// every documented orderbook endpoint, including the solver-oriented
+/// `/api/v1/auction` snapshot. Bumping this constant is the right knob
+/// for callers who explicitly want to deserialise larger bodies.
+pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 /// App-data binding on a quote request.
 ///
@@ -1084,11 +1100,24 @@ impl OrderBookApi {
     }
 
     /// Build a client against a custom base URL: useful for tests against
-    /// a recorded server or a staging deployment.
+    /// a recorded server or a staging deployment. The default reqwest
+    /// client carries a [`DEFAULT_HTTP_TIMEOUT`] cap so a stuck
+    /// orderbook cannot hold the caller open indefinitely.
     pub fn new_with_base_url(base_url: url::Url) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(DEFAULT_HTTP_TIMEOUT)
+            .build()
+            .expect("reqwest client builder cannot fail with default settings");
+        Self::with_client(base_url, client)
+    }
+
+    /// Build a client around a pre-configured [`reqwest::Client`].
+    /// Use this when you need to override timeouts, install proxies,
+    /// pin TLS roots, or inject auth middleware.
+    pub fn with_client(base_url: url::Url, client: reqwest::Client) -> Self {
         Self {
             base_url: ensure_trailing_slash(base_url),
-            client: reqwest::Client::new(),
+            client,
         }
     }
 

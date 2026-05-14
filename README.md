@@ -122,7 +122,7 @@ let uid = order.uid(&domain, owner);
 assert_eq!(uid.0.len(), 56);
 ```
 
-## Surface
+## Modules
 
 | Module | What it exposes |
 |---|---|
@@ -284,8 +284,8 @@ For Safe wallets, replace `signTypedData` with the Safe SDK's
 the shim wraps the bytes into a `Signature::Eip1271` envelope.
 
 See [`crates/cow-sdk-wasm/README.md`](crates/cow-sdk-wasm/README.md)
-for the full exported surface, the `in_shim_signing` feature trade-off,
-and the npm publish flow for maintainers.
+for the full exported function list, the `in_shim_signing` feature
+trade-off, and the npm publish flow for maintainers.
 
 ### Build targets and bundle size
 

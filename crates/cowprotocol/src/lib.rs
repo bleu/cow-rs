@@ -5,7 +5,7 @@
 //!
 //! Rust SDK for the [CoW Protocol](https://cow.fi).
 //!
-//! ## Surface
+//! ## What this crate exposes
 //!
 //! - [`OrderData`]: the 12-field signed payload, with
 //!   [`OrderData::hash_struct`] for EIP-712 hashing,

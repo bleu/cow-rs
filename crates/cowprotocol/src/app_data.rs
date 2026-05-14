@@ -95,7 +95,7 @@ pub const LATEST_APP_DATA_VERSION: &str = "1.6.0";
 /// `appCode: "CoW Swap"` convention the frontend uses and the
 /// `appCode: "cow-py"` cow-py defaults to. Lets the orderbook indexer
 /// count how many orders flow through the Rust SDK vs other clients.
-/// Surface via [`AppDataDoc::sdk_attribution`].
+/// Apply via [`AppDataDoc::sdk_attribution`].
 pub const COW_RS_APP_CODE: &str = "cow-rs";
 
 /// Canonical `appCode` for orders built through the wasm shim
