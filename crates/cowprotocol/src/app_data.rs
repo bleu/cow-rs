@@ -90,6 +90,20 @@ pub const EMPTY_APP_DATA_JSON: &str = "{}";
 /// changes; see `cow-protocol/reference/core/intents/app-data.mdx`.
 pub const LATEST_APP_DATA_VERSION: &str = "1.6.0";
 
+/// Canonical `appCode` for orders built through the native Rust SDK
+/// (this crate, called directly from Rust). Mirrors the
+/// `appCode: "CoW Swap"` convention the frontend uses and the
+/// `appCode: "cow-py"` cow-py defaults to. Lets the orderbook indexer
+/// count how many orders flow through the Rust SDK vs other clients.
+/// Surface via [`AppDataDoc::sdk_attribution`].
+pub const COW_RS_APP_CODE: &str = "cow-rs";
+
+/// Canonical `appCode` for orders built through the wasm shim
+/// (`cow-sdk-wasm` published to npm). Distinct from
+/// [`COW_RS_APP_CODE`] so the orderbook indexer can tell native Rust
+/// callers and JS-via-wasm callers apart.
+pub const COW_RS_WASM_APP_CODE: &str = "cow-rs-wasm";
+
 /// Maximum byte length of a `fullAppData` document the orderbook will
 /// accept on `PUT /api/v1/app_data/{hash}`. Mirrors the server-side
 /// `Validator::DEFAULT_SIZE_LIMIT` in `cowprotocol/services/crates/shared/
@@ -528,6 +542,30 @@ impl AppDataDoc {
             app_code: Some(app_code.into()),
             environment: None,
             metadata: AppDataMetadata::default(),
+        }
+    }
+
+    /// SDK-attribution document. Sets `appCode` to the supplied
+    /// identifier (pass [`COW_RS_APP_CODE`] when building from native
+    /// Rust, [`COW_RS_WASM_APP_CODE`] when building from the wasm
+    /// shim) and `metadata.quote.version` to this crate's
+    /// `CARGO_PKG_VERSION` so the orderbook indexer can identify
+    /// orders that originated from this SDK and from which release.
+    ///
+    /// Integrators with their own `appCode` should construct an
+    /// [`AppDataDoc`] directly instead.
+    pub fn sdk_attribution(app_code: &str) -> Self {
+        Self {
+            version: LATEST_APP_DATA_VERSION.to_string(),
+            app_code: Some(app_code.to_string()),
+            environment: None,
+            metadata: AppDataMetadata {
+                quote: Some(AppDataQuote {
+                    slippage_bips: None,
+                    version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                }),
+                ..AppDataMetadata::default()
+            },
         }
     }
 
@@ -1001,6 +1039,40 @@ mod tests {
     fn empty_app_data_hash_matches_keccak() {
         let computed = alloy_primitives::keccak256(EMPTY_APP_DATA_JSON);
         assert_eq!(EMPTY_APP_DATA_HASH.0, *computed);
+    }
+
+    /// SDK-attribution doc pins appCode + metadata.quote.version. The
+    /// orderbook indexer reads these fields to count which integrators
+    /// produced an order; a regression here means orders silently stop
+    /// being attributable. Build the canonical JSON, then parse it
+    /// back so we lock both the in-memory builder and the wire shape.
+    #[test]
+    fn sdk_attribution_doc_pins_app_code_and_version() {
+        for app_code in [COW_RS_APP_CODE, COW_RS_WASM_APP_CODE] {
+            let doc = AppDataDoc::sdk_attribution(app_code);
+            assert_eq!(doc.app_code.as_deref(), Some(app_code));
+
+            let json = doc.canonical_json();
+            let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(value["appCode"], app_code);
+            assert_eq!(
+                value["metadata"]["quote"]["version"],
+                env!("CARGO_PKG_VERSION")
+            );
+            assert_eq!(value["version"], LATEST_APP_DATA_VERSION);
+
+            // Hash is stable across calls for a given app_code (and
+            // changes when the app_code does).
+            assert_eq!(
+                AppDataDoc::sdk_attribution(app_code).hash(),
+                AppDataDoc::sdk_attribution(app_code).hash(),
+            );
+        }
+        assert_ne!(
+            AppDataDoc::sdk_attribution(COW_RS_APP_CODE).hash(),
+            AppDataDoc::sdk_attribution(COW_RS_WASM_APP_CODE).hash(),
+            "cow-rs and cow-rs-wasm must produce distinct app-data digests"
+        );
     }
 
     #[test]

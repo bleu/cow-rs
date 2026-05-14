@@ -39,6 +39,106 @@ const { response, uid } = await get_quote_simple(
 See `test-harness/index.html` in the repository root for a complete
 end-to-end example running against the live orderbook.
 
+## Submit an order with your own wallet
+
+The wasm shim never holds private keys in the default build. The
+typical flow is: quote on this side, sign with `viem` /
+`window.ethereum` / Safe, submit on this side. The orderbook attributes
+the order back to this SDK because every exported helper that hashes
+app-data carries the `appCode: "cow-rs-wasm"` tag plus this package's
+version in `metadata.quote.version`.
+
+```js
+import init, {
+  get_quote_simple,
+  eip712_payload,
+  build_order_creation,
+  post_order,
+  sdk_app_data_json,
+  sdk_app_data_hash,
+} from '@cowdao-grants/cow-sdk-wasm';
+import { createWalletClient, custom } from 'viem';
+import { base } from 'viem/chains';
+
+await init();
+
+const account = '0x26394373F96950025DA55b07809c976a4768c995';
+
+// 1. Quote. Hands back the orderbook response plus the UID the next
+//    signing step would consume (computed against an empty app-data
+//    digest -- we replace it below with the SDK-attribution doc).
+const { response } = await get_quote_simple(
+  'base',
+  '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
+  '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE', // ETH placeholder
+  account,
+  '25000000', // 25 USDC, 6 decimals
+);
+
+// 2. Replace the empty app-data with this SDK's attribution doc so the
+//    orderbook indexer can count it. Pure compute, no network.
+const appDataJson = sdk_app_data_json();   // canonical JSON string
+const appDataHash = sdk_app_data_hash();   // keccak256 hex
+
+// 3. Build the OrderData the wallet will sign. Take the orderbook's
+//    quote as-is, swap in the attribution app-data digest, and pin
+//    the validity window the response advertised.
+const orderData = {
+  sellToken:           response.quote.sellToken,
+  buyToken:            response.quote.buyToken,
+  receiver:            response.quote.receiver,
+  sellAmount:          response.quote.sellAmount,
+  buyAmount:           response.quote.buyAmount,
+  validTo:             response.quote.validTo,
+  appData:             appDataHash,
+  feeAmount:           response.quote.feeAmount,
+  kind:                response.quote.kind,
+  partiallyFillable:   response.quote.partiallyFillable,
+  sellTokenBalance:    response.quote.sellTokenBalance,
+  buyTokenBalance:     response.quote.buyTokenBalance,
+};
+
+// 4. Ask the SDK for the EIP-712 typed-data envelope; sign it with
+//    whatever wallet you have. viem returns a 0x-prefixed 65-byte hex.
+const typedData = eip712_payload(orderData, 'base');
+const wallet = createWalletClient({
+  chain: base,
+  transport: custom(window.ethereum),
+});
+const signatureHex = await wallet.signTypedData({
+  account,
+  ...typedData,
+});
+
+// 5. Unpack (r, s, v) for build_order_creation. The orderbook expects
+//    the bytes split out from the 0x{r}{s}{v} hex blob.
+const r = '0x' + signatureHex.slice(2, 66);
+const s = '0x' + signatureHex.slice(66, 130);
+const v = parseInt(signatureHex.slice(130, 132), 16);
+
+const creation = build_order_creation(
+  orderData,
+  { signingScheme: 'eip712', r, s, v },
+  account,
+  appDataJson, // PUT against /api/v1/app_data/{hash} by the orderbook
+  response.id, // quote_id for solver fee accounting
+);
+
+// 6. POST /api/v1/orders. Returns the assigned 56-byte UID.
+const uid = await post_order('base', creation);
+console.log(`https://explorer.cow.fi/base/orders/${uid}`);
+```
+
+For ethers v6 the signing block is the same shape — call
+`signer.signTypedData(typedData.domain, typedData.types, typedData.message)`
+and slice the result the same way.
+
+If you want the SDK to hold the private key in wasm linear memory (for
+tests, scripts, or local replays), build with the `in_shim_signing`
+cargo feature and replace step 4 with one of `sign_eip712` /
+`sign_ethsign`. The default build leaves those off so the shipped
+`.wasm` stays slim.
+
 ## Cargo features
 
 | Feature | Default | What it adds |

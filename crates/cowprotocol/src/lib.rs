@@ -93,6 +93,7 @@ pub mod eth_flow;
 pub mod multiplexer;
 pub mod order;
 pub mod order_book;
+pub mod quote_amounts;
 pub mod signature;
 pub mod signing_scheme;
 #[cfg(feature = "subgraph")]
@@ -102,8 +103,8 @@ pub use crate::{
     app_data::{
         AppDataCid, AppDataCidError, AppDataDoc, AppDataFlashloan, AppDataHash, AppDataMetadata,
         AppDataOrderClass, AppDataPartnerFee, AppDataQuote, AppDataReferrer, AppDataReplacedOrder,
-        AppDataUtm, AppDataWrapperCall, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON, FeePolicy,
-        LATEST_APP_DATA_VERSION,
+        AppDataUtm, AppDataWrapperCall, COW_RS_APP_CODE, COW_RS_WASM_APP_CODE, EMPTY_APP_DATA_HASH,
+        EMPTY_APP_DATA_JSON, FeePolicy, LATEST_APP_DATA_VERSION,
     },
     cancellation::{OrderCancellation, OrderCancellations, SignedOrderCancellations},
     chain::{Chain, UnsupportedChain},
@@ -128,6 +129,9 @@ pub use crate::{
         AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderBookApi,
         OrderCreation, OrderQuote, OrderQuoteResponse, PriceQuality, QuoteRequest, TokenMetadata,
         TotalSurplus, Trade,
+    },
+    quote_amounts::{
+        Amounts as QuoteAmounts, QuoteAmountsAndCosts, QuoteAmountsParams, QuoteCosts,
     },
     signature::{EcdsaSignature, Recovered, Signature, SignatureError},
     signing_scheme::{EcdsaSigningScheme, SigningScheme},

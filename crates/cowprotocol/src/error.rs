@@ -107,6 +107,27 @@ pub enum Error {
         /// Maximum byte length the SDK accepts for this endpoint.
         max: usize,
     },
+
+    /// `protocol_fee_bps` could not be parsed as a non-negative decimal
+    /// with at most 5 fractional digits. The orderbook serialises the
+    /// field as a JSON string (e.g. `"0.3"`); this variant fires when
+    /// the value is malformed or carries more precision than the
+    /// internal `bps * 100_000` scale can represent.
+    #[error("invalid protocol_fee_bps {value:?}: {reason}")]
+    InvalidProtocolFeeBps {
+        /// The string the caller (or orderbook) passed in.
+        value: String,
+        /// Why parsing failed.
+        reason: &'static str,
+    },
+
+    /// A `quote.sellAmount` of zero made [`crate::quote_amounts::compute`]
+    /// unable to project network costs into the buy currency. This is a
+    /// degenerate quote (no input to sell) and never appears for orders
+    /// the orderbook would settle; we refuse it explicitly so the fee
+    /// math cannot divide by zero downstream.
+    #[error("quote sellAmount is zero, network cost projection undefined")]
+    QuoteSellAmountZero,
 }
 
 /// Structured error envelope returned by the CoW orderbook for 4xx / 5xx

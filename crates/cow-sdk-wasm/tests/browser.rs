@@ -29,8 +29,9 @@ use {
 };
 
 use cow_sdk_wasm::{
-    app_data_cid_from_hash, chain_info, compute_order_uid, domain_separator, empty_app_data_hash,
-    get_quote_simple, version,
+    app_data_cid_from_hash, app_data_hash_from_json, chain_info, compute_order_uid,
+    domain_separator, empty_app_data_hash, get_quote_simple, sdk_app_data_hash, sdk_app_data_json,
+    version,
 };
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -348,4 +349,28 @@ fn sign_eip712_owner_matches_anvil_account_zero() {
         .as_f64()
         .unwrap() as u8;
     assert!(v == 27 || v == 28, "v should be 27 or 28, got {v}");
+}
+
+/// Attribution doc carries `appCode: "cow-rs-wasm"` and the wasm
+/// package version. The hash returned by `sdk_app_data_hash` must
+/// match `app_data_hash_from_json(sdk_app_data_json())` so a JS
+/// caller can recompute the digest independently and get the same
+/// bytes.
+#[wasm_bindgen_test]
+fn sdk_app_data_json_and_hash_are_consistent() {
+    let json = sdk_app_data_json();
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse sdk json");
+    assert_eq!(value["appCode"], "cow-rs-wasm");
+    assert!(
+        value["metadata"]["quote"]["version"].is_string(),
+        "quote.version should be set: {json}"
+    );
+
+    let derived = app_data_hash_from_json(&json).expect("hash from json");
+    let direct = sdk_app_data_hash();
+    assert_eq!(
+        derived, direct,
+        "sdk_app_data_hash() should equal app_data_hash_from_json(sdk_app_data_json())"
+    );
+    assert!(direct.starts_with("0x") && direct.len() == 2 + 64);
 }

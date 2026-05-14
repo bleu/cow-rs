@@ -328,7 +328,7 @@
           const last = signResults[labels[labels.length - 1]];
           const creation = build_order_creation(SIGN_ORDER, {
             signingScheme: 'eip712', ...last.sig,
-          }, OWNER, '{}', null);
+          }, OWNER, 'mainnet', '{}', null);
           signRoundTrip = {
             signatureWire: creation.signature,
             from: creation.from,

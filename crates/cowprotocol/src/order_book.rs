@@ -622,11 +622,98 @@ impl OrderQuoteResponse {
     /// the response into a signable order until every caller-authorised
     /// field round-trips. Returns [`Error::QuoteFieldMismatch`] on the
     /// first divergence.
-    pub fn to_signed_order_data_for(
+    /// Project this quote into [`QuoteAmountsAndCosts`], threading the
+    /// caller's partner fee, slippage and any `protocolFeeBps` echoed
+    /// by the response through the same arithmetic the TypeScript SDK
+    /// uses (`getQuoteAmountsAndCosts`). Use this when posting an order
+    /// that combines a partner fee with a quote that carries a
+    /// protocol fee, otherwise the partner-fee base is computed against
+    /// the wrong spot price and the orderbook receives an inflated
+    /// `buyAmount` (see [`cow-sdk` #867]).
+    ///
+    /// `protocol_fee_bps_override` lets the caller pin a specific value
+    /// instead of trusting [`Self::protocol_fee_bps`]; `None` falls
+    /// back to the on-wire field.
+    ///
+    /// [`cow-sdk` #867]: https://github.com/cowprotocol/cow-sdk/pull/867
+    pub fn amounts_with_costs(
+        &self,
+        partner_fee_bps: u32,
+        slippage_bps: u32,
+        protocol_fee_bps_override: Option<&str>,
+    ) -> Result<crate::quote_amounts::QuoteAmountsAndCosts> {
+        let q = &self.quote;
+        let protocol_fee_bps = protocol_fee_bps_override.or(self.protocol_fee_bps.as_deref());
+        crate::quote_amounts::compute(crate::quote_amounts::QuoteAmountsParams {
+            kind: q.kind,
+            sell_amount: q.sell_amount,
+            buy_amount: q.buy_amount,
+            fee_amount: q.fee_amount,
+            partner_fee_bps,
+            slippage_bps,
+            protocol_fee_bps,
+        })
+    }
+
+    /// Like [`Self::to_signed_order_data`] but applies the full
+    /// partner-fee + protocol-fee + slippage composition through
+    /// [`Self::amounts_with_costs`] before projecting into
+    /// [`OrderData`]. Use this whenever the order being submitted
+    /// carries an `AppDataPartnerFee`, or when the quote response
+    /// echoes a non-zero `protocolFeeBps`.
+    pub fn to_signed_order_data_with_costs(
+        &self,
+        partner_fee_bps: u32,
+        slippage_bps: u32,
+        protocol_fee_bps_override: Option<&str>,
+        app_data: AppDataHash,
+    ) -> Result<OrderData> {
+        let amounts =
+            self.amounts_with_costs(partner_fee_bps, slippage_bps, protocol_fee_bps_override)?;
+        let q = &self.quote;
+        Ok(OrderData {
+            sell_token: q.sell_token,
+            buy_token: q.buy_token,
+            receiver: q.receiver,
+            sell_amount: amounts.amounts_to_sign.sell_amount,
+            buy_amount: amounts.amounts_to_sign.buy_amount,
+            valid_to: q.valid_to,
+            app_data,
+            fee_amount: U256::ZERO,
+            kind: q.kind,
+            partially_fillable: q.partially_fillable,
+            sell_token_balance: q.sell_token_balance,
+            buy_token_balance: q.buy_token_balance,
+        })
+    }
+
+    /// Like [`Self::to_signed_order_data_with_costs`] but also
+    /// cross-checks the quote's `sell_token`, `buy_token`, `receiver`
+    /// and (when the caller pinned a digest) `app_data` against the
+    /// original [`QuoteRequest`] before producing the [`OrderData`]
+    /// the user will sign.
+    pub fn to_signed_order_data_with_costs_for(
+        &self,
+        request: &QuoteRequest,
+        partner_fee_bps: u32,
+        slippage_bps: u32,
+        protocol_fee_bps_override: Option<&str>,
+        app_data: AppDataHash,
+    ) -> Result<OrderData> {
+        self.check_response_matches_request(request, app_data)?;
+        self.to_signed_order_data_with_costs(
+            partner_fee_bps,
+            slippage_bps,
+            protocol_fee_bps_override,
+            app_data,
+        )
+    }
+
+    fn check_response_matches_request(
         &self,
         request: &QuoteRequest,
         app_data: AppDataHash,
-    ) -> Result<OrderData> {
+    ) -> Result<()> {
         let q = &self.quote;
         if q.sell_token != request.sell_token {
             return Err(Error::QuoteFieldMismatch {
@@ -668,6 +755,22 @@ impl OrderQuoteResponse {
                 returned: app_data.to_string(),
             });
         }
+        Ok(())
+    }
+
+    /// Like [`Self::to_signed_order_data`] but cross-checks the
+    /// quote's `sell_token`, `buy_token`, `receiver` and (when the
+    /// caller pinned a digest) `app_data` against the original
+    /// [`QuoteRequest`] before producing the [`OrderData`] the user
+    /// will sign. Defends against a hostile orderbook that swaps any
+    /// of those fields between request and response. Returns
+    /// [`Error::QuoteFieldMismatch`] on the first divergence.
+    pub fn to_signed_order_data_for(
+        &self,
+        request: &QuoteRequest,
+        app_data: AppDataHash,
+    ) -> Result<OrderData> {
+        self.check_response_matches_request(request, app_data)?;
         self.to_signed_order_data(app_data)
     }
 }
@@ -803,29 +906,38 @@ struct OrderCreationWire {
 }
 
 impl TryFrom<OrderCreationWire> for OrderCreation {
-    type Error = crate::signature::SignatureError;
+    type Error = crate::error::Error;
 
+    /// Reassemble an [`OrderCreation`] from its wire form, applying the
+    /// same invariants [`OrderCreation::from_signed_order_data`] enforces
+    /// on the construction path: the signature payload must parse for the
+    /// declared scheme, `from` must be non-zero, and
+    /// `keccak256(app_data) == app_data_hash`. Without the digest check, a
+    /// hostile orderbook (or any intermediary) could hand the SDK a body
+    /// whose JSON document disagrees with the hash the user signed.
     fn try_from(wire: OrderCreationWire) -> std::result::Result<Self, Self::Error> {
         let signature = Signature::from_bytes(wire.signing_scheme, &wire.signature)?;
-        Ok(Self {
+        let order_data = OrderData {
             sell_token: wire.sell_token,
             buy_token: wire.buy_token,
             receiver: wire.receiver,
             sell_amount: wire.sell_amount,
             buy_amount: wire.buy_amount,
             valid_to: wire.valid_to,
-            app_data: wire.app_data,
-            app_data_hash: wire.app_data_hash,
+            app_data: wire.app_data_hash,
             fee_amount: wire.fee_amount,
             kind: wire.kind,
             partially_fillable: wire.partially_fillable,
             sell_token_balance: wire.sell_token_balance,
             buy_token_balance: wire.buy_token_balance,
-            signing_scheme: wire.signing_scheme,
+        };
+        Self::from_signed_order_data(
+            order_data,
             signature,
-            from: wire.from,
-            quote_id: wire.quote_id,
-        })
+            wire.from,
+            wire.app_data,
+            wire.quote_id,
+        )
     }
 }
 
@@ -1851,6 +1963,36 @@ mod tests {
         );
     }
 
+    /// R21b: deserialising an `OrderCreation` JSON whose `appData` JSON
+    /// document does not hash to `appDataHash` is rejected before the
+    /// body can be relayed downstream. Mirrors R21 for the wire-path
+    /// (`TryFrom<OrderCreationWire>`), defending callers that relay an
+    /// `OrderCreation` they received from an untrusted source.
+    #[test]
+    fn deserialise_rejects_app_data_digest_mismatch() {
+        let quote = load_mainnet_quote();
+        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
+        let mut body = serde_json::to_value(
+            OrderCreation::from_signed_order_data(
+                signed,
+                Signature::default_with(SigningScheme::Eip712),
+                quote.from,
+                EMPTY_APP_DATA_JSON.to_owned(),
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        // Swap the document for one whose keccak256 differs from
+        // `EMPTY_APP_DATA_HASH` while leaving `appDataHash` untouched.
+        body["appData"] = serde_json::Value::String(r#"{"version":"1.6.0","metadata":{}}"#.into());
+        let err = serde_json::from_value::<OrderCreation>(body).unwrap_err();
+        assert!(
+            err.to_string().contains("app_data"),
+            "expected app_data digest mismatch surfaced through serde, got: {err}"
+        );
+    }
+
     /// R22: `verify_owner` rejects a synthesised EIP-1271 / PreSign body
     /// whose `from` is the zero address. The `Ok` arm must never act as
     /// a positive owner assertion for an obviously bogus body.
@@ -1885,6 +2027,60 @@ mod tests {
             err,
             crate::signature::SignatureError::SignerMismatch { .. }
         ));
+    }
+
+    /// R23: `verify_owner` rejects an ECDSA-signed body whose declared
+    /// `from` is not the address recovered from the signature. This is
+    /// the typo-and-wallet-switch case the WASM
+    /// `build_order_creation` shim relies on to fail fast client-side
+    /// instead of pushing the bad pair to the orderbook.
+    #[test]
+    fn verify_owner_rejects_signer_mismatch_for_ecdsa() {
+        use alloy_signer_local::PrivateKeySigner;
+
+        let signer = PrivateKeySigner::from_bytes(&U256::from(1u64).to_be_bytes().into()).unwrap();
+        let real_signer = signer.address();
+        let impostor = alloy_primitives::address!("dead0000dead0000dead0000dead0000dead0000");
+        assert_ne!(real_signer, impostor);
+
+        let domain = crate::domain::DomainSeparator(alloy_primitives::B256::repeat_byte(0xab).0);
+        let order_data = OrderData {
+            sell_token: alloy_primitives::address!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            buy_token: alloy_primitives::address!("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            receiver: None,
+            sell_amount: U256::from(1_000_000u64),
+            buy_amount: U256::from(999u64),
+            valid_to: 0xffffffff,
+            app_data: EMPTY_APP_DATA_HASH,
+            fee_amount: U256::ZERO,
+            kind: OrderKind::Sell,
+            partially_fillable: false,
+            sell_token_balance: SellTokenSource::default(),
+            buy_token_balance: BuyTokenDestination::default(),
+        };
+        let signature = order_data
+            .sign(EcdsaSigningScheme::Eip712, &domain, &signer)
+            .unwrap();
+        // Build the body with the *wrong* declared owner.
+        let creation = OrderCreation::from_signed_order_data(
+            order_data,
+            signature,
+            impostor,
+            EMPTY_APP_DATA_JSON.to_owned(),
+            None,
+        )
+        .unwrap();
+        let err = creation.verify_owner(&domain).unwrap_err();
+        match err {
+            crate::signature::SignatureError::SignerMismatch {
+                declared,
+                recovered,
+            } => {
+                assert_eq!(declared, impostor);
+                assert_eq!(recovered, real_signer);
+            }
+            other => panic!("expected SignerMismatch, got {other:?}"),
+        }
     }
 
     /// `quoteId` is omitted when not provided rather than emitted as `null`.

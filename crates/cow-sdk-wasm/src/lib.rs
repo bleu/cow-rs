@@ -26,7 +26,7 @@ use {
     cowprotocol::{
         AppDataCid, AppDataDoc, AppDataHash, Chain, DomainSeparator, EMPTY_APP_DATA_HASH,
         EcdsaSignature, EcdsaSigningScheme, OrderBuilder, OrderCancellation, OrderData, OrderKind,
-        OrderUid, QuoteRequest, Signature, hashed_eip712_message,
+        OrderUid, QuoteRequest, Signature, SigningScheme, hashed_eip712_message,
     },
     serde::{Deserialize, Serialize},
     wasm_bindgen::prelude::*,
@@ -334,7 +334,7 @@ fn sign_with_scheme(
 }
 
 #[cfg(feature = "in_shim_signing")]
-fn scheme_to_str(scheme: EcdsaSigningScheme) -> &'static str {
+const fn scheme_to_str(scheme: EcdsaSigningScheme) -> &'static str {
     match scheme {
         EcdsaSigningScheme::Eip712 => "eip712",
         EcdsaSigningScheme::EthSign => "ethsign",
@@ -345,11 +345,23 @@ fn scheme_to_str(scheme: EcdsaSigningScheme) -> &'static str {
 /// signature object produced by [`sign_eip712`] / [`sign_ethsign`], or
 /// an externally signed `{ signingScheme, r, s, v }` bag with matching
 /// shape.
+///
+/// `chain` selects the EIP-712 domain (chain id + settlement
+/// `verifyingContract`) used to recover the signer; the assembled
+/// `OrderCreation` is rejected locally with a `verify_owner` error if
+/// the recovered signer does not match `owner`. This catches the
+/// typo-and-wallet-switch family of bugs that would otherwise only
+/// surface as a 4xx from the orderbook.
+///
+/// The `{ r, s, v }` bag is funnelled through
+/// [`EcdsaSignature::from_bytes`] so `v` is normalised to `27` / `28`
+/// even when the originating wallet returns the raw `0` / `1` form.
 #[wasm_bindgen]
 pub fn build_order_creation(
     order_data: JsValue,
     signature: JsValue,
     owner: &str,
+    chain: &str,
     app_data_json: &str,
     quote_id: Option<u64>,
 ) -> Result<JsValue, JsValue> {
@@ -366,16 +378,27 @@ pub fn build_order_creation(
     let scheme = parse_scheme(&sig.signing_scheme)?;
     let r = parse_b256(&sig.r)?;
     let s = parse_b256(&sig.s)?;
-    let ecdsa = EcdsaSignature { r, s, v: sig.v };
+    let mut raw = [0u8; 65];
+    raw[..32].copy_from_slice(r.as_slice());
+    raw[32..64].copy_from_slice(s.as_slice());
+    raw[64] = sig.v;
+    let ecdsa = EcdsaSignature::from_bytes(&raw)
+        .map_err(|err| JsValue::from_str(&format!("invalid signature: {err}")))?;
     let signature = ecdsa.to_signature(scheme);
+    let owner = parse_address(owner)?;
+    let c = parse_chain(chain)?;
+    let domain = DomainSeparator::new(c.id(), c.settlement());
     let creation = cowprotocol::OrderCreation::from_signed_order_data(
         order,
         signature,
-        parse_address(owner)?,
+        owner,
         app_data_json.to_owned(),
         quote_id.map(|id| id as i64),
     )
     .map_err(|err| JsValue::from_str(&format!("build creation failed: {err}")))?;
+    creation
+        .verify_owner(&domain)
+        .map_err(|err| JsValue::from_str(&format!("verify_owner: {err}")))?;
     to_js(&creation)
 }
 
@@ -384,26 +407,43 @@ pub fn build_order_creation(
 /// `isValidSignature` will be called on. `signature_hex` is the
 /// contract's expected calldata (often the wrapper bytes Safe's
 /// `signMessage` returns).
+///
+/// The signature is funnelled through
+/// [`Signature::from_bytes`] so the
+/// [`cowprotocol::EIP1271_MAX_LEN`] (32 KiB) cap applies here as well
+/// as on the deserialise path. `chain` is accepted for parity with the
+/// ECDSA constructor; for EIP-1271 it is informational (owner
+/// verification is on-chain via `isValidSignature`, not via signer
+/// recovery) but it lets us reject a malformed bag of arguments
+/// uniformly.
 #[wasm_bindgen]
 pub fn build_order_creation_eip1271(
     order_data: JsValue,
     signature_hex: &str,
     owner: &str,
+    chain: &str,
     app_data_json: &str,
     quote_id: Option<u64>,
 ) -> Result<JsValue, JsValue> {
     let order: OrderData = from_js(order_data)?;
     let bytes = const_hex::decode(signature_hex.trim_start_matches("0x"))
         .map_err(|err| JsValue::from_str(&format!("invalid signature hex: {err}")))?;
-    let signature = Signature::Eip1271(bytes);
+    let signature = Signature::from_bytes(SigningScheme::Eip1271, &bytes)
+        .map_err(|err| JsValue::from_str(&format!("invalid eip1271 signature: {err}")))?;
+    let owner = parse_address(owner)?;
+    let c = parse_chain(chain)?;
+    let domain = DomainSeparator::new(c.id(), c.settlement());
     let creation = cowprotocol::OrderCreation::from_signed_order_data(
         order,
         signature,
-        parse_address(owner)?,
+        owner,
         app_data_json.to_owned(),
         quote_id.map(|id| id as i64),
     )
     .map_err(|err| JsValue::from_str(&format!("build creation failed: {err}")))?;
+    creation
+        .verify_owner(&domain)
+        .map_err(|err| JsValue::from_str(&format!("verify_owner: {err}")))?;
     to_js(&creation)
 }
 
@@ -448,6 +488,27 @@ pub fn app_data_cid_from_hash(hash_hex: &str) -> Result<String, JsValue> {
 #[wasm_bindgen]
 pub fn empty_app_data_hash() -> String {
     EMPTY_APP_DATA_HASH.to_string()
+}
+
+/// Canonical SDK-attribution app-data document JSON, with
+/// `appCode: "cow-rs-wasm"` and the wasm crate's version pinned in
+/// `metadata.quote.version`. Pass this to [`build_order_creation`] as
+/// the `app_data_json` argument so the orderbook indexer can
+/// attribute the order back to this SDK; pair with
+/// [`sdk_app_data_hash`] for the signed `appData` field.
+#[wasm_bindgen]
+pub fn sdk_app_data_json() -> String {
+    cowprotocol::AppDataDoc::sdk_attribution(cowprotocol::COW_RS_WASM_APP_CODE).canonical_json()
+}
+
+/// 32-byte keccak256 digest of [`sdk_app_data_json`], 0x-prefixed.
+/// Embed in [`OrderData::app_data`] before signing so the wire shape
+/// matches what the orderbook will hash server-side.
+#[wasm_bindgen]
+pub fn sdk_app_data_hash() -> String {
+    cowprotocol::AppDataDoc::sdk_attribution(cowprotocol::COW_RS_WASM_APP_CODE)
+        .hash()
+        .to_string()
 }
 
 // ===== Networked endpoints =============================================
