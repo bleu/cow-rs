@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 
 /// How an order is authenticated by its owner.
 ///
-/// The corresponding signature payload — [`crate::signature::EcdsaSignature`]
+/// The corresponding signature payload: [`crate::signature::EcdsaSignature`]
 /// for the ECDSA variants, arbitrary `bytes` for EIP-1271, or empty for
-/// `PreSign` — lives in [`crate::signature::Signature`].
+/// `PreSign`: lives in [`crate::signature::Signature`].
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SigningScheme {

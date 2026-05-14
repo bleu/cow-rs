@@ -2,8 +2,8 @@
 //!
 //! `OrderData` is the exact struct that is hashed and signed by the order
 //! owner and verified by the GPv2Settlement contract. The other types in
-//! this module — [`OrderKind`], [`SellTokenSource`], [`BuyTokenDestination`]
-//! and [`OrderUid`] — exist to make the payload typeable and the resulting
+//! this module ([`OrderKind`], [`SellTokenSource`], [`BuyTokenDestination`]
+//! and [`OrderUid`]) exist to make the payload typeable and the resulting
 //! identifier addressable.
 //!
 //! Adapted from [`cowprotocol/services`] (MIT OR Apache-2.0).
@@ -51,7 +51,7 @@ pub enum OrderClass {
     /// Standard market order, settled quickly.
     #[default]
     Market,
-    /// Solver-internal liquidity order — placed by whitelisted participants.
+    /// Solver-internal liquidity order: placed by whitelisted participants.
     Liquidity,
     /// Limit order: fee taken from surplus once the price target is met.
     Limit,
@@ -111,7 +111,7 @@ impl OrderData {
     ///
     /// Note that `kind`, `sellTokenBalance` and `buyTokenBalance` are declared
     /// as `string` in the EIP-712 schema, even though `GPv2Order.Data` stores
-    /// them as `bytes32` markers — see
+    /// them as `bytes32` markers: see
     /// [`GPv2Order.sol`](https://github.com/cowprotocol/contracts/blob/main/src/contracts/libraries/GPv2Order.sol).
     pub const TYPE_HASH: [u8; 32] =
         hex!("d5a25ba2e97094ad7d83dc28a6572da797d6b3e7fc6663bd93efb789fc17e489");
@@ -242,7 +242,7 @@ pub struct Order {
     pub settlement_contract: Option<alloy_primitives::Address>,
 }
 
-/// Direction of an order — whether the owner is fixing the buy side or the
+/// Direction of an order: whether the owner is fixing the buy side or the
 /// sell side.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -255,11 +255,11 @@ pub enum OrderKind {
 }
 
 impl OrderKind {
-    /// `keccak256("buy")` — the EIP-712 string encoding of [`OrderKind::Buy`]
+    /// `keccak256("buy")`: the EIP-712 string encoding of [`OrderKind::Buy`]
     /// and the on-chain `bytes32` marker stored in `GPv2Order.Data.kind`.
     pub const BUY: [u8; 32] =
         hex!("6ed88e868af0a1983e3886d5f3e95a2fafbd6c3450bc229e27342283dc429ccc");
-    /// `keccak256("sell")` — the EIP-712 string encoding of [`OrderKind::Sell`]
+    /// `keccak256("sell")`: the EIP-712 string encoding of [`OrderKind::Sell`]
     /// and the on-chain `bytes32` marker stored in `GPv2Order.Data.kind`.
     pub const SELL: [u8; 32] =
         hex!("f3b277728b3fee749481eb3e0b3b48980dbbab78658fc419025cb16eee346775");
@@ -280,13 +280,13 @@ pub enum SellTokenSource {
 }
 
 impl SellTokenSource {
-    /// `keccak256("erc20")` — EIP-712 string encoding and on-chain marker.
+    /// `keccak256("erc20")`: EIP-712 string encoding and on-chain marker.
     pub const ERC20: [u8; 32] =
         hex!("5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9");
-    /// `keccak256("external")` — EIP-712 string encoding and on-chain marker.
+    /// `keccak256("external")`: EIP-712 string encoding and on-chain marker.
     pub const EXTERNAL: [u8; 32] =
         hex!("abee3b73373acd583a130924aad6dc38cfdc44ba0555ba94ce2ff63980ea0632");
-    /// `keccak256("internal")` — EIP-712 string encoding and on-chain marker.
+    /// `keccak256("internal")`: EIP-712 string encoding and on-chain marker.
     pub const INTERNAL: [u8; 32] =
         hex!("4ac99ace14ee0a5ef932dc609df0943ab7ac16b7583634612f8dc35a4289a6ce");
 
@@ -312,10 +312,10 @@ pub enum BuyTokenDestination {
 }
 
 impl BuyTokenDestination {
-    /// `keccak256("erc20")` — EIP-712 string encoding and on-chain marker.
+    /// `keccak256("erc20")`: EIP-712 string encoding and on-chain marker.
     pub const ERC20: [u8; 32] =
         hex!("5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9");
-    /// `keccak256("internal")` — EIP-712 string encoding and on-chain marker.
+    /// `keccak256("internal")`: EIP-712 string encoding and on-chain marker.
     pub const INTERNAL: [u8; 32] =
         hex!("4ac99ace14ee0a5ef932dc609df0943ab7ac16b7583634612f8dc35a4289a6ce");
 
@@ -460,8 +460,8 @@ mod tests {
     /// Locks the full `OrderData::uid` output for the sample order against
     /// the byte-perfect golden vector lifted from
     /// `cowprotocol/services/crates/model/src/order.rs::compute_order_uid`.
-    /// The domain here is the synthetic value baked into the services test —
-    /// not a real chain — so a drift in `TYPE_HASH`, `hash_struct`,
+    /// The domain here is the synthetic value baked into the services test,
+    /// not a real chain, so a drift in `TYPE_HASH`, `hash_struct`,
     /// `DomainSeparator` packing, `hashed_eip712_message` or
     /// `OrderUid::from_parts` fails this test.
     #[test]

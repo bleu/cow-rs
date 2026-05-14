@@ -8,22 +8,21 @@
 //! resulting [`AppDataHash`] is stable across runs and matches the digest
 //! the orderbook pins to IPFS.
 
-use {
-    crate::order::OrderClass,
-    alloy_primitives::{Address, keccak256},
-    serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _},
-    std::fmt,
-};
+use alloy_primitives::{Address, keccak256};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+use std::fmt;
+
+use crate::order::OrderClass;
 
 /// 32-byte digest of an [app-data] document.
 ///
 /// The digest is the keccak256 of the deterministically-stringified JSON
 /// document and is embedded directly in the signed order payload. It is
-/// **not** an IPFS CID — derive the multihash off the same digest when one
+/// **not** an IPFS CID: derive the multihash off the same digest when one
 /// is needed.
 ///
 /// [app-data]: https://docs.cow.fi/cow-protocol/reference/core/intents/app-data
-#[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct AppDataHash(pub [u8; 32]);
 
 impl fmt::Debug for AppDataHash {
@@ -48,7 +47,7 @@ impl AsRef<[u8]> for AppDataHash {
     }
 }
 
-/// `keccak256("{}")` — the digest of the canonical empty app-data document.
+/// `keccak256("{}")`: the digest of the canonical empty app-data document.
 ///
 /// The orderbook accepts an unset / empty app-data digest, but for fixtures
 /// and tests we mirror cow-sdk's convention of explicitly pinning the empty
@@ -151,7 +150,7 @@ pub struct AppDataMetadata {
     pub hooks: Option<serde_json::Value>,
 }
 
-/// Quote metadata — only the slippage hint is modelled explicitly.
+/// Quote metadata: only the slippage hint is modelled explicitly.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataQuote {
@@ -197,23 +196,23 @@ pub struct AppDataReferrer {
     pub version: Option<String>,
 }
 
-/// `metadata.utm` sub-document — campaign attribution.
+/// `metadata.utm` sub-document: campaign attribution.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataUtm {
-    /// `utm_source` — origin of the traffic (e.g. `"telegram"`).
+    /// `utm_source`: origin of the traffic (e.g. `"telegram"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm_source: Option<String>,
-    /// `utm_medium` — broad channel (e.g. `"social"`, `"email"`).
+    /// `utm_medium`: broad channel (e.g. `"social"`, `"email"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm_medium: Option<String>,
-    /// `utm_campaign` — campaign identifier.
+    /// `utm_campaign`: campaign identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm_campaign: Option<String>,
-    /// `utm_content` — freeform graffiti / per-order tag.
+    /// `utm_content`: freeform graffiti / per-order tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm_content: Option<String>,
-    /// `utm_term` — paid-search keyword / segmentation tag.
+    /// `utm_term`: paid-search keyword / segmentation tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm_term: Option<String>,
 }
@@ -279,7 +278,7 @@ impl AppDataDoc {
     ///
     /// We round-trip via [`serde_json::Value`] because, with
     /// `preserve_order` disabled, its `Map` is a `BTreeMap` whose keys
-    /// iterate in sorted order — re-serialising the value therefore emits
+    /// iterate in sorted order: re-serialising the value therefore emits
     /// sorted keys regardless of the struct field declaration order.
     pub fn canonical_json(&self) -> String {
         let value = serde_json::to_value(self).expect("AppDataDoc must serialise");
@@ -298,7 +297,7 @@ impl AppDataDoc {
 /// Recursively rebuild a [`serde_json::Value`] so every object's keys are
 /// in sorted order. `serde_json::Map` is a `BTreeMap` when the
 /// `preserve_order` feature is off (the workspace default), so this is
-/// effectively a deep clone — but doing the walk explicitly future-proofs
+/// effectively a deep clone: but doing the walk explicitly future-proofs
 /// the helper against the feature flipping on later.
 fn sort_value(value: serde_json::Value) -> serde_json::Value {
     use serde_json::Value;
@@ -359,7 +358,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// Lock [`EMPTY_APP_DATA_HASH`] against `keccak256("{}")` — any drift
+    /// Lock [`EMPTY_APP_DATA_HASH`] against `keccak256("{}")`: any drift
     /// would either break interop with cow-sdk fixtures or signal that the
     /// canonical empty document changed.
     #[test]
@@ -401,7 +400,7 @@ mod tests {
         );
 
         let hash = doc.hash();
-        // Re-hash from the JSON string and compare — guards against any
+        // Re-hash from the JSON string and compare: guards against any
         // path where canonical_json and hash drift apart.
         let direct = alloy_primitives::keccak256(json.as_bytes());
         assert_eq!(hash.0, *direct);
@@ -414,7 +413,7 @@ mod tests {
     /// Golden vector: locks the canonical bytes and hash of the minimal
     /// `AppDataDoc::new("")` document. Computed independently with Python
     /// (`json.dumps(..., sort_keys=True, separators=(",", ":"))` + keccak)
-    /// — any drift here means our deterministic serialisation changed and
+    ///: any drift here means our deterministic serialisation changed and
     /// will silently re-hash existing fixtures.
     #[test]
     fn minimal_doc_golden_hash() {

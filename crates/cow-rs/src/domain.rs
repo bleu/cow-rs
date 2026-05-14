@@ -17,7 +17,7 @@ use std::str::FromStr;
 
 /// EIP-712 domain separator: 32 bytes that scope a struct hash to a specific
 /// chain and settlement contract.
-#[derive(Copy, Clone, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DomainSeparator(pub [u8; 32]);
 
 impl DomainSeparator {
@@ -57,7 +57,7 @@ impl fmt::Debug for DomainSeparator {
 
 /// Compute the EIP-712 typed-data hash: `keccak256(0x19 0x01 || domain || struct_hash)`.
 ///
-/// This is the value that is signed by the order owner — see
+/// This is the value that is signed by the order owner: see
 /// [EIP-712 §`eth_signTypedData`](https://eips.ethereum.org/EIPS/eip-712#eth_signTypedData).
 pub fn hashed_eip712_message(domain_separator: &DomainSeparator, struct_hash: &[u8; 32]) -> B256 {
     let mut message = [0u8; 66];

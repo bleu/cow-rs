@@ -131,7 +131,7 @@ impl Signature {
     /// Recover the signing owner of an ECDSA signature.
     ///
     /// Returns `Ok(None)` for [`Signature::Eip1271`] and
-    /// [`Signature::PreSign`] — those schemes carry the owner explicitly,
+    /// [`Signature::PreSign`]: those schemes carry the owner explicitly,
     /// they do not derive it.
     pub fn recover(
         &self,

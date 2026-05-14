@@ -7,7 +7,7 @@
 //! into its ERC-20 counterpart (e.g. WETH) and stands in as an ERC-1271
 //! "contract intent" signer for an otherwise standard CoW order with
 //! `kind = sell`, `validTo = u32::MAX` and an empty (`0x`) signature payload.
-//! Only sells are supported — to buy native ETH, sell to WETH and unwrap
+//! Only sells are supported: to buy native ETH, sell to WETH and unwrap
 //! client-side.
 //!
 //! This module exposes the two deployed addresses and the on-chain order
@@ -96,7 +96,7 @@ impl EthFlowOrder {
     /// that the settlement contract verifies.
     ///
     /// `wrapped_native_token` is the ERC-20 the EthFlow contract wraps the
-    /// native gas token into — WETH on Ethereum mainnet, WXDAI on Gnosis
+    /// native gas token into: WETH on Ethereum mainnet, WXDAI on Gnosis
     /// Chain, and so on. The result is a sell order with `validTo` pinned to
     /// `u32::MAX` (the EthFlow contract enforces the user-facing expiry
     /// separately) and an empty receiver folded into `Some(receiver)` when
@@ -105,7 +105,7 @@ impl EthFlowOrder {
     /// Signing is implicit: the EthFlow contract is the order owner and
     /// signs via ERC-1271 ([`crate::signing_scheme::SigningScheme::Eip1271`])
     /// with an empty (`0x`) signature payload. The SDK's native-sell
-    /// sentinel `0xEeee…EEeE` is *not* used here — it is a quote-time
+    /// sentinel `0xEeee…EEeE` is *not* used here: it is a quote-time
     /// convenience for `OrderBookApi`; the on-chain order produced by this
     /// helper always sets `sell_token = wrapped_native_token`.
     pub const fn to_order_data(&self, wrapped_native_token: Address) -> OrderData {
@@ -130,7 +130,7 @@ impl EthFlowOrder {
 mod tests {
     use super::*;
 
-    /// Canonical WETH address on Ethereum mainnet — the wrapped-native token
+    /// Canonical WETH address on Ethereum mainnet: the wrapped-native token
     /// the production EthFlow deployment hands over to the settlement
     /// contract when sourced on mainnet.
     const WETH_MAINNET: Address = address!("C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2");

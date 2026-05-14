@@ -16,7 +16,7 @@ use {
 const USDC: Address = address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
 // Ethereum mainnet DAI.
 const DAI: Address = address!("6B175474E89094C44Da98b954EedeAC495271d0F");
-// Hardhat account #1 — used as a no-stake `from` address so the orderbook
+// Hardhat account #1: used as a no-stake `from` address so the orderbook
 // will quote without checking allowances.
 const OWNER: Address = address!("70997970C51812dc3A010C7d01b50e0d17dc79C8");
 
@@ -39,7 +39,7 @@ async fn main() -> cow_rs::Result<()> {
     println!("signing:      {:?}", response.quote.signing_scheme);
 
     // Project the quote into the signed payload and print its UID for the
-    // configured chain — this is what we would sign in the next step.
+    // configured chain: this is what we would sign in the next step.
     let order_data = response.quote.to_order_data();
     let domain = cow_rs::DomainSeparator::new(
         Chain::Mainnet.id(),

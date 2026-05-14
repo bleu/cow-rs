@@ -2,13 +2,13 @@
 //!
 //! The CoW orderbook exposes two cancel-by-UID flows:
 //!
-//! - **Single** — [`OrderCancellation`]: a signed `OrderCancellation(bytes orderUid)`
+//! - **Single**: [`OrderCancellation`]: a signed `OrderCancellation(bytes orderUid)`
 //!   EIP-712 struct.
-//! - **Collection** — [`OrderCancellations`]: a signed
+//! - **Collection**: [`OrderCancellations`]: a signed
 //!   `OrderCancellations(bytes[] orderUid)` EIP-712 struct that cancels
 //!   many orders in one body.
 //!
-//! Both flows are "soft" — they remove the order from the matching pool
+//! Both flows are "soft": they remove the order from the matching pool
 //! but cannot recall an order that is already in flight. For pre-signed
 //! orders, cancellation is done on-chain via
 //! `GPv2Settlement::setPreSignature(uid, false)`; for EthFlow orders, via
@@ -102,7 +102,7 @@ pub struct OrderCancellations {
 }
 
 impl OrderCancellations {
-    /// `keccak256("OrderCancellations(bytes[] orderUid)")` — note the
+    /// `keccak256("OrderCancellations(bytes[] orderUid)")`: note the
     /// singular `orderUid` despite the array, matching the canonical
     /// services type string.
     pub const TYPE_HASH: [u8; 32] =

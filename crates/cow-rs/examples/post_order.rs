@@ -12,7 +12,7 @@
 //!
 //! # Environment
 //!
-//! - `SEPOLIA_PRIVATE_KEY` — hex-encoded 32-byte secp256k1 key, with or
+//! - `SEPOLIA_PRIVATE_KEY`: hex-encoded 32-byte secp256k1 key, with or
 //!   without the `0x` prefix. When the variable is absent the example
 //!   prints a short hint and exits successfully so the binary still
 //!   compiles and runs cleanly in CI.
@@ -20,7 +20,7 @@
 //! # Funding
 //!
 //! Signing a quote and POSTing it to the orderbook does NOT require any
-//! on-chain balance — the orderbook accepts the order, it just will not
+//! on-chain balance: the orderbook accepts the order, it just will not
 //! settle until the signer holds enough sell-token (here, Sepolia WETH)
 //! and has granted the Vault relayer an allowance. The wallet still
 //! needs a small amount of Sepolia ETH for any future on-chain action
@@ -69,7 +69,7 @@ async fn main() -> cow_rs::Result<()> {
 
     // The key is user-supplied at runtime, so a parse error is a
     // configuration problem we surface immediately rather than smuggling
-    // through `cow_rs::Error` (which has no signer-error variant — see
+    // through `cow_rs::Error` (which has no signer-error variant: see
     // TODO below).
     let signer = PrivateKeySigner::from_str(raw_key.trim())
         .expect("SEPOLIA_PRIVATE_KEY must be a 0x-prefixed 32-byte hex string");
@@ -78,7 +78,7 @@ async fn main() -> cow_rs::Result<()> {
 
     let api = OrderBookApi::new(Chain::Sepolia);
 
-    // Step 1 — quote.
+    // Step 1: quote.
     let request = QuoteRequest::sell_amount_before_fee(
         WETH_SEPOLIA,
         COW_SEPOLIA,
@@ -91,10 +91,10 @@ async fn main() -> cow_rs::Result<()> {
     println!("fee amount:   {}", quote.quote.fee_amount);
     println!("valid to:     {}", quote.quote.valid_to);
 
-    // Step 2 — project into the signed payload.
+    // Step 2: project into the signed payload.
     let order_data = quote.to_signed_order_data(EMPTY_APP_DATA_HASH);
 
-    // Step 3 — sign under the Sepolia GPv2Settlement domain.
+    // Step 3: sign under the Sepolia GPv2Settlement domain.
     //
     // TODO: `cow_rs::Error` does not yet carry a `SignatureError` variant,
     // so the `?` shorthand cannot be used here. ECDSA signing of a
@@ -106,7 +106,7 @@ async fn main() -> cow_rs::Result<()> {
         .sign(EcdsaSigningScheme::Eip712, &domain, &signer)
         .expect("ECDSA signing of a 32-byte digest with a PrivateKeySigner is infallible");
 
-    // Step 4 — assemble the submission body and POST it.
+    // Step 4: assemble the submission body and POST it.
     let creation = OrderCreation::from_signed_order_data(
         order_data,
         signature,

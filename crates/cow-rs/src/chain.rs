@@ -19,7 +19,7 @@ pub enum Chain {
     Mainnet = 1,
     /// BNB Smart Chain (chain id 56).
     Bnb = 56,
-    /// Gnosis Chain — xDAI (chain id 100).
+    /// Gnosis Chain: xDAI (chain id 100).
     Gnosis = 100,
     /// Polygon PoS (chain id 137).
     Polygon = 137,
