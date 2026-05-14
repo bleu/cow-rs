@@ -99,7 +99,7 @@ pub use crate::{
     cancellation::{OrderCancellation, OrderCancellations, SignedOrderCancellations},
     chain::{Chain, UnsupportedChain},
     composable::{
-        COMPOSABLE_COW, CURRENT_BLOCK_TIMESTAMP_FACTORY, ConditionalOrderParams,
+        COMPOSABLE_COW, CURRENT_BLOCK_TIMESTAMP_FACTORY, ComposableCoW, ConditionalOrderParams,
         EXTENSIBLE_FALLBACK_HANDLER, PollOutcome, Proof,
     },
     contracts::{ERC20, GPV2_SETTLEMENT, GPV2_VAULT_RELAYER, GPv2OrderData, GPv2Settlement, WETH9},

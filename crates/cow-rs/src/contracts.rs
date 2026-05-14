@@ -108,12 +108,118 @@ sol! {
         bytes32 buyTokenBalance;
     }
 
-    /// Subset of the `GPv2Settlement` ABI integrators most often reach for.
+    /// One element of the `trades` array passed into
+    /// [`GPv2Settlement::settle`]. Mirrors `GPv2Trade.Data`:
+    ///
+    /// ```solidity
+    /// struct Data {
+    ///     uint256 sellTokenIndex;
+    ///     uint256 buyTokenIndex;
+    ///     address receiver;
+    ///     uint256 sellAmount;
+    ///     uint256 buyAmount;
+    ///     uint32 validTo;
+    ///     bytes32 appData;
+    ///     uint256 feeAmount;
+    ///     uint256 flags;
+    ///     uint256 executedAmount;
+    ///     bytes signature;
+    /// }
+    /// ```
+    ///
+    /// The `tokens` array at the settlement level is indexed by
+    /// `sellTokenIndex` / `buyTokenIndex`; the per-trade
+    /// `(sellAmount, buyAmount, feeAmount, executedAmount)` are the
+    /// solver-reported amounts at clearing.
+    #[derive(Debug)]
+    struct GPv2TradeData {
+        uint256 sellTokenIndex;
+        uint256 buyTokenIndex;
+        address receiver;
+        uint256 sellAmount;
+        uint256 buyAmount;
+        uint32 validTo;
+        bytes32 appData;
+        uint256 feeAmount;
+        uint256 flags;
+        uint256 executedAmount;
+        bytes signature;
+    }
+
+    /// One interaction step in [`GPv2Settlement::settle`]'s
+    /// `interactions` payload. Mirrors `GPv2Interaction.Data`:
+    ///
+    /// ```solidity
+    /// struct Data {
+    ///     address target;
+    ///     uint256 value;
+    ///     bytes callData;
+    /// }
+    /// ```
+    #[derive(Debug)]
+    struct GPv2InteractionData {
+        address target;
+        uint256 value;
+        bytes callData;
+    }
+
+    /// Subset of the `GPv2Settlement` ABI integrators most often reach for,
+    /// plus the events the contract emits.
     ///
     /// Source:
-    /// [`GPv2Settlement.sol`](https://github.com/cowprotocol/contracts/blob/main/src/contracts/GPv2Settlement.sol).
+    /// [`GPv2Settlement.sol`](https://github.com/cowprotocol/contracts/blob/main/src/contracts/GPv2Settlement.sol)
+    /// and
+    /// [`GPv2Signing.sol`](https://github.com/cowprotocol/contracts/blob/main/src/contracts/mixins/GPv2Signing.sol)
+    /// for [`PreSignature`].
     #[derive(Debug)]
     interface GPv2Settlement {
+        // --- events ---
+
+        /// Emitted for each executed trade in a settlement batch. Solvers
+        /// emit one per settled order.
+        event Trade(
+            address indexed owner,
+            address sellToken,
+            address buyToken,
+            uint256 sellAmount,
+            uint256 buyAmount,
+            uint256 feeAmount,
+            bytes orderUid
+        );
+
+        /// Emitted for each interaction executed during settlement. Only
+        /// the first four bytes of the call's selector are recorded, for
+        /// gas efficiency; full calldata is recoverable from the settlement
+        /// transaction's input.
+        event Interaction(address indexed target, uint256 value, bytes4 selector);
+
+        /// Emitted once per settlement transaction, with the solver that
+        /// submitted it.
+        event Settlement(address indexed solver);
+
+        /// Emitted when an owner invalidates a previously signed order.
+        event OrderInvalidated(address indexed owner, bytes orderUid);
+
+        /// Emitted by `GPv2Signing.setPreSignature` whenever a pre-signature
+        /// is set or revoked. Carried on the settlement contract address.
+        event PreSignature(address indexed owner, bytes orderUid, bool signed);
+
+        // --- functions ---
+
+        /// Settle a batch of orders. Callable only by whitelisted solvers.
+        ///
+        /// `tokens` is the unique token set referenced by the trades;
+        /// `clearingPrices` is the matching price vector (one per token).
+        /// `trades` lists the orders being filled; `interactions` is the
+        /// three-stage list of pre / intra / post-settlement calls solvers
+        /// schedule against external contracts.
+        function settle(
+            address[] tokens,
+            uint256[] clearingPrices,
+            GPv2TradeData[] trades,
+            GPv2InteractionData[][3] interactions
+        ) external;
+
         /// Toggle the pre-signature flag for `orderUid`.
         ///
         /// When `signed` is true the settlement contract accepts the order as
@@ -169,7 +275,7 @@ sol! {
 mod tests {
     use super::*;
     use alloy_primitives::{Bytes, keccak256};
-    use alloy_sol_types::SolCall;
+    use alloy_sol_types::{SolCall, SolEvent};
 
     /// `GPv2Settlement::setPreSignature(bytes,bool)` must encode to the same
     /// 4-byte selector as `keccak256("setPreSignature(bytes,bool)")[..4]`.
@@ -225,6 +331,83 @@ mod tests {
     fn set_pre_signatures_selector_matches_keccak() {
         let expected = &keccak256("setPreSignatures(bytes[],bool)")[..4];
         assert_eq!(&GPv2Settlement::setPreSignaturesCall::SELECTOR, expected);
+    }
+
+    /// `settle(address[],uint256[],GPv2TradeData[],GPv2InteractionData[][3])`
+    /// must compute to the canonical 4-byte selector `0x13d79a0b` that
+    /// solvers and block explorers match against. Locks the typed Rust
+    /// signature against the on-chain ABI.
+    #[test]
+    fn settle_selector_matches_keccak() {
+        let expected = &keccak256(
+            "settle(address[],uint256[],(uint256,uint256,address,uint256,uint256,uint32,bytes32,uint256,uint256,uint256,bytes)[],(address,uint256,bytes)[][3])",
+        )[..4];
+        assert_eq!(&GPv2Settlement::settleCall::SELECTOR, expected);
+        assert_eq!(
+            GPv2Settlement::settleCall::SELECTOR,
+            [0x13, 0xd7, 0x9a, 0x0b]
+        );
+    }
+
+    /// The five `GPv2Settlement` event topic hashes must match the
+    /// canonical `keccak256(signature)` values, so off-chain indexers
+    /// matching `log.topics[0]` against this Rust constant pick up every
+    /// settlement event without drift.
+    #[test]
+    fn settlement_event_topic_hashes_match_keccak() {
+        // Trade(address,address,address,uint256,uint256,uint256,bytes)
+        assert_eq!(
+            GPv2Settlement::Trade::SIGNATURE_HASH,
+            keccak256("Trade(address,address,address,uint256,uint256,uint256,bytes)")
+        );
+        // Interaction(address,uint256,bytes4)
+        assert_eq!(
+            GPv2Settlement::Interaction::SIGNATURE_HASH,
+            keccak256("Interaction(address,uint256,bytes4)")
+        );
+        // Settlement(address)
+        assert_eq!(
+            GPv2Settlement::Settlement::SIGNATURE_HASH,
+            keccak256("Settlement(address)")
+        );
+        // OrderInvalidated(address,bytes)
+        assert_eq!(
+            GPv2Settlement::OrderInvalidated::SIGNATURE_HASH,
+            keccak256("OrderInvalidated(address,bytes)")
+        );
+        // PreSignature(address,bytes,bool)
+        assert_eq!(
+            GPv2Settlement::PreSignature::SIGNATURE_HASH,
+            keccak256("PreSignature(address,bytes,bool)")
+        );
+    }
+
+    /// `GPv2Settlement::Trade` log round-trips: encode the data segment,
+    /// decode it back, and verify every non-indexed field. The indexed
+    /// `owner` rides in `topics[1]` so it is verified separately by
+    /// callers that decode logs end-to-end.
+    #[test]
+    fn trade_event_data_round_trips() {
+        let event = GPv2Settlement::Trade {
+            owner: address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
+            sellToken: address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
+            buyToken: address!("6B175474E89094C44Da98b954EedeAC495271d0F"),
+            sellAmount: alloy_primitives::U256::from(1_000_000u64),
+            buyAmount: alloy_primitives::U256::from(999_000_000_000_000_000u128),
+            feeAmount: alloy_primitives::U256::from(123u64),
+            orderUid: Bytes::from(vec![0xab; 56]),
+        };
+        let data = event.encode_data();
+        let decoded = GPv2Settlement::Trade::abi_decode_data(&data).unwrap();
+        // abi_decode_data returns a tuple of the non-indexed fields, in
+        // declaration order: (sellToken, buyToken, sellAmount, buyAmount,
+        // feeAmount, orderUid).
+        assert_eq!(decoded.0, event.sellToken);
+        assert_eq!(decoded.1, event.buyToken);
+        assert_eq!(decoded.2, event.sellAmount);
+        assert_eq!(decoded.3, event.buyAmount);
+        assert_eq!(decoded.4, event.feeAmount);
+        assert_eq!(decoded.5, event.orderUid);
     }
 
     /// The two singleton addresses must be non-zero, distinct and parse as

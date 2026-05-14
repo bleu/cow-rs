@@ -51,6 +51,35 @@ sol! {
         uint256 location;
         bytes data;
     }
+
+    /// Events emitted by the [`ComposableCoW`] singleton.
+    ///
+    /// Source:
+    /// [`ComposableCoW.sol`](https://github.com/nullislabs/composable-cow/blob/main/src/ComposableCoW.sol).
+    /// Off-chain indexers and watch-towers match on the three topic
+    /// hashes here to track owner registrations, merkle-root updates and
+    /// swap-guard toggles.
+    #[derive(Debug)]
+    interface ComposableCoW {
+        /// Emitted by `setRoot` / `setRootWithContext` whenever an
+        /// owner publishes a new merkle root committing to a batch of
+        /// conditional orders.
+        event MerkleRootSet(address indexed owner, bytes32 root, Proof proof);
+
+        /// Emitted by `create` / `createWithContext` when an owner
+        /// authorises a single conditional order. Watch-towers index
+        /// `params` to know the handler / salt / staticInput they will
+        /// poll on subsequent blocks.
+        event ConditionalOrderCreated(
+            address indexed owner,
+            ConditionalOrderParams params
+        );
+
+        /// Emitted by `setSwapGuard` when an owner installs (or
+        /// removes, with `address(0)`) a guard contract that may veto
+        /// otherwise-valid orders before settlement.
+        event SwapGuardSet(address indexed owner, address swapGuard);
+    }
 }
 
 /// Outcome of a single watch-tower poll, mapped from the custom errors
@@ -139,8 +168,8 @@ impl Chain {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{B256, Bytes, U256, hex};
-    use alloy_sol_types::SolValue;
+    use alloy_primitives::{B256, Bytes, U256, hex, keccak256};
+    use alloy_sol_types::{SolEvent, SolValue};
 
     use super::*;
 
@@ -222,5 +251,51 @@ mod tests {
             assert!(chain.extensible_fallback_handler_address().is_none());
             assert!(chain.current_block_timestamp_factory_address().is_none());
         }
+    }
+
+    /// `ComposableCoW` event topic hashes must match the canonical
+    /// `keccak256(signature)` values so off-chain indexers matching
+    /// `log.topics[0]` against these Rust constants pick up every
+    /// emitted event.
+    #[test]
+    fn composable_cow_event_topic_hashes_match_keccak() {
+        // MerkleRootSet(address,bytes32,(uint256,bytes))
+        assert_eq!(
+            ComposableCoW::MerkleRootSet::SIGNATURE_HASH,
+            keccak256("MerkleRootSet(address,bytes32,(uint256,bytes))")
+        );
+        // ConditionalOrderCreated(address,(address,bytes32,bytes))
+        assert_eq!(
+            ComposableCoW::ConditionalOrderCreated::SIGNATURE_HASH,
+            keccak256("ConditionalOrderCreated(address,(address,bytes32,bytes))")
+        );
+        // SwapGuardSet(address,address)
+        assert_eq!(
+            ComposableCoW::SwapGuardSet::SIGNATURE_HASH,
+            keccak256("SwapGuardSet(address,address)")
+        );
+    }
+
+    /// `ConditionalOrderCreated` log round-trips: encode the data
+    /// segment carrying the embedded `ConditionalOrderParams` tuple,
+    /// decode it back, and verify the params survive.
+    #[test]
+    fn conditional_order_created_event_data_round_trips() {
+        let params = ConditionalOrderParams {
+            handler: COMPOSABLE_COW,
+            salt: B256::from(hex!(
+                "0202020202020202020202020202020202020202020202020202020202020202"
+            )),
+            staticInput: Bytes::from_static(b"static-payload"),
+        };
+        let event = ComposableCoW::ConditionalOrderCreated {
+            owner: alloy_primitives::address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
+            params: params.clone(),
+        };
+        let data = event.encode_data();
+        let decoded = ComposableCoW::ConditionalOrderCreated::abi_decode_data(&data).unwrap();
+        // The non-indexed field is just `params`; abi_decode_data returns
+        // a 1-tuple for a single non-indexed argument.
+        assert_eq!(decoded.0, params);
     }
 }
