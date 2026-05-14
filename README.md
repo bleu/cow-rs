@@ -24,15 +24,16 @@ every protocol-critical path byte-for-byte against
 - **All eleven chains**: Mainnet, BNB, Gnosis, Polygon, Base, Plasma,
   Arbitrum One, Avalanche, Ink, Linea, Sepolia, plus their barn
   staging endpoints where the orderbook team publishes them.
-- **Conformance-locked**: 132 tests, with byte-exact goldens
+- **Conformance-locked**: 164 tests, with byte-exact goldens
   cross-checked against `cowprotocol/services`, `cowprotocol/contracts`,
   ethers, cow-sdk and cow-py.
 - **Sync core, async client**: hashing, signing and contract decoding
   are pure-compute and need no runtime; the HTTP client is async-tokio
   and the only piece that depends on one.
-- **WASM-ready**: compiles cleanly to `wasm32-unknown-unknown`; the
-  poll helper is runtime-agnostic so you can drop in
-  `gloo_timers::future::sleep` in the browser.
+- **WASM-ready**: compiles cleanly to `wasm32-unknown-unknown` and has
+  an in-browser end-to-end harness (see `test-harness/`) that exercises
+  the live orderbook from the browser; the poll helper is
+  runtime-agnostic so you can drop in `gloo_timers::future::sleep`.
 
 ## Install
 
@@ -150,6 +151,10 @@ cow-rs targets `wasm32-unknown-unknown`:
   non-wasm only.
 - CI gates `cargo check --target wasm32-unknown-unknown` on every
   push.
+- `crates/cow-rs-wasm/` ships a `#[wasm_bindgen]` shim and
+  `test-harness/index.html` drives `get_quote` and `compute_order_uid`
+  against the live orderbook from a real browser. Run with
+  `just wasm-harness`.
 
 ## Conformance
 
@@ -183,19 +188,20 @@ Production readiness:
 - ✅ All eleven documented chains
 - ✅ All four signing schemes
 - ✅ Mock-server integration coverage for every `OrderBookApi` method
-- ✅ WASM compilation gate in CI
+- ✅ WASM compilation gate in CI plus an in-browser e2e harness
 - ✅ `cargo clippy -- -Dwarnings`, no `unsafe`, no `anyhow` in lib code
-- ⏳ Not yet on crates.io (publishing is the next milestone)
+- ⏳ Publishing to crates.io as `cowprotocol`
 
 ## Building
 
 ```
-just build       # cargo build --all-targets --all-features --workspace
-just test        # cargo test --all-targets --all-features --workspace
-just clippy      # cargo clippy ... -- -Dwarnings
+just build        # cargo build --all-targets --all-features --workspace
+just test         # cargo test --all-targets --all-features --workspace
+just clippy       # cargo clippy ... -- -Dwarnings
 just fmt-check
-just wasm-check  # cargo check --target wasm32-unknown-unknown ...
-just doc         # cargo doc with -D warnings
+just wasm-check   # cargo check --target wasm32-unknown-unknown ...
+just wasm-harness # build cow-rs-wasm and serve test-harness/ on :8765
+just doc          # cargo doc with -D warnings
 ```
 
 ## Layout
