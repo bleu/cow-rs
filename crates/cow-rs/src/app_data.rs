@@ -91,6 +91,15 @@ pub const EMPTY_APP_DATA_JSON: &str = "{}";
 /// changes; see `cow-protocol/reference/core/intents/app-data.mdx`.
 pub const LATEST_APP_DATA_VERSION: &str = "1.6.0";
 
+/// Maximum byte length of a `fullAppData` document the orderbook will
+/// accept on `PUT /api/v1/app_data/{hash}`. Mirrors the server-side
+/// `Validator::DEFAULT_SIZE_LIMIT` in `cowprotocol/services/crates/shared/
+/// src/app_data.rs`. Clients that build a document larger than this
+/// should refuse to sign an order against its hash; the orderbook will
+/// otherwise reject the document with `400 Bad Request` after the
+/// signature is already committed to the digest.
+pub const APP_DATA_SIZE_LIMIT: usize = 8192;
+
 impl Serialize for AppDataHash {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -390,14 +399,20 @@ impl AppDataCid {
 
     /// Extract the embedded [`AppDataHash`] back out of the CID.
     ///
-    /// Validates the multibase prefix, version, codec, multihash code, and
-    /// digest length before returning the trailing 32 bytes.
+    /// Accepts both `b`-prefixed (RFC 4648 lower-case base32, no padding)
+    /// and `f`-prefixed (lower-case base16) multibase encodings. cow-rs
+    /// only emits the `b` form, matching `cowprotocol/services` and the
+    /// orderbook's IPFS pin, but cow-sdk (TypeScript) emits `f` so
+    /// round-tripping a CID handed to us by the canonical JS SDK
+    /// requires accepting both. Validates version, codec, multihash
+    /// code, and digest length before returning the trailing 32 bytes.
     pub fn to_hash(&self) -> Result<AppDataHash, AppDataCidError> {
-        let body = self
-            .0
-            .strip_prefix('b')
-            .ok_or(AppDataCidError::MissingMultibasePrefix)?;
-        let bytes = base32_decode(body)?;
+        let bytes = match self.0.as_bytes().first() {
+            Some(b'b') => base32_decode(&self.0[1..])?,
+            Some(b'f') => const_hex::decode(&self.0[1..])
+                .map_err(|_| AppDataCidError::InvalidBase16Body)?,
+            _ => return Err(AppDataCidError::MissingMultibasePrefix),
+        };
         if bytes.len() != CID_BYTES_LEN {
             return Err(AppDataCidError::InvalidLength {
                 expected: CID_BYTES_LEN,
@@ -438,12 +453,15 @@ impl AsRef<str> for AppDataCid {
 /// [`AppDataHash`].
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
 pub enum AppDataCidError {
-    /// The CID string was not multibase base32 (no `b` prefix).
-    #[error("expected multibase `b` (base32) prefix")]
+    /// The CID string was not multibase base32 (`b`) or base16 (`f`).
+    #[error("expected multibase `b` (base32) or `f` (base16) prefix")]
     MissingMultibasePrefix,
     /// A character outside the RFC 4648 lower-case alphabet was found.
     #[error("invalid base32 character {0:?}")]
     InvalidBase32Char(char),
+    /// The base16-encoded body contained a character outside `[0-9a-f]`.
+    #[error("invalid base16 (hex) body")]
+    InvalidBase16Body,
     /// The decoded CID body had the wrong length.
     #[error("expected {expected}-byte CID body, got {actual}")]
     InvalidLength {
@@ -795,6 +813,31 @@ mod tests {
         assert_eq!(
             cid.to_hash().unwrap_err(),
             AppDataCidError::MissingMultibasePrefix
+        );
+    }
+
+    /// Round-trip the same `services` golden vector through the `f`
+    /// (base16) multibase prefix. cow-sdk's TypeScript
+    /// `appDataHexToCid` emits this form by default; the orderbook
+    /// accepts either prefix, so cow-rs must too.
+    #[test]
+    fn cid_parse_accepts_base16_multibase_prefix() {
+        let hash = AppDataHash(hex_literal::hex!(
+            "8af4e8c9973577b08ac21d17d331aade86c11ebcc5124744d621ca8365ec9424"
+        ));
+        let mut hex_body = String::with_capacity(2 * CID_BYTES_LEN);
+        hex_body.push_str("01551b20");
+        hex_body.push_str(&const_hex::encode(hash.0));
+        let cid = AppDataCid(format!("f{hex_body}"));
+        assert_eq!(cid.to_hash().unwrap(), hash);
+    }
+
+    #[test]
+    fn cid_parse_rejects_invalid_base16_body() {
+        let cid = AppDataCid("f01551b20zzzz".to_string());
+        assert_eq!(
+            cid.to_hash().unwrap_err(),
+            AppDataCidError::InvalidBase16Body
         );
     }
 
