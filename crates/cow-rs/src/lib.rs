@@ -25,6 +25,9 @@
 //! - [`EthFlowOrder`] plus the [`ETH_FLOW_PRODUCTION`] /
 //!   [`ETH_FLOW_STAGING`] addresses for native-ETH sells via the
 //!   periphery EthFlow contract.
+//! - [`GPv2Settlement`] and [`GPv2OrderData`] for typed contract bindings,
+//!   plus [`GPV2_SETTLEMENT`], [`GPV2_VAULT_RELAYER`], [`WETH9`] and
+//!   [`ERC20`] address constants.
 //!
 //! ## Quote example
 //!
@@ -61,6 +64,8 @@
 //! MIT OR Apache-2.0 licence.
 //!
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services
+
+#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 
 pub mod app_data;
 pub mod bytes_hex;
