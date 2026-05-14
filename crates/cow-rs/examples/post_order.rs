@@ -92,7 +92,7 @@ async fn main() -> cow_rs::Result<()> {
     println!("valid to:     {}", quote.quote.valid_to);
 
     // Step 2: project into the signed payload.
-    let order_data = quote.to_signed_order_data(EMPTY_APP_DATA_HASH);
+    let order_data = quote.to_signed_order_data(EMPTY_APP_DATA_HASH)?;
 
     // Step 3: sign under the Sepolia GPv2Settlement domain.
     let domain = DomainSeparator::new(Chain::Sepolia.id(), GPV2_SETTLEMENT);
@@ -105,7 +105,7 @@ async fn main() -> cow_rs::Result<()> {
         owner,
         EMPTY_APP_DATA_JSON.to_owned(),
         Some(quote.id),
-    );
+    )?;
     let uid = api.post_order(&creation).await?;
 
     println!("order uid:    {uid}");

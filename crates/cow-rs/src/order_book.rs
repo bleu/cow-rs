@@ -355,13 +355,22 @@ impl OrderQuoteResponse {
     ///   document `"{}"`).
     ///
     /// [step3]: https://docs.cow.fi/cow-protocol/howto/integrate/api#step-3-compute-the-amounts-to-sign
-    pub const fn to_signed_order_data(&self, app_data: AppDataHash) -> OrderData {
+    pub fn to_signed_order_data(&self, app_data: AppDataHash) -> Result<OrderData> {
         let q = &self.quote;
         let (sell_amount, buy_amount) = match q.kind {
-            OrderKind::Sell => (q.sell_amount.saturating_add(q.fee_amount), q.buy_amount),
+            OrderKind::Sell => {
+                let total =
+                    q.sell_amount
+                        .checked_add(q.fee_amount)
+                        .ok_or(Error::QuoteAmountOverflow {
+                            sell: q.sell_amount,
+                            fee: q.fee_amount,
+                        })?;
+                (total, q.buy_amount)
+            }
             OrderKind::Buy => (q.sell_amount, q.buy_amount),
         };
-        OrderData {
+        Ok(OrderData {
             sell_token: q.sell_token,
             buy_token: q.buy_token,
             receiver: q.receiver,
@@ -374,7 +383,7 @@ impl OrderQuoteResponse {
             partially_fillable: q.partially_fillable,
             sell_token_balance: q.sell_token_balance,
             buy_token_balance: q.buy_token_balance,
-        }
+        })
     }
 }
 
@@ -475,14 +484,27 @@ impl OrderCreation {
     /// Assemble a submission body from a signed [`OrderData`] plus the
     /// metadata required by the orderbook (`from`, signature, app-data
     /// document, optional quote id).
-    pub const fn from_signed_order_data(
+    ///
+    /// Validates that `from` is non-zero (the orderbook rejects every
+    /// scheme with `from = Address::ZERO`, and the contract-signed schemes
+    /// `Eip1271` / `PreSign` carry the owner explicitly there). Callers
+    /// who want to additionally cross-check that `from` matches the
+    /// recovered signer of an ECDSA signature can do so with
+    /// [`Signature::recover`] before calling.
+    pub fn from_signed_order_data(
         order_data: OrderData,
         signature: Signature,
         from: Address,
         app_data_json: String,
         quote_id: Option<i64>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        if from == Address::ZERO {
+            return Err(Error::OrderCreationInvalid {
+                field: "from",
+                reason: "owner address must be non-zero",
+            });
+        }
+        Ok(Self {
             sell_token: order_data.sell_token,
             buy_token: order_data.buy_token,
             receiver: order_data.receiver,
@@ -500,7 +522,7 @@ impl OrderCreation {
             signature,
             from,
             quote_id,
-        }
+        })
     }
 }
 
@@ -888,7 +910,7 @@ mod tests {
         let original_sell = quote.quote.sell_amount;
         let original_fee = quote.quote.fee_amount;
 
-        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH);
+        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
 
         assert_eq!(signed.sell_amount, original_sell + original_fee);
         assert_eq!(signed.buy_amount, quote.quote.buy_amount);
@@ -905,7 +927,7 @@ mod tests {
         let original_sell = quote.quote.sell_amount;
         let original_buy = quote.quote.buy_amount;
 
-        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH);
+        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
 
         assert_eq!(signed.sell_amount, original_sell);
         assert_eq!(signed.buy_amount, original_buy);
@@ -920,7 +942,7 @@ mod tests {
     #[test]
     fn order_creation_serialises_to_expected_wire_shape() {
         let quote = load_mainnet_quote();
-        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH);
+        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
         let signature = Signature::default();
         let creation = OrderCreation::from_signed_order_data(
             signed,
@@ -928,7 +950,8 @@ mod tests {
             quote.from,
             EMPTY_APP_DATA_JSON.to_owned(),
             Some(quote.id),
-        );
+        )
+        .unwrap();
 
         let body = serde_json::to_value(&creation).unwrap();
         assert_eq!(body["feeAmount"], "0");
@@ -947,18 +970,51 @@ mod tests {
         assert_eq!(body["sellAmount"], expected_sell.to_string());
     }
 
+    /// `to_signed_order_data` rejects an overflowing sell-side adjustment
+    /// instead of silently saturating, which would ship an on-chain order
+    /// different from what the user signed off on.
+    #[test]
+    fn to_signed_order_data_rejects_overflowing_sell_adjustment() {
+        let mut quote = load_mainnet_quote();
+        quote.quote.kind = OrderKind::Sell;
+        quote.quote.sell_amount = U256::MAX;
+        quote.quote.fee_amount = U256::from(1u64);
+
+        let err = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap_err();
+        assert!(matches!(err, Error::QuoteAmountOverflow { .. }));
+    }
+
+    /// `OrderCreation::from_signed_order_data` rejects a zero `from`
+    /// address locally rather than letting the orderbook reject it.
+    #[test]
+    fn order_creation_rejects_zero_from_address() {
+        let err = OrderCreation::from_signed_order_data(
+            OrderData::default(),
+            Signature::default(),
+            Address::ZERO,
+            EMPTY_APP_DATA_JSON.to_owned(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::OrderCreationInvalid { field: "from", .. }),
+            "got: {err}"
+        );
+    }
+
     /// `quoteId` is omitted when not provided rather than emitted as `null`.
     #[test]
     fn order_creation_skips_optional_quote_id() {
         let quote = load_mainnet_quote();
-        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH);
+        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
         let creation = OrderCreation::from_signed_order_data(
             signed,
             Signature::default(),
             quote.from,
             EMPTY_APP_DATA_JSON.to_owned(),
             None,
-        );
+        )
+        .unwrap();
         let body = serde_json::to_value(&creation).unwrap();
         assert!(body.get("quoteId").is_none());
     }

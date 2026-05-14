@@ -57,6 +57,28 @@ pub enum Error {
     /// Signature parsing, signing, or recovery failed.
     #[error(transparent)]
     Signature(#[from] SignatureError),
+
+    /// The submission-side adjustment `sellAmount + feeAmount` overflowed
+    /// the U256 range. Real quotes never come anywhere close, but the
+    /// orderbook would silently accept the saturated value and produce a
+    /// different on-chain order than the user signed.
+    #[error("quote amount overflow: sell={sell} + fee={fee} exceeds U256")]
+    QuoteAmountOverflow {
+        /// `quote.sellAmount` before adjustment.
+        sell: alloy_primitives::U256,
+        /// `quote.feeAmount` we tried to fold into it.
+        fee: alloy_primitives::U256,
+    },
+
+    /// An [`crate::OrderCreation`] field did not satisfy the orderbook's
+    /// preconditions; surfaced locally so the body is never shipped.
+    #[error("invalid OrderCreation: {field} {reason}")]
+    OrderCreationInvalid {
+        /// Field that failed validation.
+        field: &'static str,
+        /// Why it failed.
+        reason: &'static str,
+    },
 }
 
 /// Structured error envelope returned by the CoW orderbook for 4xx / 5xx

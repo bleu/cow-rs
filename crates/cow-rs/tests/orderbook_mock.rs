@@ -84,7 +84,8 @@ async fn post_order_returns_assigned_uid() {
         OWNER,
         cow_rs::EMPTY_APP_DATA_JSON.to_owned(),
         Some(123),
-    );
+    )
+    .unwrap();
 
     let uid = api(&server).post_order(&creation).await.unwrap();
     assert_eq!(uid.to_string(), expected_uid);
@@ -108,7 +109,8 @@ async fn post_order_surfaces_orderbook_api_error() {
         OWNER,
         cow_rs::EMPTY_APP_DATA_JSON.to_owned(),
         None,
-    );
+    )
+    .unwrap();
 
     let err = api(&server).post_order(&creation).await.unwrap_err();
     let message = err.to_string();
