@@ -81,7 +81,7 @@
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![forbid(unsafe_code)]
-#![warn(rustdoc::missing_crate_level_docs)]
+#![warn(missing_docs, rustdoc::missing_crate_level_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 
 // `getrandom` is a wasm-only build-time dep that wires alloy's PRNG
