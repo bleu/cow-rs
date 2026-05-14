@@ -34,3 +34,6 @@ getrandom = { workspace = true, features = ["js"] }
 [dev-dependencies]
 alloy-signer-local.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+wiremock.workspace = true
