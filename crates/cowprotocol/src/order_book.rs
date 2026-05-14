@@ -5,7 +5,7 @@
 //! and `cow-py`. The request and response shapes reflect the
 //! production orderbook OpenAPI as of 2026-05.
 
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256, U256, keccak256};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::collections::BTreeMap;
@@ -222,6 +222,19 @@ pub struct AppDataDocument {
     /// JSON string of the document. The orderbook does not re-format this
     /// beyond verifying that it parses, so it round-trips byte-for-byte.
     pub full_app_data: String,
+}
+
+impl AppDataDocument {
+    /// `keccak256(full_app_data.as_bytes())`: the digest the orderbook
+    /// would index this document under, and the value the signed order's
+    /// `appData` field must equal for the document to be the canonical
+    /// pre-image. Bytes are hashed as-is; callers that need
+    /// deterministic key ordering should canonicalise via
+    /// [`crate::app_data::AppDataDoc::canonical_json`] before constructing
+    /// this struct.
+    pub fn computed_hash(&self) -> AppDataHash {
+        AppDataHash(keccak256(self.full_app_data.as_bytes()).0)
+    }
 }
 
 #[derive(Serialize)]
@@ -750,22 +763,23 @@ impl OrderQuoteResponse {
                 returned: format!("{:#x}", q.buy_token),
             });
         }
-        if let Some(requested_receiver) = request.receiver {
-            // Treat zero-receiver as "owner receives" on both sides; the
-            // orderbook normalises the same way.
-            let normalise = |a: Option<Address>| match a {
-                Some(addr) if addr == Address::ZERO => None,
-                other => other,
-            };
-            let req = normalise(Some(requested_receiver));
-            let got = normalise(q.receiver);
-            if req != got {
-                return Err(Error::QuoteFieldMismatch {
-                    field: "receiver",
-                    requested: format!("{req:?}"),
-                    returned: format!("{got:?}"),
-                });
-            }
+        // Treat `None`, `Some(ZERO)` and `Some(owner)` as "owner
+        // receives" on both sides; the orderbook normalises the same
+        // way. Comparing only when `request.receiver` is `Some` would
+        // skip validation for the common default-receiver case and let
+        // a hostile orderbook redirect proceeds to an attacker.
+        let normalise = |owner: Address, receiver: Option<Address>| match receiver {
+            Some(addr) if addr == Address::ZERO || addr == owner => None,
+            other => other,
+        };
+        let req = normalise(request.from, request.receiver);
+        let got = normalise(request.from, q.receiver);
+        if req != got {
+            return Err(Error::QuoteFieldMismatch {
+                field: "receiver",
+                requested: format!("{req:?}"),
+                returned: format!("{got:?}"),
+            });
         }
         if let Some(QuoteAppData::Hash(requested_hash)) = request.app_data.as_ref()
             && *requested_hash != app_data
@@ -1056,16 +1070,45 @@ impl OrderBookApi {
     /// orderbook has on file for an app-data digest. Returns
     /// [`Error::OrderbookApi`] with `NotFound` when the orderbook has not
     /// seen the document.
+    ///
+    /// The decoded [`AppDataDocument`] is re-hashed locally and compared
+    /// against the requested digest before it is returned; a hostile or
+    /// buggy orderbook that serves a body which does not hash to `hash`
+    /// is rejected with [`Error::AppDataHashMismatch`]. The signed order
+    /// commits only to the digest, so this is what closes the loop
+    /// between what was signed and what downstream code displays or
+    /// validates.
     pub async fn get_app_data(&self, hash: &AppDataHash) -> Result<AppDataDocument> {
-        self.get_json(&format!("api/v1/app_data/{}", hex_string(hash.as_ref())))
-            .await
+        let document: AppDataDocument = self
+            .get_json(&format!("api/v1/app_data/{}", hex_string(hash.as_ref())))
+            .await?;
+        let computed = document.computed_hash();
+        if computed != *hash {
+            return Err(Error::AppDataHashMismatch {
+                expected: hash.to_string(),
+                computed: computed.to_string(),
+            });
+        }
+        Ok(document)
     }
 
     /// `PUT /api/v1/app_data/{hash}`: pre-pin a document so the orderbook
     /// can serve it back for the matching hash. Used to bind an order to
     /// specific metadata before the order itself is submitted, notably for
     /// the EIP-1271 owner-pinning replay defence.
+    ///
+    /// Hashes `document.full_app_data` locally and refuses to issue the
+    /// PUT when the digest disagrees with `hash`. The orderbook applies
+    /// the same check server-side; failing fast surfaces the bug as
+    /// [`Error::AppDataHashMismatch`] instead of an opaque 4xx response.
     pub async fn put_app_data(&self, hash: &AppDataHash, document: &AppDataDocument) -> Result<()> {
+        let computed = document.computed_hash();
+        if computed != *hash {
+            return Err(Error::AppDataHashMismatch {
+                expected: hash.to_string(),
+                computed: computed.to_string(),
+            });
+        }
         let url = self
             .base_url
             .join(&format!("api/v1/app_data/{}", hex_string(hash.as_ref())))?;
@@ -1689,6 +1732,85 @@ mod tests {
             .unwrap();
         let unchecked = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
         assert_eq!(signed, unchecked);
+    }
+
+    /// R20: `to_signed_order_data_for` rejects a quote that swaps the
+    /// receiver when the request omitted it (default owner-receives).
+    /// Without normalising both sides, a hostile orderbook could
+    /// redirect proceeds to an attacker while the caller never set a
+    /// receiver in the request.
+    #[test]
+    fn to_signed_order_data_for_rejects_swapped_receiver_when_request_omits_receiver() {
+        use alloy_primitives::address;
+        let mut quote = load_mainnet_quote();
+        quote.quote.receiver = Some(address!("dead00000000000000000000000000000000beef"));
+        let request = QuoteRequest::sell_amount_before_fee(
+            quote.quote.sell_token,
+            quote.quote.buy_token,
+            quote.from,
+            U256::from(1u64),
+        );
+        let err = quote
+            .to_signed_order_data_for(&request, EMPTY_APP_DATA_HASH)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                Error::QuoteFieldMismatch {
+                    field: "receiver",
+                    ..
+                }
+            ),
+            "got: {err}"
+        );
+    }
+
+    /// R20: a response that echoes `receiver = from` for a request that
+    /// omitted receiver is semantically identical to "owner receives"
+    /// and must not trip a mismatch. Mirrors the orderbook's
+    /// normalisation.
+    #[test]
+    fn to_signed_order_data_for_accepts_owner_receiver_echo_when_request_omits_receiver() {
+        let mut quote = load_mainnet_quote();
+        quote.quote.receiver = Some(quote.from);
+        let request = QuoteRequest::sell_amount_before_fee(
+            quote.quote.sell_token,
+            quote.quote.buy_token,
+            quote.from,
+            U256::from(1u64),
+        );
+        quote
+            .to_signed_order_data_for(&request, EMPTY_APP_DATA_HASH)
+            .expect("owner-as-receiver echo should normalise to owner-receives");
+    }
+
+    /// R20: `to_signed_order_data_with_costs_for` shares the same
+    /// `check_response_matches_request` guard and must reject the
+    /// default-receiver swap on the costs-aware path too.
+    #[test]
+    fn to_signed_order_data_with_costs_for_rejects_swapped_receiver_when_request_omits_receiver() {
+        use alloy_primitives::address;
+        let mut quote = load_mainnet_quote();
+        quote.quote.receiver = Some(address!("dead00000000000000000000000000000000beef"));
+        let request = QuoteRequest::sell_amount_before_fee(
+            quote.quote.sell_token,
+            quote.quote.buy_token,
+            quote.from,
+            U256::from(1u64),
+        );
+        let err = quote
+            .to_signed_order_data_with_costs_for(&request, 0, 0, None, EMPTY_APP_DATA_HASH)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                Error::QuoteFieldMismatch {
+                    field: "receiver",
+                    ..
+                }
+            ),
+            "got: {err}"
+        );
     }
 
     /// R20: `to_signed_order_data_for` rejects a quote whose returned

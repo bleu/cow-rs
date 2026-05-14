@@ -128,6 +128,24 @@ pub enum Error {
     /// math cannot divide by zero downstream.
     #[error("quote sellAmount is zero, network cost projection undefined")]
     QuoteSellAmountZero,
+
+    /// The keccak256 of an [`crate::AppDataDocument`]'s `fullAppData`
+    /// bytes did not match the [`crate::AppDataHash`] it was paired with.
+    /// Raised by [`crate::OrderBookApi::get_app_data`] when the orderbook
+    /// serves a document that does not hash to the requested digest, and
+    /// by [`crate::OrderBookApi::put_app_data`] before issuing a pin
+    /// whose payload would be rejected server-side. The signed order
+    /// commits only to the digest, so a divergent body would let
+    /// downstream wallets, bots, or UIs display or validate metadata
+    /// different from what the order actually commits to.
+    #[error("app-data hash mismatch: expected {expected}, computed {computed}")]
+    AppDataHashMismatch {
+        /// The hash the caller asked for or paired with the document.
+        expected: String,
+        /// `keccak256(document.fullAppData.as_bytes())` as actually
+        /// computed.
+        computed: String,
+    },
 }
 
 /// Structured error envelope returned by the CoW orderbook for 4xx / 5xx

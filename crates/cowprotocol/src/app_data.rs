@@ -637,9 +637,15 @@ impl AppDataDoc {
 
     /// Serialise the document to deterministic JSON.
     ///
-    /// The output has all object keys sorted lexicographically and no
-    /// whitespace, mirroring cow-py's `stringify_deterministic`. This is
-    /// the byte string the orderbook hashes (and pins to IPFS).
+    /// The output has all object keys sorted lexicographically, no
+    /// whitespace, and **raw UTF-8 bytes for any non-ASCII character**
+    /// — this matches the orderbook's `keccak256(toUtf8Bytes(fullAppData))`
+    /// digest input. cow-py's default `stringify_deterministic` produces
+    /// the same bytes for any document whose values are pure ASCII (the
+    /// overwhelmingly common case); a document with non-ASCII strings
+    /// would diverge from cow-py's `ensure_ascii=True` default, but
+    /// still agrees with the orderbook (and with cow-sdk's
+    /// TypeScript implementation, which also keeps raw UTF-8).
     ///
     /// We round-trip via [`serde_json::Value`] because, with
     /// `preserve_order` disabled, its `Map` is a `BTreeMap` whose keys
@@ -1136,6 +1142,47 @@ mod tests {
         let expected =
             hex_literal::hex!("3929e2c230dc41c0c053ff5f9211eb32def3a737b2bf36eb5b8862ea317fcd9e");
         assert_eq!(doc.hash().0, expected);
+    }
+
+    /// `canonical_json` must emit non-ASCII characters as raw UTF-8
+    /// bytes (matching the orderbook's
+    /// `keccak256(toUtf8Bytes(fullAppData))` digest input), not as
+    /// `\uXXXX` ASCII escapes. A regression that flips the escape mode
+    /// would silently re-hash every document containing non-ASCII
+    /// content (utm campaigns with emoji, non-Latin appCodes) and orders
+    /// signed against the old digest would be rejected by the orderbook.
+    #[test]
+    fn canonical_json_preserves_utf8_non_ascii_bytes() {
+        // Build a doc whose appCode contains a non-ASCII character.
+        let doc = AppDataDoc::new("café-\u{1F40c}"); // "café-🐌"
+        let json = doc.canonical_json();
+
+        // Raw UTF-8: the `é` byte sequence (0xc3 0xa9) and the snail
+        // emoji (4 bytes) must appear verbatim in the canonical JSON,
+        // and NOT as `é` / `🐌` escapes.
+        assert!(
+            json.contains("café-\u{1F40c}"),
+            "expected raw UTF-8 non-ASCII bytes in canonical JSON, got: {json}"
+        );
+        assert!(
+            !json.contains("\\u00e9"),
+            "expected raw UTF-8, found ASCII escape: {json}"
+        );
+        assert!(
+            !json.contains("\\ud83d"),
+            "expected raw UTF-8, found surrogate-pair escape: {json}"
+        );
+
+        // The digest is `keccak256(canonical_json.as_bytes())`. Lock
+        // it against the bytes produced by the current path so any
+        // serialiser flip (raw → escaped) trips this test.
+        let direct = alloy_primitives::keccak256(json.as_bytes());
+        assert_eq!(doc.hash().0, *direct);
+
+        // Round-trip: parsing back through serde must reconstruct the
+        // same appCode bytes.
+        let parsed: AppDataDoc = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.app_code.as_deref(), Some("café-\u{1F40c}"));
     }
 
     #[test]
