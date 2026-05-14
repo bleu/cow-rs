@@ -76,11 +76,12 @@ async fn post_order_returns_assigned_uid() {
         sell_amount: U256::from(1_000_000_u64),
         buy_amount: U256::from(999_000_u64),
         valid_to: u32::MAX,
+        app_data: cowprotocol::EMPTY_APP_DATA_HASH,
         ..OrderData::default()
     };
     let creation = OrderCreation::from_signed_order_data(
         order,
-        Signature::default(),
+        Signature::default_with(SigningScheme::Eip712),
         OWNER,
         cowprotocol::EMPTY_APP_DATA_JSON.to_owned(),
         Some(123),
@@ -104,8 +105,11 @@ async fn post_order_surfaces_orderbook_api_error() {
         .await;
 
     let creation = OrderCreation::from_signed_order_data(
-        OrderData::default(),
-        Signature::default(),
+        OrderData {
+            app_data: cowprotocol::EMPTY_APP_DATA_HASH,
+            ..OrderData::default()
+        },
+        Signature::default_with(SigningScheme::Eip712),
         OWNER,
         cowprotocol::EMPTY_APP_DATA_JSON.to_owned(),
         None,

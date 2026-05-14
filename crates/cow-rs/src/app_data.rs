@@ -334,10 +334,56 @@ impl<'de> Deserialize<'de> for AppDataPartnerFee {
                 return Err(D::Error::custom("unknown partner-fee policy shape"));
             }
         };
+        validate_fee_policy(&policy).map_err(D::Error::custom)?;
         Ok(Self {
             policy,
             recipient: h.recipient,
         })
+    }
+}
+
+/// Reject [`FeePolicy`] values whose bps fields exceed
+/// [`PARTNER_FEE_BPS_MAX`]. Used by [`AppDataPartnerFee::deserialize`]
+/// and the policy constructors so a hostile app-data document cannot
+/// pin a `bps = u64::MAX` that the contract would silently clamp.
+pub fn validate_fee_policy(policy: &FeePolicy) -> Result<(), AppDataError> {
+    let check = |field: &'static str, value: u64| -> Result<(), AppDataError> {
+        if value > PARTNER_FEE_BPS_MAX {
+            Err(AppDataError::FeeOutOfRange {
+                field,
+                value,
+                max: PARTNER_FEE_BPS_MAX,
+            })
+        } else {
+            Ok(())
+        }
+    };
+    match *policy {
+        FeePolicy::Volume { bps } => check("bps", bps),
+        FeePolicy::Surplus {
+            bps,
+            max_volume_bps,
+        } => {
+            check("surplusBps", bps)?;
+            check("maxVolumeBps", max_volume_bps)
+        }
+        FeePolicy::PriceImprovement {
+            bps,
+            max_volume_bps,
+        } => {
+            check("priceImprovementBps", bps)?;
+            check("maxVolumeBps", max_volume_bps)
+        }
+    }
+}
+
+impl AppDataPartnerFee {
+    /// Construct a partner-fee binding with bps validation. Use this
+    /// instead of building [`AppDataPartnerFee`] by hand when the policy
+    /// values come from caller input you do not fully trust.
+    pub fn new(policy: FeePolicy, recipient: Address) -> Result<Self, AppDataError> {
+        validate_fee_policy(&policy)?;
+        Ok(Self { policy, recipient })
     }
 }
 
@@ -567,13 +613,85 @@ impl AppDataDoc {
         serde_json::to_string(&sorted).expect("Value must re-serialise")
     }
 
+    /// Parse a canonical JSON document, rejecting any input larger than
+    /// [`APP_DATA_SIZE_LIMIT`]. Bounds the deserialiser before it
+    /// allocates the parent struct or any opaque nested JSON (`hooks`,
+    /// `flashloan`, `wrappers`), so a hostile orderbook cannot stream a
+    /// multi-MiB document into the SDK.
+    pub fn try_from_str(json: &str) -> Result<Self, AppDataError> {
+        if json.len() > APP_DATA_SIZE_LIMIT {
+            return Err(AppDataError::DocumentTooLarge {
+                len: json.len(),
+                max: APP_DATA_SIZE_LIMIT,
+            });
+        }
+        serde_json::from_str(json).map_err(|e| AppDataError::Parse(e.to_string()))
+    }
+
     /// `keccak256(canonical_json())`. This is the digest written into the
     /// signed `Order.appData` field.
+    ///
+    /// Panics if the canonical JSON exceeds [`APP_DATA_SIZE_LIMIT`]; use
+    /// [`AppDataDoc::try_hash`] for the fallible variant when working with
+    /// caller-supplied documents that may legitimately overflow.
     pub fn hash(&self) -> AppDataHash {
-        let digest = keccak256(self.canonical_json().as_bytes());
-        AppDataHash(digest.0)
+        self.try_hash()
+            .expect("AppDataDoc must fit within APP_DATA_SIZE_LIMIT")
+    }
+
+    /// Like [`AppDataDoc::hash`], but rejects documents whose canonical
+    /// JSON would exceed [`APP_DATA_SIZE_LIMIT`]. The orderbook enforces
+    /// the same cap server-side and would otherwise reject the document
+    /// after the user has already signed an order against the digest.
+    pub fn try_hash(&self) -> Result<AppDataHash, AppDataError> {
+        let json = self.canonical_json();
+        if json.len() > APP_DATA_SIZE_LIMIT {
+            return Err(AppDataError::DocumentTooLarge {
+                len: json.len(),
+                max: APP_DATA_SIZE_LIMIT,
+            });
+        }
+        Ok(AppDataHash(keccak256(json.as_bytes()).0))
     }
 }
+
+/// Errors raised while validating an [`AppDataDoc`] before signing.
+#[derive(Debug, thiserror::Error, Eq, PartialEq)]
+pub enum AppDataError {
+    /// Canonical JSON exceeded [`APP_DATA_SIZE_LIMIT`] (8 KiB). The
+    /// orderbook enforces the same cap server-side, so this would
+    /// otherwise reject post-sign.
+    #[error("app-data document too large: {len} bytes (max {max})")]
+    DocumentTooLarge {
+        /// Length of the offending canonical JSON, in bytes.
+        len: usize,
+        /// Maximum accepted length: [`APP_DATA_SIZE_LIMIT`].
+        max: usize,
+    },
+    /// A partner-fee `bps` field exceeded `10_000` (100%). The CoW
+    /// settlement contract caps partner fees at one hundred percent, so
+    /// over-cap values would either be silently clamped or rejected
+    /// post-settle.
+    #[error("partner fee {field} = {value} exceeds maximum {max}")]
+    FeeOutOfRange {
+        /// Which bps field overflowed (`bps`, `surplusBps`,
+        /// `priceImprovementBps`, or `maxVolumeBps`).
+        field: &'static str,
+        /// Value supplied by the caller / wire.
+        value: u64,
+        /// Maximum accepted value (`10_000`).
+        max: u64,
+    },
+    /// JSON parse failure. The underlying `serde_json` error is captured
+    /// as text so this enum stays `PartialEq` for tests.
+    #[error("invalid app-data JSON: {0}")]
+    Parse(String),
+}
+
+/// Maximum partner-fee value, in basis points. `10_000 = 100 %`. Mirrors
+/// the cap the CoW settlement contract enforces on the `bps` and
+/// `maxVolumeBps` fields of `metadata.partnerFee`.
+pub const PARTNER_FEE_BPS_MAX: u64 = 10_000;
 
 /// Recursively rebuild a [`serde_json::Value`] so every object's keys are
 /// in sorted order. `serde_json::Map` is a `BTreeMap` when the
@@ -621,6 +739,11 @@ const MULTIHASH_KECCAK_256: u8 = 0x1b;
 const MULTIHASH_LEN_32: u8 = 0x20;
 /// Total size of the binary CID before multibase encoding.
 const CID_BYTES_LEN: usize = 4 + 32;
+/// Upper bound on the multibase-encoded CID string. Real CIDs are at most
+/// 73 chars (`f` + 72 base16 nibbles); 96 leaves slack for trailing
+/// whitespace or unusual padding without permitting attacker-driven
+/// gigabyte allocations in [`AppDataCid::to_hash`].
+const CID_STRING_MAX_LEN: usize = 96;
 
 impl AppDataCid {
     /// Derive the CID a 32-byte app-data digest pins to.
@@ -657,6 +780,12 @@ impl AppDataCid {
     /// requires accepting both. Validates version, codec, multihash
     /// code, and digest length before returning the trailing 32 bytes.
     pub fn to_hash(&self) -> Result<AppDataHash, AppDataCidError> {
+        if self.0.len() > CID_STRING_MAX_LEN {
+            return Err(AppDataCidError::CidTooLong {
+                len: self.0.len(),
+                max: CID_STRING_MAX_LEN,
+            });
+        }
         let bytes = match self.0.as_bytes().first() {
             Some(b'b') => base32_decode(&self.0[1..])?,
             Some(b'f') => {
@@ -733,6 +862,16 @@ pub enum AppDataCidError {
     /// The multihash length byte was not `0x20`.
     #[error("expected 32-byte digest (0x20), got 0x{0:02x}")]
     UnexpectedDigestLength(u8),
+    /// The CID string was longer than [`CID_STRING_MAX_LEN`]. Real CIDs
+    /// are at most 73 chars; longer inputs are rejected before any
+    /// attacker-driven allocation runs.
+    #[error("cid string too long: {len} chars (max {max})")]
+    CidTooLong {
+        /// Length of the offending CID string.
+        len: usize,
+        /// Maximum accepted length.
+        max: usize,
+    },
 }
 
 /// RFC 4648 base32 lower-case alphabet, no padding.

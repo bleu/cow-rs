@@ -79,6 +79,31 @@ pub enum Error {
         /// Why it failed.
         reason: &'static str,
     },
+
+    /// A field on the orderbook's quote response did not match the
+    /// caller's [`crate::QuoteRequest`]. Raised by
+    /// [`crate::OrderQuoteResponse::to_signed_order_data_for`] before any
+    /// `OrderData` is returned, so a hostile orderbook cannot trick the
+    /// caller into signing an order with a swapped buy token, recipient,
+    /// or app-data digest.
+    #[error("quote field {field} mismatch: requested {requested}, returned {returned}")]
+    QuoteFieldMismatch {
+        /// Which field of the response disagreed with the request.
+        field: &'static str,
+        /// What the caller asked for, formatted via `Display`.
+        requested: String,
+        /// What the orderbook returned, formatted via `Display`.
+        returned: String,
+    },
+
+    /// An HTTP response body exceeded the configured cap before being
+    /// fully read. Defends against a hostile orderbook streaming a
+    /// multi-GB body to exhaust the SDK's memory.
+    #[error("orderbook response exceeded {max} byte cap")]
+    ResponseTooLarge {
+        /// Maximum byte length the SDK accepts for this endpoint.
+        max: usize,
+    },
 }
 
 /// Structured error envelope returned by the CoW orderbook for 4xx / 5xx

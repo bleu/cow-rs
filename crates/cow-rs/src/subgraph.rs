@@ -174,11 +174,23 @@ struct HoursVariables {
 }
 
 /// Thin GraphQL client for the CoW subgraph.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SubgraphClient {
     url: url::Url,
     client: reqwest::Client,
     bearer: Option<String>,
+}
+
+/// Manual `Debug` impl that redacts the bearer token. Logging the client
+/// (e.g. `tracing::debug!("{client:?}")`) must never leak the gateway API key.
+impl std::fmt::Debug for SubgraphClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubgraphClient")
+            .field("url", &self.url)
+            .field("client", &self.client)
+            .field("bearer", &self.bearer.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 impl SubgraphClient {
@@ -433,6 +445,25 @@ mod tests {
         let url = url::Url::parse("https://example.test/").unwrap();
         let client = SubgraphClient::with_bearer_token(url, "tok_abc");
         assert_eq!(client.bearer.as_deref(), Some("tok_abc"));
+    }
+
+    #[test]
+    fn debug_does_not_leak_bearer_token() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let secret = "super-secret-token-xyz-do-not-leak";
+        let client = SubgraphClient::with_bearer_token(url, secret);
+        let rendered = format!("{client:?}");
+        assert!(
+            !rendered.contains(secret),
+            "bearer token leaked through Debug: {rendered}"
+        );
+        assert!(
+            rendered.contains("redacted"),
+            "expected '<redacted>' marker in Debug output, got: {rendered}"
+        );
+
+        let no_token = SubgraphClient::new(url::Url::parse("https://example.test/").unwrap());
+        assert!(format!("{no_token:?}").contains("None"));
     }
 
     #[test]

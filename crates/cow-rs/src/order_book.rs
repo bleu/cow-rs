@@ -610,6 +610,66 @@ impl OrderQuoteResponse {
             buy_token_balance: q.buy_token_balance,
         })
     }
+
+    /// Like [`OrderQuoteResponse::to_signed_order_data`] but cross-checks
+    /// the quote's `sell_token`, `buy_token`, `receiver` and (when the
+    /// caller pinned a digest) `app_data` against the original
+    /// [`QuoteRequest`] before producing the [`OrderData`] the user will
+    /// sign.
+    ///
+    /// Defends against a hostile orderbook that swaps any of those
+    /// fields between request and response: the SDK refuses to project
+    /// the response into a signable order until every caller-authorised
+    /// field round-trips. Returns [`Error::QuoteFieldMismatch`] on the
+    /// first divergence.
+    pub fn to_signed_order_data_for(
+        &self,
+        request: &QuoteRequest,
+        app_data: AppDataHash,
+    ) -> Result<OrderData> {
+        let q = &self.quote;
+        if q.sell_token != request.sell_token {
+            return Err(Error::QuoteFieldMismatch {
+                field: "sellToken",
+                requested: format!("{:#x}", request.sell_token),
+                returned: format!("{:#x}", q.sell_token),
+            });
+        }
+        if q.buy_token != request.buy_token {
+            return Err(Error::QuoteFieldMismatch {
+                field: "buyToken",
+                requested: format!("{:#x}", request.buy_token),
+                returned: format!("{:#x}", q.buy_token),
+            });
+        }
+        if let Some(requested_receiver) = request.receiver {
+            // Treat zero-receiver as "owner receives" on both sides; the
+            // orderbook normalises the same way.
+            let normalise = |a: Option<Address>| match a {
+                Some(addr) if addr == Address::ZERO => None,
+                other => other,
+            };
+            let req = normalise(Some(requested_receiver));
+            let got = normalise(q.receiver);
+            if req != got {
+                return Err(Error::QuoteFieldMismatch {
+                    field: "receiver",
+                    requested: format!("{req:?}"),
+                    returned: format!("{got:?}"),
+                });
+            }
+        }
+        if let Some(QuoteAppData::Hash(requested_hash)) = request.app_data.as_ref()
+            && *requested_hash != app_data
+        {
+            return Err(Error::QuoteFieldMismatch {
+                field: "appData",
+                requested: requested_hash.to_string(),
+                returned: app_data.to_string(),
+            });
+        }
+        self.to_signed_order_data(app_data)
+    }
 }
 
 /// Full response body of `POST /api/v1/quote`.
@@ -754,7 +814,19 @@ impl OrderCreation {
                 declared: self.from,
                 recovered: recovered.signer,
             }),
-            // EIP-1271 / PreSign: orderbook validates the owner on-chain.
+            // EIP-1271 / PreSign: the signature does not carry a
+            // recoverable owner, but a synthesised `OrderCreation` (e.g.
+            // round-tripped through JSON) could still set `from = ZERO`.
+            // Reject that case explicitly so callers do not treat the
+            // `Ok` arm as a positive owner assertion. The orderbook (or
+            // `GPv2Signing.setPreSignature`) still validates the owner
+            // on-chain in the non-zero case.
+            None if self.from == Address::ZERO => {
+                Err(crate::signature::SignatureError::SignerMismatch {
+                    declared: Address::ZERO,
+                    recovered: Address::ZERO,
+                })
+            }
             None => Ok(self.from),
         }
     }
@@ -780,6 +852,17 @@ impl OrderCreation {
             return Err(Error::OrderCreationInvalid {
                 field: "from",
                 reason: "owner address must be non-zero",
+            });
+        }
+        // The JSON document MUST hash to the digest the order was signed
+        // against. Otherwise a wrapper layer can bind the user's
+        // signature to bytes the orderbook never sees, while pinning a
+        // different document under the same hash via `put_app_data`.
+        let json_digest = alloy_primitives::keccak256(app_data_json.as_bytes());
+        if AppDataHash(json_digest.0) != order_data.app_data {
+            return Err(Error::OrderCreationInvalid {
+                field: "app_data",
+                reason: "JSON digest does not match signed app_data hash",
             });
         }
         // `Some(Address::ZERO)` and `None` mean the same thing (use owner)
@@ -1447,7 +1530,7 @@ mod tests {
     fn order_creation_serialises_to_expected_wire_shape() {
         let quote = load_mainnet_quote();
         let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
-        let signature = Signature::default();
+        let signature = Signature::default_with(SigningScheme::Eip712);
         let creation = OrderCreation::from_signed_order_data(
             signed,
             signature,
@@ -1494,7 +1577,7 @@ mod tests {
     fn order_creation_rejects_zero_from_address() {
         let err = OrderCreation::from_signed_order_data(
             OrderData::default(),
-            Signature::default(),
+            Signature::default_with(SigningScheme::Eip712),
             Address::ZERO,
             EMPTY_APP_DATA_JSON.to_owned(),
             None,
@@ -1506,6 +1589,129 @@ mod tests {
         );
     }
 
+    /// R20: `to_signed_order_data_for` rejects a tampered `buy_token`
+    /// instead of letting the user sign an order paying out a different
+    /// asset than they asked for.
+    #[test]
+    fn to_signed_order_data_for_rejects_swapped_buy_token() {
+        use alloy_primitives::address;
+        let quote = load_mainnet_quote();
+        let request = QuoteRequest::sell_amount_before_fee(
+            quote.quote.sell_token,
+            // Asks for a different buy token than the response carries.
+            address!("dead000000000000000000000000000000000000"),
+            quote.from,
+            U256::from(1u64),
+        );
+        let err = quote
+            .to_signed_order_data_for(&request, EMPTY_APP_DATA_HASH)
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::QuoteFieldMismatch { field: "buyToken", .. }),
+            "got: {err}"
+        );
+    }
+
+    /// R20: `to_signed_order_data_for` returns the same `OrderData` as
+    /// the unchecked path when every caller-authorised field matches.
+    #[test]
+    fn to_signed_order_data_for_passes_when_request_matches_response() {
+        let quote = load_mainnet_quote();
+        let request = QuoteRequest::sell_amount_before_fee(
+            quote.quote.sell_token,
+            quote.quote.buy_token,
+            quote.from,
+            U256::from(1u64),
+        );
+        let signed = quote
+            .to_signed_order_data_for(&request, EMPTY_APP_DATA_HASH)
+            .unwrap();
+        let unchecked = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
+        assert_eq!(signed, unchecked);
+    }
+
+    /// R20: `to_signed_order_data_for` rejects a quote whose returned
+    /// `app_data` digest disagrees with the digest the caller pinned in
+    /// the request.
+    #[test]
+    fn to_signed_order_data_for_rejects_swapped_app_data() {
+        let quote = load_mainnet_quote();
+        let pinned = AppDataHash([0x42; 32]);
+        let request = QuoteRequest::sell_amount_before_fee(
+            quote.quote.sell_token,
+            quote.quote.buy_token,
+            quote.from,
+            U256::from(1u64),
+        )
+        .with_app_data(pinned);
+        // The response's digest is `EMPTY_APP_DATA_HASH`, not `pinned`.
+        let err = quote
+            .to_signed_order_data_for(&request, EMPTY_APP_DATA_HASH)
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::QuoteFieldMismatch { field: "appData", .. }),
+            "got: {err}"
+        );
+    }
+
+    /// R21: `from_signed_order_data` rejects an `app_data` JSON document
+    /// whose keccak256 does not match the `OrderData::app_data` digest
+    /// the user signed against.
+    #[test]
+    fn from_signed_order_data_rejects_app_data_digest_mismatch() {
+        let quote = load_mainnet_quote();
+        let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
+        let err = OrderCreation::from_signed_order_data(
+            signed,
+            Signature::default_with(SigningScheme::Eip712),
+            quote.from,
+            // Document does NOT match `EMPTY_APP_DATA_HASH`.
+            r#"{"version":"1.6.0","metadata":{}}"#.to_owned(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::OrderCreationInvalid { field: "app_data", .. }),
+            "got: {err}"
+        );
+    }
+
+    /// R22: `verify_owner` rejects a synthesised EIP-1271 / PreSign body
+    /// whose `from` is the zero address. The `Ok` arm must never act as
+    /// a positive owner assertion for an obviously bogus body.
+    #[test]
+    fn verify_owner_rejects_zero_from_for_onchain_schemes() {
+        // Build the OrderCreation directly, bypassing
+        // `from_signed_order_data` (which already rejects zero-from), so
+        // we reproduce the wire shape an attacker could synthesise.
+        let creation = OrderCreation {
+            sell_token: Address::ZERO,
+            buy_token: Address::ZERO,
+            receiver: None,
+            sell_amount: U256::ZERO,
+            buy_amount: U256::ZERO,
+            valid_to: 0,
+            app_data: EMPTY_APP_DATA_JSON.to_owned(),
+            app_data_hash: EMPTY_APP_DATA_HASH,
+            fee_amount: U256::ZERO,
+            kind: OrderKind::Sell,
+            partially_fillable: false,
+            sell_token_balance: SellTokenSource::default(),
+            buy_token_balance: BuyTokenDestination::default(),
+            signing_scheme: SigningScheme::PreSign,
+            signature: Signature::PreSign,
+            from: Address::ZERO,
+            quote_id: None,
+        };
+        let err = creation
+            .verify_owner(&crate::domain::DomainSeparator::default())
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            crate::signature::SignatureError::SignerMismatch { .. }
+        ));
+    }
+
     /// `quoteId` is omitted when not provided rather than emitted as `null`.
     #[test]
     fn order_creation_skips_optional_quote_id() {
@@ -1513,7 +1719,7 @@ mod tests {
         let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
         let creation = OrderCreation::from_signed_order_data(
             signed,
-            Signature::default(),
+            Signature::default_with(SigningScheme::Eip712),
             quote.from,
             EMPTY_APP_DATA_JSON.to_owned(),
             None,

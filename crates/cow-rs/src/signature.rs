@@ -18,6 +18,13 @@ use std::fmt::{self, Debug, Formatter};
 use crate::domain::{DomainSeparator, hashed_eip712_message, hashed_ethsign_message};
 use crate::signing_scheme::{EcdsaSigningScheme, SigningScheme};
 
+/// Maximum accepted length for an EIP-1271 signature payload, in bytes.
+///
+/// Matches the cap enforced by `cowprotocol/services` (32 KiB). A hostile
+/// orderbook can otherwise return a multi-megabyte EIP-1271 payload that
+/// the SDK would happily buffer as a `Vec<u8>`, ballooning process memory.
+pub const EIP1271_MAX_LEN: usize = 32 * 1024;
+
 /// Errors specific to signature parsing or verification.
 #[derive(Debug, thiserror::Error)]
 pub enum SignatureError {
@@ -28,6 +35,14 @@ pub enum SignatureError {
     /// PreSign payload was non-empty and not the legacy 20-byte owner.
     #[error("presign payload must be empty or a 20-byte owner, got {0} bytes")]
     PreSignLength(usize),
+    /// EIP-1271 signature payload exceeded the per-order cap.
+    #[error("eip1271 signature payload too long: {len} bytes (max {max})")]
+    Eip1271TooLong {
+        /// Length of the offending payload.
+        len: usize,
+        /// Maximum accepted length (see [`EIP1271_MAX_LEN`]).
+        max: usize,
+    },
     /// The `v` recovery byte was not in `{0, 1, 27, 28}`.
     #[error("invalid signature v value: {0}; expected 0, 1, 27 or 28")]
     InvalidV(u8),
@@ -37,6 +52,11 @@ pub enum SignatureError {
     /// Underlying signer reported a `k256` error during signing.
     #[error("k256 signer error: {0}")]
     Signer(#[from] K256Error),
+    /// Underlying signer reported a non-`k256` error (network signer
+    /// timeout, hardware wallet glitch, KMS rate limit, etc.). Carries an
+    /// owned message so we never `Box::leak` attacker-controllable bytes.
+    #[error("signer error: {0}")]
+    SignerOther(String),
     /// Recovered signer address did not match the address declared on
     /// the order. Raised by
     /// [`crate::OrderCreation::verify_owner`].
@@ -60,12 +80,6 @@ pub enum Signature {
     Eip1271(Vec<u8>),
     /// On-chain pre-signature recorded via `GPv2Signing::setPreSignature`.
     PreSign,
-}
-
-impl Default for Signature {
-    fn default() -> Self {
-        Self::Eip712(EcdsaSignature::default())
-    }
 }
 
 impl Debug for Signature {
@@ -118,17 +132,27 @@ impl Signature {
     /// owner address (legacy 20-byte encoding accepted by services).
     pub fn from_bytes(scheme: SigningScheme, bytes: &[u8]) -> Result<Self, SignatureError> {
         match scheme {
-            scheme @ (SigningScheme::Eip712 | SigningScheme::EthSign) => {
+            SigningScheme::Eip712 => {
                 let bytes: [u8; 65] = bytes
                     .try_into()
                     .map_err(|_| SignatureError::Length(bytes.len()))?;
-                Ok(EcdsaSignature::from_bytes(&bytes)?.to_signature(
-                    scheme
-                        .try_to_ecdsa_scheme()
-                        .expect("scheme is an ecdsa scheme"),
-                ))
+                Ok(EcdsaSignature::from_bytes(&bytes)?.to_signature(EcdsaSigningScheme::Eip712))
             }
-            SigningScheme::Eip1271 => Ok(Self::Eip1271(bytes.to_vec())),
+            SigningScheme::EthSign => {
+                let bytes: [u8; 65] = bytes
+                    .try_into()
+                    .map_err(|_| SignatureError::Length(bytes.len()))?;
+                Ok(EcdsaSignature::from_bytes(&bytes)?.to_signature(EcdsaSigningScheme::EthSign))
+            }
+            SigningScheme::Eip1271 => {
+                if bytes.len() > EIP1271_MAX_LEN {
+                    return Err(SignatureError::Eip1271TooLong {
+                        len: bytes.len(),
+                        max: EIP1271_MAX_LEN,
+                    });
+                }
+                Ok(Self::Eip1271(bytes.to_vec()))
+            }
             SigningScheme::PreSign => {
                 if !(bytes.is_empty() || bytes.len() == 20) {
                     return Err(SignatureError::PreSignLength(bytes.len()));
@@ -269,9 +293,7 @@ impl EcdsaSignature {
         let message = hashed_signing_message(signing_scheme, domain_separator, struct_hash);
         let raw = signer.sign_hash_sync(&message).map_err(|e| match e {
             alloy_signer::Error::Ecdsa(k) => SignatureError::Signer(k),
-            other => SignatureError::Recovery(alloy_primitives::SignatureError::FromBytes(
-                format!("{other}").leak(),
-            )),
+            other => SignatureError::SignerOther(other.to_string()),
         })?;
         Self::from_bytes(&raw.as_bytes())
     }
@@ -403,6 +425,18 @@ mod tests {
     fn ecdsa_default_zero_signature_round_trips() {
         let sig = Signature::from_bytes(SigningScheme::Eip712, &[0u8; 65]).unwrap();
         assert_eq!(sig, Signature::default_with(SigningScheme::Eip712));
+    }
+
+    #[test]
+    fn eip1271_rejects_oversize_payload() {
+        let oversize = vec![0u8; EIP1271_MAX_LEN + 1];
+        assert!(matches!(
+            Signature::from_bytes(SigningScheme::Eip1271, &oversize),
+            Err(SignatureError::Eip1271TooLong { len, max })
+                if len == EIP1271_MAX_LEN + 1 && max == EIP1271_MAX_LEN
+        ));
+        let at_limit = vec![0u8; EIP1271_MAX_LEN];
+        assert!(Signature::from_bytes(SigningScheme::Eip1271, &at_limit).is_ok());
     }
 
     #[test]

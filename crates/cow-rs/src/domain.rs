@@ -42,8 +42,14 @@ impl DomainSeparator {
 impl FromStr for DomainSeparator {
     type Err = FromHexError;
 
+    /// Parses a `0x`-prefixed 32-byte hex string. Bare hex (no `0x`) is
+    /// rejected so callers cannot accidentally hand a 64-char address-like
+    /// string to a domain-scope parser.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(FromHex::from_hex(s)?))
+        let body = s
+            .strip_prefix("0x")
+            .ok_or(FromHexError::InvalidStringLength)?;
+        Ok(Self(FromHex::from_hex(body)?))
     }
 }
 
@@ -103,8 +109,15 @@ mod tests {
 
     #[test]
     fn domain_separator_from_str_round_trips() {
-        let hex_str = "9d7e07ef92761aa9453ae5ff25083a2b19764131b15295d3c7e89f1f1b8c67d9";
-        let parsed = DomainSeparator::from_str(hex_str).unwrap();
-        assert_eq!(format!("{parsed:?}"), hex_str);
+        let body = "9d7e07ef92761aa9453ae5ff25083a2b19764131b15295d3c7e89f1f1b8c67d9";
+        let prefixed = format!("0x{body}");
+        let parsed = DomainSeparator::from_str(&prefixed).unwrap();
+        assert_eq!(format!("{parsed:?}"), body);
+    }
+
+    #[test]
+    fn domain_separator_from_str_requires_0x_prefix() {
+        let bare = "9d7e07ef92761aa9453ae5ff25083a2b19764131b15295d3c7e89f1f1b8c67d9";
+        assert!(DomainSeparator::from_str(bare).is_err());
     }
 }

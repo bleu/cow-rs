@@ -303,7 +303,7 @@ impl OrderBuilder {
 /// opaque [`serde_json::Value`]s in this first iteration so the type stays
 /// forward-compatible with orderbook schema additions.
 #[serde_as]
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Order {
     /// The 12 fields that were signed.
@@ -561,10 +561,12 @@ impl OrderUid {
 
     /// Split a UID into its three parts.
     pub fn parts(&self) -> (B256, Address, u32) {
+        let mut valid_to = [0u8; 4];
+        valid_to.copy_from_slice(&self.0[52..56]);
         (
             B256::from_slice(&self.0[0..32]),
             Address::from_slice(&self.0[32..52]),
-            u32::from_be_bytes(self.0[52..].try_into().unwrap()),
+            u32::from_be_bytes(valid_to),
         )
     }
 }
@@ -590,10 +592,15 @@ impl Debug for OrderUid {
 impl FromStr for OrderUid {
     type Err = const_hex::FromHexError;
 
+    /// Parses a `0x`-prefixed 56-byte hex string. Bare hex (no `0x`) is
+    /// rejected to match `cowprotocol/services` and avoid ingesting the
+    /// same UID under two distinct wire encodings.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.strip_prefix("0x").unwrap_or(s);
+        let body = s
+            .strip_prefix("0x")
+            .ok_or(const_hex::FromHexError::InvalidStringLength)?;
         let mut value = [0u8; 56];
-        const_hex::decode_to_slice(s, value.as_mut())?;
+        const_hex::decode_to_slice(body, value.as_mut())?;
         Ok(Self(value))
     }
 }
@@ -955,6 +962,14 @@ mod tests {
 
         let rebuilt = OrderUid::from_parts(hash, owner, valid_to);
         assert_eq!(rebuilt, original);
+    }
+
+    #[test]
+    fn order_uid_from_str_requires_0x_prefix() {
+        let bare = "5668997bd3fb981d1b3ec44e8483e7c369756df47d10241c1c7a26fde4d1090e89984d17af2f18f8c54873c0de68a56cc5a23e0f695ba915";
+        assert!(OrderUid::from_str(bare).is_err());
+        let prefixed = format!("0x{bare}");
+        assert!(OrderUid::from_str(&prefixed).is_ok());
     }
 
     #[test]
