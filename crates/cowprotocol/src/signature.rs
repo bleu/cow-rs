@@ -34,7 +34,12 @@ pub enum SignatureError {
     PreSignLength(usize),
     /// EIP-1271 payload exceeded [`EIP1271_MAX_LEN`].
     #[error("eip1271 signature payload too long: {len} bytes (max {max})")]
-    Eip1271TooLong { len: usize, max: usize },
+    Eip1271TooLong {
+        /// Observed payload length, in bytes.
+        len: usize,
+        /// Configured cap (`EIP1271_MAX_LEN`).
+        max: usize,
+    },
     /// `v` recovery byte was not in `{0, 1, 27, 28}`.
     #[error("invalid signature v value: {0}; expected 0, 1, 27 or 28")]
     InvalidV(u8),
@@ -52,7 +57,9 @@ pub enum SignatureError {
     /// [`crate::OrderCreation::verify_owner`].
     #[error("signer mismatch: declared {declared}, recovered {recovered}")]
     SignerMismatch {
+        /// Owner the order claims to be signed by.
         declared: Address,
+        /// Owner recovered from the signature bytes.
         recovered: Address,
     },
 }

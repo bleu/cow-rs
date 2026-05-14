@@ -30,8 +30,10 @@ pub const BUY_ETH_ADDRESS: Address = Address::repeat_byte(0xee);
 pub enum OrderStatus {
     /// Awaiting on-chain pre-signature.
     PresignaturePending,
+    /// Live; waiting for a solver to settle.
     #[default]
     Open,
+    /// Fully matched on-chain.
     Fulfilled,
     /// Off-chain delete or on-chain pre-sign reversal.
     Cancelled,
@@ -44,6 +46,7 @@ pub enum OrderStatus {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OrderClass {
+    /// Standard market order.
     #[default]
     Market,
     /// Solver-internal, placed by whitelisted participants.
@@ -60,7 +63,9 @@ pub enum OrderClass {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderData {
+    /// Token the owner is selling.
     pub sell_token: Address,
+    /// Token the owner is buying.
     pub buy_token: Address,
     /// `None` means the owner receives the buy token.
     #[serde(default)]
@@ -73,15 +78,20 @@ pub struct OrderData {
     pub buy_amount: U256,
     /// Unix seconds.
     pub valid_to: u32,
+    /// 32-byte digest of the app-data document.
     pub app_data: AppDataHash,
     /// Protocol fee in `sell_token` atomic units. Zero for limit and
     /// liquidity orders (fee taken from surplus).
     #[serde_as(as = "DisplayFromStr")]
     pub fee_amount: U256,
+    /// Sell-side vs buy-side fix.
     pub kind: OrderKind,
+    /// Whether partial fills are allowed.
     pub partially_fillable: bool,
+    /// Source the sell token is drawn from.
     #[serde(default)]
     pub sell_token_balance: SellTokenSource,
+    /// Destination the buy token is paid to.
     #[serde(default)]
     pub buy_token_balance: BuyTokenDestination,
 }
@@ -282,31 +292,43 @@ impl OrderBuilder {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Order {
+    /// The 12 signed fields ([`OrderData`]).
     #[serde(flatten)]
     pub data: OrderData,
+    /// 56-byte order UID against the chain's settlement domain.
     pub uid: OrderUid,
+    /// Owner that signed the order.
     pub owner: alloy_primitives::Address,
+    /// Signing scheme used by the owner.
     pub signing_scheme: crate::signing_scheme::SigningScheme,
     /// Raw signature bytes, hex-encoded.
     pub signature: String,
     /// ISO-8601 timestamp the orderbook accepted the order.
     pub creation_date: String,
+    /// Current server-side lifecycle status.
     pub status: OrderStatus,
+    /// Server-side order classification.
     pub class: OrderClass,
+    /// Cumulative buy-side fill, atomic units.
     #[serde_as(as = "DisplayFromStr")]
     pub executed_buy_amount: alloy_primitives::U256,
+    /// Cumulative sell-side fill, atomic units.
     #[serde_as(as = "DisplayFromStr")]
     pub executed_sell_amount: alloy_primitives::U256,
     /// Executed fee in `executed_fee_token` atomic units.
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(default)]
     pub executed_fee: Option<alloy_primitives::U256>,
+    /// Token used to charge `executed_fee`.
     #[serde(default)]
     pub executed_fee_token: Option<alloy_primitives::Address>,
+    /// `true` once the order is invalidated (cancelled / replaced).
     #[serde(default)]
     pub invalidated: bool,
+    /// `true` if classified as a liquidity order.
     #[serde(default)]
     pub is_liquidity_order: bool,
+    /// Full app-data document, when the orderbook stored it.
     #[serde(default)]
     pub full_app_data: Option<String>,
     /// Quote that produced the order, when one was supplied.
@@ -324,6 +346,7 @@ pub struct Order {
     /// On-chain user (distinct from `owner` for proxy/relayer flows).
     #[serde(default)]
     pub onchain_user: Option<alloy_primitives::Address>,
+    /// Settlement contract that processed the trade, when known.
     #[serde(default)]
     pub settlement_contract: Option<alloy_primitives::Address>,
 }

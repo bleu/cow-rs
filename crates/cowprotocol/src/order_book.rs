@@ -46,9 +46,11 @@ pub enum QuoteAppData {
 }
 
 impl QuoteAppData {
+    /// Construct from a pre-computed digest.
     pub const fn hash(digest: AppDataHash) -> Self {
         Self::Hash(digest)
     }
+    /// Construct from a canonical-JSON document.
     pub const fn full(full: String) -> Self {
         Self::Full(full)
     }
@@ -64,7 +66,9 @@ impl From<AppDataHash> for QuoteAppData {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PriceQuality {
+    /// Fastest available answer; solvers may skip simulation.
     Fast,
+    /// Default: best solver answer within the quoting window.
     #[default]
     Optimal,
     /// `Optimal` plus on-chain simulation against balances/allowances.
@@ -76,11 +80,17 @@ pub enum PriceQuality {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Trade {
+    /// Block the settlement transaction was mined in.
     pub block_number: u64,
+    /// Log index within the settlement transaction.
     pub log_index: u32,
+    /// UID of the filled order.
     pub order_uid: OrderUid,
+    /// Owner that signed the order.
     pub owner: Address,
+    /// Sold token.
     pub sell_token: Address,
+    /// Bought token.
     pub buy_token: Address,
     /// Sell amount net of fee.
     #[serde_as(as = "DisplayFromStr")]
@@ -89,8 +99,10 @@ pub struct Trade {
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(default)]
     pub sell_amount_before_fees: Option<U256>,
+    /// Bought amount.
     #[serde_as(as = "DisplayFromStr")]
     pub buy_amount: U256,
+    /// Settlement transaction hash, when indexed.
     #[serde(default)]
     pub tx_hash: Option<String>,
 }
@@ -99,6 +111,7 @@ pub struct Trade {
 /// `GET /api/v1/token/{token}/native_price`. JSON number, not string.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct NativePrice {
+    /// Native-token price of one atomic unit of the token.
     pub price: f64,
 }
 
@@ -108,6 +121,7 @@ pub struct NativePrice {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TotalSurplus {
+    /// Cumulative surplus, decimal string in atomic native units.
     pub total_surplus: String,
 }
 
@@ -118,11 +132,13 @@ pub struct TotalSurplus {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Auction {
+    /// Monotonically increasing auction id.
     #[serde(default)]
     pub id: Option<u64>,
     /// Anchor block; orders, prices and settlements apply here.
     #[serde(default)]
     pub block: Option<u64>,
+    /// Per-order array; left as JSON because the row shape drifts per CIP.
     #[serde(default)]
     pub orders: Option<serde_json::Value>,
     /// External prices, atomic native units per token.
@@ -140,8 +156,10 @@ pub struct Auction {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenMetadata {
+    /// Block of the first trade the orderbook has indexed for the token.
     #[serde(default)]
     pub first_trade_block: Option<u32>,
+    /// Last-known native-token price, atomic units per token.
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(default)]
     pub native_price: Option<U256>,
@@ -153,6 +171,7 @@ pub struct TokenMetadata {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataDocument {
+    /// Raw JSON document; orderbook hashes the bytes verbatim.
     pub full_app_data: String,
 }
 
@@ -215,8 +234,10 @@ pub enum AuctionStatusType {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuctionStatus {
+    /// Stage discriminant.
     #[serde(rename = "type")]
     pub status_type: AuctionStatusType,
+    /// Stage-specific payload (e.g., solver proposals), left as JSON.
     #[serde(default)]
     pub value: Vec<serde_json::Value>,
 }
@@ -228,20 +249,26 @@ pub struct AuctionStatus {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuoteRequest {
+    /// Token the owner is selling.
     pub sell_token: Address,
+    /// Token the owner is buying.
     pub buy_token: Address,
     /// Order owner.
     pub from: Address,
     /// Defaults to `from` when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receiver: Option<Address>,
+    /// Sell-side vs buy-side fix.
     pub kind: OrderKind,
+    /// Sell amount before fee (sell-side quote).
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sell_amount_before_fee: Option<U256>,
+    /// Sell amount after fee (sell-side quote, fee already folded in).
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sell_amount_after_fee: Option<U256>,
+    /// Buy amount after fee (buy-side quote).
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buy_amount_after_fee: Option<U256>,
@@ -252,14 +279,19 @@ pub struct QuoteRequest {
     /// Mutually exclusive with `valid_to`; default 30 min.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub valid_for: Option<u32>,
+    /// Optional pin on the app-data digest or document.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_data: Option<QuoteAppData>,
+    /// Optional pin on partial-fill semantics.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub partially_fillable: Option<bool>,
+    /// Optional pin on the sell-token source.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sell_token_balance: Option<SellTokenSource>,
+    /// Optional pin on the buy-token destination.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buy_token_balance: Option<BuyTokenDestination>,
+    /// Optional pin on the signing scheme.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signing_scheme: Option<SigningScheme>,
     /// Gas budget for the on-chain `isValidSignature` callback on
@@ -435,25 +467,37 @@ impl QuoteRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderQuote {
+    /// Sold token, echoed from the request.
     pub sell_token: Address,
+    /// Bought token, echoed from the request.
     pub buy_token: Address,
+    /// Receiver, normalised from the request.
     #[serde(default)]
     pub receiver: Option<Address>,
+    /// Sell amount the orderbook expects in the signed order.
     #[serde_as(as = "DisplayFromStr")]
     pub sell_amount: U256,
+    /// Buy amount the orderbook expects in the signed order.
     #[serde_as(as = "DisplayFromStr")]
     pub buy_amount: U256,
+    /// Quoted expiry, Unix seconds.
     pub valid_to: u32,
+    /// 32-byte digest of the app-data document.
     pub app_data: AppDataHash,
     /// Orderbook fee in `sell_token` atomic units.
     #[serde_as(as = "DisplayFromStr")]
     pub fee_amount: U256,
+    /// Sell-side vs buy-side fix.
     pub kind: OrderKind,
+    /// Whether partial fills are allowed.
     pub partially_fillable: bool,
+    /// Source the sell token is drawn from.
     #[serde(default)]
     pub sell_token_balance: SellTokenSource,
+    /// Destination the buy token is paid to.
     #[serde(default)]
     pub buy_token_balance: BuyTokenDestination,
+    /// Signing scheme the orderbook expects.
     pub signing_scheme: SigningScheme,
 }
 
@@ -692,6 +736,7 @@ impl OrderQuoteResponse {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderQuoteResponse {
+    /// Quoted [`OrderQuote`]; project via [`Self::to_signed_order_data`].
     pub quote: OrderQuote,
     /// Order owner; echoed from the request.
     pub from: Address,

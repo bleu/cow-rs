@@ -124,6 +124,7 @@ pub struct AppDataDoc {
     /// `"prod"`, `"staging"`, etc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<String>,
+    /// Optional sub-document carrying SDK / partner attribution and hooks.
     #[serde(default)]
     pub metadata: AppDataMetadata,
 }
@@ -134,19 +135,25 @@ pub struct AppDataDoc {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataMetadata {
+    /// Slippage / quote-time attribution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quote: Option<AppDataQuote>,
+    /// Market / limit / liquidity classification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order_class: Option<AppDataOrderClass>,
+    /// Optional partner-fee policy and recipient.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partner_fee: Option<AppDataPartnerFee>,
+    /// Optional referrer for analytics / rev-share.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub referrer: Option<AppDataReferrer>,
+    /// Optional UTM campaign tracking.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm: Option<AppDataUtm>,
     /// Pre- and post-trade hooks; opaque JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hooks: Option<serde_json::Value>,
+    /// Optional flashloan parameters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flashloan: Option<AppDataFlashloan>,
     /// UID of the order this one replaces.
@@ -165,6 +172,7 @@ pub struct AppDataQuote {
     /// Slippage in basis points (`10_000 == 100 %`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slippage_bips: Option<u32>,
+    /// Optional quote schema version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
 }
@@ -173,6 +181,7 @@ pub struct AppDataQuote {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataOrderClass {
+    /// Inner [`crate::order::OrderClass`] discriminant.
     pub order_class: crate::order::OrderClass,
 }
 
@@ -350,13 +359,26 @@ impl AppDataPartnerFee {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FeePolicy {
     /// `bps` charged on swap volume.
-    Volume { bps: u64 },
+    Volume {
+        /// Fee in basis points (`10_000 == 100 %`).
+        bps: u64,
+    },
     /// `bps` of captured surplus, capped at `max_volume_bps` of swap
     /// volume.
-    Surplus { bps: u64, max_volume_bps: u64 },
+    Surplus {
+        /// Surplus-capture rate, in basis points.
+        bps: u64,
+        /// Hard cap on the resulting fee, expressed as `bps` of volume.
+        max_volume_bps: u64,
+    },
     /// `bps` of price improvement vs the reference quote, capped at
     /// `max_volume_bps` of swap volume.
-    PriceImprovement { bps: u64, max_volume_bps: u64 },
+    PriceImprovement {
+        /// Improvement-capture rate, in basis points.
+        bps: u64,
+        /// Hard cap on the resulting fee, expressed as `bps` of volume.
+        max_volume_bps: u64,
+    },
 }
 
 /// `metadata.flashloan`. Describes a flashloan attached to the order
@@ -366,10 +388,15 @@ pub enum FeePolicy {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataFlashloan {
+    /// Address of the lending pool funding the loan.
     pub liquidity_provider: Address,
+    /// Adapter contract called by the solver to draw and repay the loan.
     pub protocol_adapter: Address,
+    /// Address that receives the loaned tokens during settlement.
     pub receiver: Address,
+    /// Token being borrowed.
     pub token: Address,
+    /// Atomic-unit amount to borrow.
     #[serde_as(as = "DisplayFromStr")]
     pub amount: U256,
 }
@@ -378,6 +405,7 @@ pub struct AppDataFlashloan {
 /// solvers cancel the prior order when settling the replacement.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AppDataReplacedOrder {
+    /// UID of the order being replaced.
     pub uid: OrderUid,
 }
 
@@ -387,6 +415,7 @@ pub struct AppDataReplacedOrder {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataWrapperCall {
+    /// Wrapper-contract address invoked during settlement.
     pub address: Address,
     /// Wrapper calldata; serialises as `0x`-prefixed hex.
     #[serde_as(as = "BytesHex")]
@@ -400,7 +429,9 @@ pub struct AppDataWrapperCall {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataReferrer {
+    /// Referrer address (analytics / rev-share recipient).
     pub address: Address,
+    /// Optional referrer schema version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
 }
@@ -409,14 +440,19 @@ pub struct AppDataReferrer {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataUtm {
+    /// UTM `source` parameter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm_source: Option<String>,
+    /// UTM `medium` parameter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm_medium: Option<String>,
+    /// UTM `campaign` parameter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm_campaign: Option<String>,
+    /// UTM `content` parameter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm_content: Option<String>,
+    /// UTM `term` parameter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm_term: Option<String>,
 }
@@ -585,13 +621,20 @@ impl AppDataDoc {
 pub enum AppDataError {
     /// Canonical JSON exceeded [`APP_DATA_SIZE_LIMIT`].
     #[error("app-data document too large: {len} bytes (max {max})")]
-    DocumentTooLarge { len: usize, max: usize },
+    DocumentTooLarge {
+        /// Observed canonical-JSON length, in bytes.
+        len: usize,
+        /// Configured limit (`APP_DATA_SIZE_LIMIT`).
+        max: usize,
+    },
     /// A partner-fee `bps` exceeded [`PARTNER_FEE_BPS_MAX`].
     #[error("partner fee {field} = {value} exceeds maximum {max}")]
     FeeOutOfRange {
         /// `bps`, `surplusBps`, `priceImprovementBps`, or `maxVolumeBps`.
         field: &'static str,
+        /// Offending value.
         value: u64,
+        /// Cap that was exceeded.
         max: u64,
     },
     /// JSON parse failure; captured as text to keep the enum `PartialEq`.
