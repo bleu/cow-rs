@@ -106,8 +106,11 @@ impl Chain {
             return None;
         }
         Some(
-            url::Url::parse(&format!("https://barn.api.cow.fi/{}", self.orderbook_slug()))
-                .expect("hard-coded barn URL"),
+            url::Url::parse(&format!(
+                "https://barn.api.cow.fi/{}",
+                self.orderbook_slug()
+            ))
+            .expect("hard-coded barn URL"),
         )
     }
 

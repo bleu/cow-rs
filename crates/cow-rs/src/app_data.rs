@@ -409,8 +409,9 @@ impl AppDataCid {
     pub fn to_hash(&self) -> Result<AppDataHash, AppDataCidError> {
         let bytes = match self.0.as_bytes().first() {
             Some(b'b') => base32_decode(&self.0[1..])?,
-            Some(b'f') => const_hex::decode(&self.0[1..])
-                .map_err(|_| AppDataCidError::InvalidBase16Body)?,
+            Some(b'f') => {
+                const_hex::decode(&self.0[1..]).map_err(|_| AppDataCidError::InvalidBase16Body)?
+            }
             _ => return Err(AppDataCidError::MissingMultibasePrefix),
         };
         if bytes.len() != CID_BYTES_LEN {

@@ -1078,7 +1078,10 @@ mod tests {
             body["signingScheme"],
             serde_json::Value::String("eip1271".into())
         );
-        assert_eq!(body["verificationGasLimit"], serde_json::Value::from(50_000));
+        assert_eq!(
+            body["verificationGasLimit"],
+            serde_json::Value::from(50_000)
+        );
         assert_eq!(body["onchainOrder"], serde_json::Value::from(true));
         // validTo stays absent when only validFor is set.
         assert!(body.get("validTo").is_none());
