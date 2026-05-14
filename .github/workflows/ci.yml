@@ -150,7 +150,11 @@ jobs:
           key: wasm-test-signing
       - run: cargo install --locked wasm-pack
       - name: Headless browser test (in_shim_signing)
-        run: wasm-pack test --headless --firefox --features in_shim_signing crates/cow-sdk-wasm
+        # `cd` into the crate so wasm-pack does not need a positional
+        # PATH arg. Passing both `--features X` and `crates/cow-sdk-wasm`
+        # on the same line confuses wasm-pack 0.14's arg parser and it
+        # walks up to the workspace Cargo.toml (which has no [package]).
+        run: cd crates/cow-sdk-wasm && wasm-pack test --headless --firefox --features in_shim_signing
 
   docs:
     name: docs
