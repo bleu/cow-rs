@@ -10,20 +10,15 @@
 //!
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/model/src/order.rs
 
-use {
-    crate::{
-        app_data::AppDataHash,
-        domain::{DomainSeparator, hashed_eip712_message},
-    },
-    alloy_primitives::{Address, B256, U256, keccak256},
-    hex_literal::hex,
-    serde::{Deserialize, Deserializer, Serialize, Serializer, de},
-    serde_with::{DisplayFromStr, serde_as},
-    std::{
-        fmt::{self, Debug, Display},
-        str::FromStr,
-    },
-};
+use alloy_primitives::{Address, B256, U256, keccak256};
+use hex_literal::hex;
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use serde_with::{DisplayFromStr, serde_as};
+use std::fmt::{self, Debug, Display};
+use std::str::FromStr;
+
+use crate::app_data::AppDataHash;
+use crate::domain::{DomainSeparator, hashed_eip712_message};
 
 /// Sentinel address used in place of a buy token to indicate that the order
 /// pays out in the chain's native currency (e.g. ETH on mainnet, xDAI on
@@ -426,7 +421,10 @@ impl<'de> Deserialize<'de> for OrderUid {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, alloy_primitives::address, hex_literal::hex};
+    use alloy_primitives::address;
+    use hex_literal::hex;
+
+    use super::*;
 
     /// The canonical GPv2Settlement deployment address, identical on every
     /// chain via CREATE2. Source:

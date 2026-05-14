@@ -1,6 +1,9 @@
 //! Error and `Result` types for the `cow-rs` crate.
 
-use {crate::chain::UnsupportedChain, serde::Deserialize, std::fmt};
+use serde::Deserialize;
+use std::fmt;
+
+use crate::chain::UnsupportedChain;
 
 /// Crate-wide `Result` alias.
 pub type Result<T, E = Error> = std::result::Result<T, E>;

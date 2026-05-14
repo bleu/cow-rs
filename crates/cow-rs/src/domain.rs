@@ -9,12 +9,11 @@
 //!
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/model/src/lib.rs
 
-use {
-    alloy_primitives::{Address, B256, U256, keccak256},
-    alloy_sol_types::Eip712Domain,
-    const_hex::{FromHex, FromHexError},
-    std::{fmt, str::FromStr},
-};
+use alloy_primitives::{Address, B256, U256, keccak256};
+use alloy_sol_types::Eip712Domain;
+use const_hex::{FromHex, FromHexError};
+use std::fmt;
+use std::str::FromStr;
 
 /// EIP-712 domain separator: 32 bytes that scope a struct hash to a specific
 /// chain and settlement contract.
@@ -84,7 +83,10 @@ pub fn hashed_ethsign_message(domain_separator: &DomainSeparator, struct_hash: &
 
 #[cfg(test)]
 mod tests {
-    use {super::*, alloy_primitives::address, hex_literal::hex};
+    use alloy_primitives::address;
+    use hex_literal::hex;
+
+    use super::*;
 
     #[test]
     fn domain_separator_sepolia() {

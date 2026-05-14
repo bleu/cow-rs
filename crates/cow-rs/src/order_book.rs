@@ -5,20 +5,17 @@
 //! by `@cowprotocol/cow-sdk` and `cow-py`. The request and response shapes
 //! reflect the production orderbook OpenAPI as of 2026-05.
 
-use {
-    crate::{
-        app_data::AppDataHash,
-        cancellation::SignedOrderCancellations,
-        chain::Chain,
-        error::{ApiError, Error, Result},
-        order::{BuyTokenDestination, Order, OrderData, OrderKind, OrderUid, SellTokenSource},
-        signature::Signature,
-        signing_scheme::SigningScheme,
-    },
-    alloy_primitives::{Address, U256},
-    serde::{Deserialize, Serialize},
-    serde_with::{DisplayFromStr, serde_as},
-};
+use alloy_primitives::{Address, U256};
+use serde::{Deserialize, Serialize};
+use serde_with::{DisplayFromStr, serde_as};
+
+use crate::app_data::AppDataHash;
+use crate::cancellation::SignedOrderCancellations;
+use crate::chain::Chain;
+use crate::error::{ApiError, Error, Result};
+use crate::order::{BuyTokenDestination, Order, OrderData, OrderKind, OrderUid, SellTokenSource};
+use crate::signature::Signature;
+use crate::signing_scheme::SigningScheme;
 
 /// Auction lifecycle stage returned by `GET /api/v1/orders/{uid}/status`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -550,10 +547,9 @@ fn ensure_trailing_slash(mut url: url::Url) -> url::Url {
 
 #[cfg(test)]
 mod tests {
-    use {
-        super::*,
-        crate::app_data::{EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON},
-    };
+    use crate::app_data::{EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON};
+
+    use super::*;
 
     /// Token addresses used by [`fixture_quote_request`]: USDC and DAI on
     /// Ethereum mainnet.

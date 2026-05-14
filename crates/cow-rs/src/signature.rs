@@ -10,16 +10,13 @@
 //!
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/model/src/signature.rs
 
-use {
-    crate::{
-        domain::{DomainSeparator, hashed_eip712_message, hashed_ethsign_message},
-        signing_scheme::{EcdsaSigningScheme, SigningScheme},
-    },
-    alloy_primitives::{Address, B256, Signature as PrimSignature},
-    alloy_signer::{SignerSync, k256::ecdsa::Error as K256Error},
-    serde::{Deserialize, Deserializer, Serialize, Serializer, de},
-    std::fmt::{self, Debug, Formatter},
-};
+use alloy_primitives::{Address, B256, Signature as PrimSignature};
+use alloy_signer::{SignerSync, k256::ecdsa::Error as K256Error};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use std::fmt::{self, Debug, Formatter};
+
+use crate::domain::{DomainSeparator, hashed_eip712_message, hashed_ethsign_message};
+use crate::signing_scheme::{EcdsaSigningScheme, SigningScheme};
 
 /// Errors specific to signature parsing or verification.
 #[derive(Debug, thiserror::Error)]
@@ -377,12 +374,11 @@ impl<'de> Deserialize<'de> for EcdsaSignature {
 
 #[cfg(test)]
 mod tests {
-    use {
-        super::*,
-        alloy_primitives::{U256, hex},
-        alloy_signer_local::PrivateKeySigner,
-        serde_json::json,
-    };
+    use alloy_primitives::{U256, hex};
+    use alloy_signer_local::PrivateKeySigner;
+    use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn from_bytes_rejects_wrong_lengths() {

@@ -4,11 +4,9 @@
 //!
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/bytes-hex/src/lib.rs
 
-use {
-    serde::{Deserialize, Deserializer, Serializer, de::Error},
-    serde_with::{DeserializeAs, SerializeAs},
-    std::borrow::Cow,
-};
+use serde::{Deserialize, Deserializer, Serializer, de::Error};
+use serde_with::{DeserializeAs, SerializeAs};
+use std::borrow::Cow;
 
 /// Serialise a byte slice as a `0x`-prefixed lowercase hex string.
 pub fn serialize<S, T>(bytes: T, serializer: S) -> Result<S::Ok, S::Error>

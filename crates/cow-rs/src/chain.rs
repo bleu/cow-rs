@@ -4,10 +4,9 @@
 //! Each variant of [`Chain`] records both the canonical chain id and the
 //! URL slug used by that orderbook deployment.
 
-use {
-    serde::{Deserialize, Deserializer, de},
-    std::{fmt, str::FromStr},
-};
+use serde::{Deserialize, Deserializer, de};
+use std::fmt;
+use std::str::FromStr;
 
 /// A chain supported by the CoW Protocol orderbook.
 ///
@@ -150,7 +149,9 @@ impl<'de> Deserialize<'de> for Chain {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, std::collections::HashSet};
+    use std::collections::HashSet;
+
+    use super::*;
 
     /// Every chain currently supported by the CoW Protocol orderbook.
     const ALL: &[Chain] = &[
