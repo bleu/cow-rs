@@ -88,6 +88,7 @@ pub mod order;
 pub mod order_book;
 pub mod signature;
 pub mod signing_scheme;
+pub mod subgraph;
 
 pub use crate::{
     app_data::{
@@ -115,4 +116,5 @@ pub use crate::{
     },
     signature::{EcdsaSignature, Recovered, Signature, SignatureError},
     signing_scheme::{EcdsaSigningScheme, SigningScheme},
+    subgraph::{DailyTotal, GraphQlError, HourlyTotal, SubgraphClient, SubgraphError, Totals},
 };

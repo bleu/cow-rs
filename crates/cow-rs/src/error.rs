@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use std::fmt;
 
-use crate::chain::UnsupportedChain;
+use crate::{chain::UnsupportedChain, subgraph::SubgraphError};
 
 /// Crate-wide `Result` alias.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -48,6 +48,11 @@ pub enum Error {
         /// Raw body verbatim.
         body: String,
     },
+
+    /// The CoW Protocol subgraph returned GraphQL errors or an
+    /// unrecognised envelope.
+    #[error(transparent)]
+    Subgraph(#[from] SubgraphError),
 }
 
 /// Structured error envelope returned by the CoW orderbook for 4xx / 5xx
