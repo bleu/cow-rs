@@ -31,7 +31,18 @@
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::error::{Error, Result};
+use crate::{
+    chain::Chain,
+    error::{Error, Result},
+};
+
+/// Returned by [`SubgraphClient::for_chain_studio`] when the chain has no
+/// published Graph Studio deployment.
+#[derive(Clone, Copy, Debug, thiserror::Error, Eq, PartialEq)]
+#[error(
+    "chain {0:?} has no published Graph Studio subgraph; pass a gateway URL via SubgraphClient::with_bearer_token"
+)]
+pub struct ChainSubgraphUnavailable(pub Chain);
 
 /// Errors specific to subgraph queries.
 #[derive(Debug, thiserror::Error)]
@@ -191,6 +202,21 @@ impl SubgraphClient {
             client: reqwest::Client::new(),
             bearer: Some(token.into()),
         }
+    }
+
+    /// Build a client targeting The Graph Studio URL published for
+    /// `chain` (see [`Chain::subgraph_studio_url`]).
+    ///
+    /// Studio is the developer endpoint and is rate-limited; production
+    /// callers should use [`SubgraphClient::with_bearer_token`] against
+    /// the gateway URL instead.
+    pub fn for_chain_studio(chain: Chain) -> std::result::Result<Self, ChainSubgraphUnavailable> {
+        let url = chain
+            .subgraph_studio_url()
+            .ok_or(ChainSubgraphUnavailable(chain))?;
+        Ok(Self::new(
+            url::Url::parse(url).expect("hard-coded studio URL"),
+        ))
     }
 
     /// The subgraph URL the client points at.
@@ -407,5 +433,35 @@ mod tests {
         let url = url::Url::parse("https://example.test/").unwrap();
         let client = SubgraphClient::with_bearer_token(url, "tok_abc");
         assert_eq!(client.bearer.as_deref(), Some("tok_abc"));
+    }
+
+    #[test]
+    fn for_chain_studio_resolves_five_supported_chains() {
+        for chain in [
+            Chain::Mainnet,
+            Chain::Gnosis,
+            Chain::ArbitrumOne,
+            Chain::Base,
+            Chain::Sepolia,
+        ] {
+            let client = SubgraphClient::for_chain_studio(chain).unwrap();
+            assert_eq!(client.url().scheme(), "https");
+            assert_eq!(client.url().host_str(), Some("api.studio.thegraph.com"));
+        }
+    }
+
+    #[test]
+    fn for_chain_studio_rejects_chains_without_studio_deployment() {
+        for chain in [
+            Chain::Bnb,
+            Chain::Polygon,
+            Chain::Plasma,
+            Chain::Avalanche,
+            Chain::Ink,
+            Chain::Linea,
+        ] {
+            let err = SubgraphClient::for_chain_studio(chain).unwrap_err();
+            assert_eq!(err, ChainSubgraphUnavailable(chain));
+        }
     }
 }

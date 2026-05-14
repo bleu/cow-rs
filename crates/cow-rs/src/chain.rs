@@ -70,6 +70,40 @@ impl Chain {
         url::Url::parse(&format!("https://api.cow.fi/{}", self.orderbook_slug()))
             .expect("hard-coded orderbook URL")
     }
+
+    /// CoW Protocol subgraph URL on The Graph Studio, mirroring
+    /// `cowdao_cowpy.subgraph.deployments.NETWORK_SUBGRAPH_IDS_MAP`.
+    ///
+    /// Returns `None` for chains that do not have a published studio
+    /// deployment. Studio endpoints are best-effort: they suit
+    /// development and indexer-status pings, but the production path is
+    /// `gateway.thegraph.com` with an API key, which the caller wires
+    /// directly via [`crate::SubgraphClient::with_bearer_token`].
+    pub const fn subgraph_studio_url(self) -> Option<&'static str> {
+        match self {
+            Self::Mainnet => Some(
+                "https://api.studio.thegraph.com/query/49707/cow-subgraph-mainnet/version/latest",
+            ),
+            Self::Gnosis => Some(
+                "https://api.studio.thegraph.com/query/49707/cow-subgraph-gnosis/version/latest",
+            ),
+            Self::ArbitrumOne => {
+                Some("https://api.studio.thegraph.com/query/49707/cow-subgraph-arb/version/latest")
+            }
+            Self::Base => {
+                Some("https://api.studio.thegraph.com/query/49707/cow-subgraph-base/version/latest")
+            }
+            Self::Sepolia => Some(
+                "https://api.studio.thegraph.com/query/49707/cow-subgraph-sepolia/version/latest",
+            ),
+            Self::Bnb
+            | Self::Polygon
+            | Self::Plasma
+            | Self::Avalanche
+            | Self::Ink
+            | Self::Linea => None,
+        }
+    }
 }
 
 impl TryFrom<u64> for Chain {

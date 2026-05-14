@@ -11,9 +11,13 @@
 //!
 //! ## Surface
 //!
-//! - [`GPv2Settlement`]: the `setPreSignature` and `setPreSignatures` entry
-//!   points used to authorise pre-signed orders on chain, plus the canonical
-//!   `GPv2Order.Data` struct.
+//! - [`GPv2Settlement`]: the `setPreSignature` / `setPreSignatures` entry
+//!   points used to authorise pre-signed orders, the `settle` entry point
+//!   solvers call to clear a batch, the typed `GPv2Order.Data` and
+//!   `GPv2Trade.Data` structs, and the on-chain events the contract emits
+//!   (`Trade`, `Interaction`, `Settlement`, `OrderInvalidated`,
+//!   `PreSignature`). The events let off-chain indexers and MEV tooling
+//!   parse settlement transactions without re-deriving the topic hashes.
 //! - [`ERC20`]: the subset of the ERC-20 ABI integrators reach for when
 //!   approving the vault relayer, checking balances or decimals, and pushing
 //!   simple transfers.
