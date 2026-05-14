@@ -56,6 +56,7 @@ pub mod cancellation;
 pub mod chain;
 pub mod domain;
 pub mod error;
+pub mod eth_flow;
 pub mod order;
 pub mod order_book;
 pub mod signature;
@@ -67,6 +68,7 @@ pub use crate::{
     chain::{Chain, UnsupportedChain},
     domain::{DomainSeparator, hashed_eip712_message, hashed_ethsign_message},
     error::{ApiError, Error, Result},
+    eth_flow::{ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowOrder},
     order::{
         BUY_ETH_ADDRESS, BuyTokenDestination, Order, OrderClass, OrderData, OrderKind, OrderStatus,
         OrderUid, SellTokenSource,
