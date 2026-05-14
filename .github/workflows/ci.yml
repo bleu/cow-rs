@@ -94,7 +94,10 @@ jobs:
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
         with:
           key: wasm-size
-      - run: cargo install --locked wasm-pack
+      # Pinned: bump deliberately. An implicit `latest` resolution lets
+      # a future hostile `wasm-pack` release (or one of its build deps)
+      # run arbitrary code on every CI job.
+      - run: cargo install --locked --version 0.14.0 wasm-pack
       - name: Build cow-sdk-wasm release (web target)
         run: |
           cd crates/cow-sdk-wasm
@@ -125,7 +128,10 @@ jobs:
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
         with:
           key: wasm-test
-      - run: cargo install --locked wasm-pack
+      # Pinned: bump deliberately. An implicit `latest` resolution lets
+      # a future hostile `wasm-pack` release (or one of its build deps)
+      # run arbitrary code on every CI job.
+      - run: cargo install --locked --version 0.14.0 wasm-pack
       - name: Headless browser test
         # Firefox is preinstalled on ubuntu-latest; wasm-pack installs
         # geckodriver on first run.
@@ -148,7 +154,10 @@ jobs:
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
         with:
           key: wasm-test-signing
-      - run: cargo install --locked wasm-pack
+      # Pinned: bump deliberately. An implicit `latest` resolution lets
+      # a future hostile `wasm-pack` release (or one of its build deps)
+      # run arbitrary code on every CI job.
+      - run: cargo install --locked --version 0.14.0 wasm-pack
       - name: Headless browser test (in_shim_signing)
         # `cd` into the crate so wasm-pack does not need a positional
         # PATH arg. Passing both `--features X` and `crates/cow-sdk-wasm`
@@ -182,7 +191,8 @@ jobs:
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
         with:
           key: deny
-      - run: cargo install --locked cargo-deny
+      # Pinned: bump deliberately. See the wasm-pack install above.
+      - run: cargo install --locked --version 0.19.6 cargo-deny
       - run: cargo deny check
 
   semver-checks:

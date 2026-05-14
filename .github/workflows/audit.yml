@@ -37,7 +37,10 @@ jobs:
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
         with:
           key: audit
-      - run: cargo install --locked cargo-audit
+      # Pinned: bump deliberately so a future hostile `cargo-audit`
+      # release (or one of its build deps) cannot run arbitrary code
+      # on every scheduled / push run.
+      - run: cargo install --locked --version 0.22.1 cargo-audit
       # Ignored advisories are transitive deps from alloy with no upstream
       # fix yet; tracked in deny.toml as well. Drop once alloy migrates.
       #   RUSTSEC-2024-0388: derivative unmaintained

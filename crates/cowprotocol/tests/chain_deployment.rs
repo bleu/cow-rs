@@ -49,6 +49,33 @@ const CHAIN_ENV: &[(Chain, &str)] = &[
     (Chain::Sepolia, "COW_RPC_SEPOLIA"),
 ];
 
+/// Stringify a `reqwest::Error` without echoing the request URL. The
+/// authenticated RPC endpoints under test embed provider API keys in
+/// their path or query; `reqwest::Error`'s default `Display` includes
+/// `url()` verbatim, which GitHub's secret masker only redacts on a
+/// best-effort basis for exact-substring matches.
+fn redact_reqwest(e: reqwest::Error) -> String {
+    let kind = if e.is_timeout() {
+        "timeout"
+    } else if e.is_connect() {
+        "connect"
+    } else if e.is_decode() {
+        "decode"
+    } else if e.is_status() {
+        "status"
+    } else if e.is_body() {
+        "body"
+    } else if e.is_request() {
+        "request"
+    } else {
+        "other"
+    };
+    match e.status() {
+        Some(s) => format!("{kind} (status {s})"),
+        None => kind.to_string(),
+    }
+}
+
 async fn eth_get_code(rpc: &str, address: Address) -> Result<Vec<u8>, String> {
     let body = json!({
         "jsonrpc": "2.0",
@@ -65,10 +92,13 @@ async fn eth_get_code(rpc: &str, address: Address) -> Result<Vec<u8>, String> {
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("rpc send: {e}"))?
+        .map_err(|e| format!("rpc send: {}", redact_reqwest(e)))?
         .error_for_status()
-        .map_err(|e| format!("rpc http: {e}"))?;
-    let json: serde_json::Value = resp.json().await.map_err(|e| format!("rpc body: {e}"))?;
+        .map_err(|e| format!("rpc http: {}", redact_reqwest(e)))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("rpc body: {}", redact_reqwest(e)))?;
     if let Some(err) = json.get("error") {
         return Err(format!("rpc error: {err}"));
     }
@@ -104,7 +134,7 @@ async fn settlement_and_vault_relayer_are_deployed_on_every_configured_chain() {
         ] {
             match eth_get_code(&rpc, addr).await {
                 Ok(code) if code.is_empty() => failures.push(format!(
-                    "{chain} {label} at {addr:#x}: no bytecode on {rpc}"
+                    "{chain} {label} at {addr:#x}: no bytecode"
                 )),
                 Ok(_) => {}
                 Err(e) => failures.push(format!("{chain} {label}: {e}")),
@@ -145,7 +175,7 @@ async fn eth_flow_singletons_are_deployed_on_every_configured_chain() {
         };
         match eth_get_code(&rpc, ETH_FLOW_PRODUCTION).await {
             Ok(code) if code.is_empty() => failures.push(format!(
-                "{chain} eth_flow_production at {ETH_FLOW_PRODUCTION:#x}: no bytecode on {rpc}"
+                "{chain} eth_flow_production at {ETH_FLOW_PRODUCTION:#x}: no bytecode"
             )),
             Ok(_) => {}
             Err(e) => failures.push(format!("{chain} eth_flow_production: {e}")),
