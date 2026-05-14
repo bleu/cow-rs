@@ -263,6 +263,20 @@ impl OrderKind {
     /// and the on-chain `bytes32` marker stored in `GPv2Order.Data.kind`.
     pub const SELL: [u8; 32] =
         hex!("f3b277728b3fee749481eb3e0b3b48980dbbab78658fc419025cb16eee346775");
+
+    /// Lower-case wire form (`"buy"` / `"sell"`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Buy => "buy",
+            Self::Sell => "sell",
+        }
+    }
+}
+
+impl Display for OrderKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Source from which `sellAmount` is transferred into the settlement
@@ -362,10 +376,7 @@ impl Default for OrderUid {
 
 impl Display for OrderUid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut bytes = [0u8; 2 + 56 * 2];
-        bytes[..2].copy_from_slice(b"0x");
-        const_hex::encode_to_slice(self.0.as_slice(), &mut bytes[2..]).unwrap();
-        f.write_str(std::str::from_utf8(&bytes).unwrap())
+        f.write_str(&const_hex::encode_prefixed(self.0))
     }
 }
 

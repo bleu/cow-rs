@@ -136,6 +136,15 @@ impl FromStr for Chain {
     }
 }
 
+impl fmt::Display for Chain {
+    /// Render as `<orderbook-slug>(<chain-id>)`, e.g. `mainnet(1)`. The
+    /// slug is the canonical orderbook identifier; the parenthesised
+    /// numeric id stays close at hand for logs and error contexts.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}({})", self.orderbook_slug(), self.id())
+    }
+}
+
 /// Returned when a chain id is not in [`Chain`].
 #[derive(Clone, Copy, Debug, thiserror::Error, Eq, PartialEq)]
 #[error("unsupported chain id {0}")]

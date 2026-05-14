@@ -336,10 +336,7 @@ impl Serialize for EcdsaSignature {
     where
         S: Serializer,
     {
-        let mut bytes = [0u8; 2 + 65 * 2];
-        bytes[..2].copy_from_slice(b"0x");
-        const_hex::encode_to_slice(self.to_bytes(), &mut bytes[2..]).unwrap();
-        serializer.serialize_str(std::str::from_utf8(&bytes).unwrap())
+        serializer.serialize_str(&const_hex::encode_prefixed(self.to_bytes()))
     }
 }
 

@@ -132,36 +132,46 @@ pub const CURRENT_BLOCK_TIMESTAMP_FACTORY: Address =
     address!("0x52eD56Da04309Aca4c3FECC595298d80C2f16BAc");
 
 impl Chain {
+    /// Whether the ComposableCoW contract suite (ComposableCoW,
+    /// ExtensibleFallbackHandler, CurrentBlockTimestampFactory) is
+    /// deployed on this chain.
+    ///
+    /// The three contracts share a single deployment manifest, so the
+    /// per-address helpers below all gate on this predicate.
+    pub const fn supports_composable_cow(self) -> bool {
+        matches!(
+            self,
+            Self::Mainnet | Self::Gnosis | Self::Sepolia | Self::ArbitrumOne
+        )
+    }
+
     /// `ComposableCoW` deployment address on this chain, or `None` when
     /// the contract is not deployed there.
     pub const fn composable_cow_address(self) -> Option<Address> {
-        match self {
-            Self::Mainnet | Self::Gnosis | Self::Sepolia | Self::ArbitrumOne => {
-                Some(COMPOSABLE_COW)
-            }
-            _ => None,
+        if self.supports_composable_cow() {
+            Some(COMPOSABLE_COW)
+        } else {
+            None
         }
     }
 
     /// `ExtensibleFallbackHandler` deployment address on this chain, or
     /// `None` when the contract is not deployed there.
     pub const fn extensible_fallback_handler_address(self) -> Option<Address> {
-        match self {
-            Self::Mainnet | Self::Gnosis | Self::Sepolia | Self::ArbitrumOne => {
-                Some(EXTENSIBLE_FALLBACK_HANDLER)
-            }
-            _ => None,
+        if self.supports_composable_cow() {
+            Some(EXTENSIBLE_FALLBACK_HANDLER)
+        } else {
+            None
         }
     }
 
     /// `CurrentBlockTimestampFactory` deployment address on this chain,
     /// or `None` when the contract is not deployed there.
     pub const fn current_block_timestamp_factory_address(self) -> Option<Address> {
-        match self {
-            Self::Mainnet | Self::Gnosis | Self::Sepolia | Self::ArbitrumOne => {
-                Some(CURRENT_BLOCK_TIMESTAMP_FACTORY)
-            }
-            _ => None,
+        if self.supports_composable_cow() {
+            Some(CURRENT_BLOCK_TIMESTAMP_FACTORY)
+        } else {
+            None
         }
     }
 }

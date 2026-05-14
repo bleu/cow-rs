@@ -101,6 +101,29 @@ pub struct OrderCancellations {
     pub order_uids: Vec<OrderUid>,
 }
 
+impl From<Vec<OrderUid>> for OrderCancellations {
+    fn from(order_uids: Vec<OrderUid>) -> Self {
+        Self { order_uids }
+    }
+}
+
+impl FromIterator<OrderUid> for OrderCancellations {
+    fn from_iter<I: IntoIterator<Item = OrderUid>>(iter: I) -> Self {
+        Self {
+            order_uids: iter.into_iter().collect(),
+        }
+    }
+}
+
+impl IntoIterator for OrderCancellations {
+    type Item = OrderUid;
+    type IntoIter = std::vec::IntoIter<OrderUid>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.order_uids.into_iter()
+    }
+}
+
 impl OrderCancellations {
     /// `keccak256("OrderCancellations(bytes[] orderUid)")`: note the
     /// singular `orderUid` despite the array, matching the canonical

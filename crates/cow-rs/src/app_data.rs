@@ -41,6 +41,16 @@ impl fmt::Debug for AppDataHash {
     }
 }
 
+impl fmt::Display for AppDataHash {
+    /// `0x`-prefixed lower-case hex, matching the wire form.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut bytes = [0u8; 2 + 64];
+        bytes[..2].copy_from_slice(b"0x");
+        const_hex::encode_to_slice(self.0, &mut bytes[2..]).unwrap();
+        f.write_str(std::str::from_utf8(&bytes).unwrap())
+    }
+}
+
 impl From<[u8; 32]> for AppDataHash {
     fn from(bytes: [u8; 32]) -> Self {
         Self(bytes)

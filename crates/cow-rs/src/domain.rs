@@ -49,9 +49,7 @@ impl FromStr for DomainSeparator {
 
 impl fmt::Debug for DomainSeparator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut hex = [0u8; 64];
-        const_hex::encode_to_slice(self.0, &mut hex).unwrap();
-        f.write_str(std::str::from_utf8(&hex).unwrap())
+        f.write_str(&const_hex::encode(self.0))
     }
 }
 
