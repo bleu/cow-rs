@@ -569,91 +569,53 @@ impl AppDataDoc {
         }
     }
 
-    /// Builder: attach a referrer address.
+    /// Attach a referrer address.
     pub fn with_referrer(mut self, address: Address) -> Self {
-        self.metadata.referrer = Some(AppDataReferrer {
-            address,
-            version: None,
-        });
+        self.metadata.referrer = Some(AppDataReferrer { address, version: None });
         self
     }
 
-    /// Builder: attach a *volume* partner fee (`bps` of the swap value
-    /// to `recipient`). Shortcut for [`AppDataDoc::with_partner_fee_policy`]
-    /// with a [`FeePolicy::Volume`].
-    ///
-    /// Returns [`AppDataError::FeeOutOfRange`] when `bps` exceeds
-    /// [`PARTNER_FEE_BPS_MAX`] (`10_000`). The settlement contract caps
-    /// partner fees at 100 %, so an over-cap value would be either
-    /// silently clamped or rejected post-settle; the builder fails
-    /// closed so an attacker-controlled value cannot be folded into the
-    /// signed app-data digest unchecked.
-    pub fn with_partner_fee(
-        mut self,
-        bps: u32,
-        recipient: Address,
-    ) -> Result<Self, AppDataError> {
+    /// Attach a *volume* partner fee (`bps` of the swap value to
+    /// `recipient`). Fails closed via [`AppDataError::FeeOutOfRange`]
+    /// when `bps > PARTNER_FEE_BPS_MAX` (`10_000`), so an
+    /// attacker-controlled value cannot be folded into the signed
+    /// app-data digest unchecked.
+    pub fn with_partner_fee(mut self, bps: u32, recipient: Address) -> Result<Self, AppDataError> {
         let policy = FeePolicy::Volume { bps: bps as u64 };
         validate_fee_policy(&policy)?;
         self.metadata.partner_fee = Some(AppDataPartnerFee { policy, recipient });
         Ok(self)
     }
 
-    /// Builder: attach a partner fee with an explicit [`FeePolicy`].
-    ///
-    /// Returns [`AppDataError::FeeOutOfRange`] when any `bps` or
-    /// `maxVolumeBps` field of `policy` exceeds [`PARTNER_FEE_BPS_MAX`]
-    /// (`10_000`). See [`AppDataDoc::with_partner_fee`] for the
-    /// rationale.
-    pub fn with_partner_fee_policy(
-        mut self,
-        policy: FeePolicy,
-        recipient: Address,
-    ) -> Result<Self, AppDataError> {
+    /// Attach a partner fee with an explicit [`FeePolicy`]. Fails
+    /// closed via [`AppDataError::FeeOutOfRange`] on any over-cap
+    /// `bps` / `maxVolumeBps`; see [`Self::with_partner_fee`].
+    pub fn with_partner_fee_policy(mut self, policy: FeePolicy, recipient: Address) -> Result<Self, AppDataError> {
         validate_fee_policy(&policy)?;
         self.metadata.partner_fee = Some(AppDataPartnerFee { policy, recipient });
         Ok(self)
     }
 
-    /// Builder: attach a typed [`AppDataFlashloan`].
-    pub const fn with_flashloan(mut self, flashloan: AppDataFlashloan) -> Self {
-        self.metadata.flashloan = Some(flashloan);
-        self
-    }
+    /// Attach a typed [`AppDataFlashloan`].
+    pub const fn with_flashloan(mut self, flashloan: AppDataFlashloan) -> Self { self.metadata.flashloan = Some(flashloan); self }
 
-    /// Builder: mark this order as replacing an earlier one.
-    pub const fn with_replaced_order(mut self, uid: OrderUid) -> Self {
-        self.metadata.replaced_order = Some(AppDataReplacedOrder { uid });
-        self
-    }
+    /// Mark this order as replacing an earlier one.
+    pub const fn with_replaced_order(mut self, uid: OrderUid) -> Self { self.metadata.replaced_order = Some(AppDataReplacedOrder { uid }); self }
 
-    /// Builder: append a wrapper-contract call.
-    pub fn with_wrapper(mut self, wrapper: AppDataWrapperCall) -> Self {
-        self.metadata.wrappers.push(wrapper);
-        self
-    }
+    /// Append a wrapper-contract call.
+    pub fn with_wrapper(mut self, wrapper: AppDataWrapperCall) -> Self { self.metadata.wrappers.push(wrapper); self }
 
-    /// Builder: tag the order with an order class.
-    pub const fn with_order_class(mut self, order_class: OrderClass) -> Self {
-        self.metadata.order_class = Some(AppDataOrderClass { order_class });
-        self
-    }
+    /// Tag the order with an order class.
+    pub const fn with_order_class(mut self, order_class: OrderClass) -> Self { self.metadata.order_class = Some(AppDataOrderClass { order_class }); self }
 
-    /// Builder: attach a slippage hint to the quote sub-document.
+    /// Attach a slippage hint to the quote sub-document.
     pub fn with_slippage_bips(mut self, slippage_bips: u32) -> Self {
-        let quote = self
-            .metadata
-            .quote
-            .get_or_insert_with(AppDataQuote::default);
-        quote.slippage_bips = Some(slippage_bips);
+        self.metadata.quote.get_or_insert_with(AppDataQuote::default).slippage_bips = Some(slippage_bips);
         self
     }
 
-    /// Builder: mark the environment (`"prod"`, `"staging"`, …).
-    pub fn with_environment(mut self, environment: impl Into<String>) -> Self {
-        self.environment = Some(environment.into());
-        self
-    }
+    /// Mark the environment (`"prod"`, `"staging"`, …).
+    pub fn with_environment(mut self, environment: impl Into<String>) -> Self { self.environment = Some(environment.into()); self }
 
     /// Serialise the document to deterministic JSON.
     ///

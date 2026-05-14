@@ -431,108 +431,60 @@ impl QuoteRequest {
         }
     }
 
-    const fn with_sell_amount_before_fee(mut self, amount: U256) -> Self {
-        self.sell_amount_before_fee = Some(amount);
-        self
-    }
-
-    const fn with_sell_amount_after_fee(mut self, amount: U256) -> Self {
-        self.sell_amount_after_fee = Some(amount);
-        self
-    }
-
-    const fn with_buy_amount_after_fee(mut self, amount: U256) -> Self {
-        self.buy_amount_after_fee = Some(amount);
-        self
-    }
+    const fn with_sell_amount_before_fee(mut self, a: U256) -> Self { self.sell_amount_before_fee = Some(a); self }
+    const fn with_sell_amount_after_fee(mut self, a: U256) -> Self { self.sell_amount_after_fee = Some(a); self }
+    const fn with_buy_amount_after_fee(mut self, a: U256) -> Self { self.buy_amount_after_fee = Some(a); self }
 
     /// Set a custom recipient for the buy token.
-    pub const fn with_receiver(mut self, receiver: Address) -> Self {
-        self.receiver = Some(receiver);
-        self
-    }
+    pub const fn with_receiver(mut self, receiver: Address) -> Self { self.receiver = Some(receiver); self }
 
-    /// Set the order's app-data digest (the common case). Wraps the
-    /// hash into [`QuoteAppData::Hash`].
-    ///
-    /// Not `const fn` because [`QuoteAppData::Full`] holds a `String`,
-    /// which the compiler cannot drop at const-evaluation time even
-    /// though this constructor only ever stores the `Hash` variant.
+    /// Set the order's app-data digest, wrapping it as
+    /// [`QuoteAppData::Hash`]. Not `const fn` because the sibling
+    /// `Full` variant holds a `String`.
     pub fn with_app_data(mut self, app_data: AppDataHash) -> Self {
         self.app_data = Some(QuoteAppData::Hash(app_data));
         self
     }
 
-    /// Bind the quote to the canonical JSON document instead of just
-    /// the digest. The orderbook computes and pins the hash itself.
+    /// Hand the orderbook the canonical JSON document; it computes and
+    /// pins the digest.
     pub fn with_app_data_full(mut self, full_app_data: impl Into<String>) -> Self {
         self.app_data = Some(QuoteAppData::Full(full_app_data.into()));
         self
     }
 
-    /// Pin the order's expiry timestamp.
-    pub const fn with_valid_to(mut self, valid_to: u32) -> Self {
-        self.valid_to = Some(valid_to);
-        self
-    }
+    /// Pin the order's absolute expiry timestamp.
+    pub const fn with_valid_to(mut self, valid_to: u32) -> Self { self.valid_to = Some(valid_to); self }
 
-    /// Pin the order's expiry as a relative offset (seconds from the
-    /// orderbook's clock). Mutually exclusive with
-    /// [`QuoteRequest::with_valid_to`]; the orderbook applies a
-    /// 30-minute default when both are absent.
-    pub const fn with_valid_for(mut self, valid_for: u32) -> Self {
-        self.valid_for = Some(valid_for);
-        self
-    }
+    /// Pin the expiry as seconds from the orderbook's clock. Mutually
+    /// exclusive with [`Self::with_valid_to`]; 30-min default when
+    /// both are absent.
+    pub const fn with_valid_for(mut self, valid_for: u32) -> Self { self.valid_for = Some(valid_for); self }
 
-    /// Pin the gas budget for the on-chain `isValidSignature` callback
-    /// when the resulting order will use [`SigningScheme::Eip1271`].
-    pub const fn with_verification_gas_limit(mut self, gas: u64) -> Self {
-        self.verification_gas_limit = Some(gas);
-        self
-    }
+    /// Gas budget for the on-chain `isValidSignature` callback on
+    /// [`SigningScheme::Eip1271`] quotes.
+    pub const fn with_verification_gas_limit(mut self, gas: u64) -> Self { self.verification_gas_limit = Some(gas); self }
 
-    /// Mark the resulting order as on-chain-placed (default: false).
-    /// Relevant for [`SigningScheme::Eip1271`] and
-    /// [`SigningScheme::PreSign`] flows.
-    pub const fn with_onchain_order(mut self, onchain: bool) -> Self {
-        self.onchain_order = Some(onchain);
-        self
-    }
+    /// Mark the resulting order as on-chain-placed (EIP-1271 / PreSign
+    /// flows). Lets the orderbook reserve the right simulation budget.
+    pub const fn with_onchain_order(mut self, onchain: bool) -> Self { self.onchain_order = Some(onchain); self }
 
-    /// Ask the orderbook for a specific price-quality regime. Omitted by
-    /// default, in which case the orderbook applies [`PriceQuality::Optimal`].
-    pub const fn with_price_quality(mut self, quality: PriceQuality) -> Self {
-        self.price_quality = Some(quality);
-        self
-    }
+    /// Pin the price-quality regime; defaults to
+    /// [`PriceQuality::Optimal`] when absent.
+    pub const fn with_price_quality(mut self, quality: PriceQuality) -> Self { self.price_quality = Some(quality); self }
 
-    /// Pin the signing scheme the resulting order will use. Lets the
-    /// orderbook reject a quote / order combo with an incompatible scheme
-    /// before signing.
-    pub const fn with_signing_scheme(mut self, scheme: SigningScheme) -> Self {
-        self.signing_scheme = Some(scheme);
-        self
-    }
+    /// Pin the signing scheme so the orderbook rejects incompatible
+    /// quote / order combinations before signing.
+    pub const fn with_signing_scheme(mut self, scheme: SigningScheme) -> Self { self.signing_scheme = Some(scheme); self }
 
-    /// Mark the resulting order as partially fillable (default: false for
-    /// market orders).
-    pub const fn with_partially_fillable(mut self, partially_fillable: bool) -> Self {
-        self.partially_fillable = Some(partially_fillable);
-        self
-    }
+    /// Mark the resulting order as partially fillable.
+    pub const fn with_partially_fillable(mut self, partially_fillable: bool) -> Self { self.partially_fillable = Some(partially_fillable); self }
 
-    /// Set the sell-side token-balance source.
-    pub const fn with_sell_token_balance(mut self, balance: SellTokenSource) -> Self {
-        self.sell_token_balance = Some(balance);
-        self
-    }
+    /// Source the sell-side token balance is drawn from.
+    pub const fn with_sell_token_balance(mut self, balance: SellTokenSource) -> Self { self.sell_token_balance = Some(balance); self }
 
-    /// Set the buy-side token-balance destination.
-    pub const fn with_buy_token_balance(mut self, balance: BuyTokenDestination) -> Self {
-        self.buy_token_balance = Some(balance);
-        self
-    }
+    /// Destination the buy-side token balance is paid to.
+    pub const fn with_buy_token_balance(mut self, balance: BuyTokenDestination) -> Self { self.buy_token_balance = Some(balance); self }
 }
 
 /// The order returned by the quote endpoint.

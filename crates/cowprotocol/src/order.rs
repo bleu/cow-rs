@@ -222,66 +222,37 @@ impl OrderBuilder {
         self
     }
 
-    /// Set the sell amount in atomic units.
-    pub const fn sell_amount(mut self, amount: U256) -> Self {
-        self.0.sell_amount = amount;
-        self
-    }
+    /// Sell amount in atomic units.
+    pub const fn sell_amount(mut self, amount: U256) -> Self { self.0.sell_amount = amount; self }
 
-    /// Set the buy amount in atomic units.
-    pub const fn buy_amount(mut self, amount: U256) -> Self {
-        self.0.buy_amount = amount;
-        self
-    }
+    /// Buy amount in atomic units.
+    pub const fn buy_amount(mut self, amount: U256) -> Self { self.0.buy_amount = amount; self }
 
-    /// Set the Unix-seconds expiry timestamp.
-    pub const fn valid_to(mut self, valid_to: u32) -> Self {
-        self.0.valid_to = valid_to;
-        self
-    }
+    /// Unix-seconds expiry timestamp.
+    pub const fn valid_to(mut self, valid_to: u32) -> Self { self.0.valid_to = valid_to; self }
 
-    /// Set the 32-byte app-data digest.
-    pub const fn app_data(mut self, hash: AppDataHash) -> Self {
-        self.0.app_data = hash;
-        self
-    }
+    /// 32-byte app-data digest.
+    pub const fn app_data(mut self, hash: AppDataHash) -> Self { self.0.app_data = hash; self }
 
-    /// Set the user-signed fee amount. At submission this must be `0`;
-    /// [`crate::OrderQuoteResponse::to_signed_order_data`] handles that
-    /// for callers who project from a quote.
-    pub const fn fee_amount(mut self, amount: U256) -> Self {
-        self.0.fee_amount = amount;
-        self
-    }
+    /// User-signed fee amount. Must be `0` at submission;
+    /// [`crate::OrderQuoteResponse::to_signed_order_data`] handles
+    /// that for callers projecting from a quote.
+    pub const fn fee_amount(mut self, amount: U256) -> Self { self.0.fee_amount = amount; self }
 
-    /// Set the order direction (buy or sell).
-    pub const fn kind(mut self, kind: OrderKind) -> Self {
-        self.0.kind = kind;
-        self
-    }
+    /// Order direction.
+    pub const fn kind(mut self, kind: OrderKind) -> Self { self.0.kind = kind; self }
 
     /// Whether the order may be filled in parts (default: `false`).
-    pub const fn partially_fillable(mut self, partially_fillable: bool) -> Self {
-        self.0.partially_fillable = partially_fillable;
-        self
-    }
+    pub const fn partially_fillable(mut self, partially_fillable: bool) -> Self { self.0.partially_fillable = partially_fillable; self }
 
-    /// Source from which the sell token is drawn.
-    pub const fn sell_token_balance(mut self, balance: SellTokenSource) -> Self {
-        self.0.sell_token_balance = balance;
-        self
-    }
+    /// Source for the sell-side token balance.
+    pub const fn sell_token_balance(mut self, balance: SellTokenSource) -> Self { self.0.sell_token_balance = balance; self }
 
-    /// Destination to which the buy token is paid.
-    pub const fn buy_token_balance(mut self, balance: BuyTokenDestination) -> Self {
-        self.0.buy_token_balance = balance;
-        self
-    }
+    /// Destination for the buy-side token balance.
+    pub const fn buy_token_balance(mut self, balance: BuyTokenDestination) -> Self { self.0.buy_token_balance = balance; self }
 
     /// Finalise the builder.
-    pub const fn build(self) -> OrderData {
-        self.0
-    }
+    pub const fn build(self) -> OrderData { self.0 }
 
     /// Convenience: [`OrderData::sign`] on the built payload.
     pub fn sign<S: alloy_signer::SignerSync>(
