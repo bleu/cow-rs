@@ -336,7 +336,45 @@ impl<'de> Deserialize<'de> for HexBytes {
     where
         D: Deserializer<'de>,
     {
-        crate::bytes_hex::deserialize(deserializer).map(Self)
+        /// Largest hex string this deserialiser will accept: the `0x`
+        /// prefix plus two characters per byte of an EIP-1271 payload
+        /// capped at [`EIP1271_MAX_LEN`]. The check runs before
+        /// `const_hex::decode` so a hostile orderbook cannot force a
+        /// multi-megabyte `Vec<u8>` allocation in advance of the
+        /// post-decode length check inside [`Signature::from_bytes`].
+        const MAX_HEX_LEN: usize = 2 + EIP1271_MAX_LEN * 2;
+
+        struct Visitor;
+        impl de::Visitor<'_> for Visitor {
+            type Value = HexBytes;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(
+                    f,
+                    "an 0x-prefixed hex string of at most {MAX_HEX_LEN} characters"
+                )
+            }
+
+            fn visit_str<E>(self, s: &str) -> Result<HexBytes, E>
+            where
+                E: de::Error,
+            {
+                if s.len() > MAX_HEX_LEN {
+                    return Err(de::Error::custom(format!(
+                        "signature hex exceeds EIP-1271 cap: {} > {MAX_HEX_LEN}",
+                        s.len()
+                    )));
+                }
+                let hex_str = s
+                    .strip_prefix("0x")
+                    .ok_or_else(|| de::Error::custom("missing '0x' prefix"))?;
+                const_hex::decode(hex_str)
+                    .map(HexBytes)
+                    .map_err(de::Error::custom)
+            }
+        }
+
+        deserializer.deserialize_str(Visitor)
     }
 }
 
@@ -437,6 +475,38 @@ mod tests {
         ));
         let at_limit = vec![0u8; EIP1271_MAX_LEN];
         assert!(Signature::from_bytes(SigningScheme::Eip1271, &at_limit).is_ok());
+    }
+
+    #[test]
+    fn deserialize_rejects_oversize_hex_before_decoding() {
+        // One byte over the EIP-1271 cap, expressed as hex. The deserialiser
+        // must refuse this before `const_hex::decode` allocates the decoded
+        // `Vec<u8>`; otherwise a hostile orderbook could force a multi-MB
+        // allocation per response. `EIP1271_MAX_LEN + 1` bytes encodes to
+        // `2 + (EIP1271_MAX_LEN + 1) * 2` hex characters.
+        let oversize_hex = format!("0x{}", "00".repeat(EIP1271_MAX_LEN + 1));
+        let body = json!({
+            "signingScheme": "eip1271",
+            "signature": oversize_hex,
+        });
+        let err = serde_json::from_value::<Signature>(body)
+            .expect_err("oversize signature hex must be rejected on deserialise");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("EIP-1271 cap"),
+            "error should reference the pre-decode cap, got: {msg}"
+        );
+
+        // The same payload encoded one byte under the cap still decodes
+        // (decoding produces an all-zero EIP-1271 blob, valid per
+        // `from_bytes`'s length-only check).
+        let at_limit_hex = format!("0x{}", "00".repeat(EIP1271_MAX_LEN));
+        let body = json!({
+            "signingScheme": "eip1271",
+            "signature": at_limit_hex,
+        });
+        let sig: Signature = serde_json::from_value(body).unwrap();
+        assert!(matches!(sig, Signature::Eip1271(ref b) if b.len() == EIP1271_MAX_LEN));
     }
 
     #[test]
