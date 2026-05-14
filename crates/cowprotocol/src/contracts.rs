@@ -11,7 +11,7 @@
 //!
 //! ## What this module exposes
 //!
-//! - [`GPv2Settlement`]: the `setPreSignature` / `setPreSignatures` entry
+//! - [`GPv2Settlement`]: the `setPreSignature` entry
 //!   points used to authorise pre-signed orders, the `settle` entry point
 //!   solvers call to clear a batch, the typed `GPv2Order.Data` and
 //!   `GPv2Trade.Data` structs, and the on-chain events the contract emits
@@ -227,11 +227,6 @@ sol! {
         /// [`crate::SigningScheme::PreSign`]; passing false revokes a
         /// previously set pre-signature.
         function setPreSignature(bytes orderUid, bool signed) external;
-
-        /// Batched form of [`setPreSignature`], toggling many UIDs in one
-        /// transaction. The `signed` flag applies uniformly to every UID in
-        /// `orderUids`.
-        function setPreSignatures(bytes[] orderUids, bool signed) external;
     }
 
     /// The subset of the ERC-20 ABI integrators most often need.
@@ -380,14 +375,6 @@ mod tests {
         let expected = &keccak256("deposit()")[..4];
         assert_eq!(&WETH9::depositCall::SELECTOR, expected);
         assert_eq!(WETH9::depositCall::SELECTOR, [0xd0, 0xe3, 0x0d, 0xb0]);
-    }
-
-    /// `setPreSignatures(bytes[],bool)` should be exposed alongside the
-    /// singular form and compute the matching keccak selector.
-    #[test]
-    fn set_pre_signatures_selector_matches_keccak() {
-        let expected = &keccak256("setPreSignatures(bytes[],bool)")[..4];
-        assert_eq!(&GPv2Settlement::setPreSignaturesCall::SELECTOR, expected);
     }
 
     /// `settle(address[],uint256[],GPv2TradeData[],GPv2InteractionData[][3])`
