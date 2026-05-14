@@ -24,7 +24,9 @@ pub(crate) async fn post_json<TReq: Serialize + ?Sized, TResp: DeserializeOwned>
 ) -> Result<TResp, JsValue> {
     let body = serde_json::to_string(body)
         .map_err(|err| JsValue::from_str(&format!("serialise failed: {err}")))?;
-    fetch_text("POST", url, Some(&body)).await.and_then(parse_json)
+    fetch_text("POST", url, Some(&body))
+        .await
+        .and_then(parse_json)
 }
 
 /// `POST <url>` with a JSON body, response decoded as a plain string.
@@ -55,7 +57,11 @@ pub(crate) async fn get_text(url: &str) -> Result<String, JsValue> {
 
 async fn fetch_text(method: &str, url: &str, body: Option<&str>) -> Result<String, JsValue> {
     let init = Object::new();
-    Reflect::set(&init, &JsValue::from_str("method"), &JsValue::from_str(method))?;
+    Reflect::set(
+        &init,
+        &JsValue::from_str("method"),
+        &JsValue::from_str(method),
+    )?;
     if let Some(body) = body {
         let headers = Object::new();
         Reflect::set(

@@ -196,69 +196,48 @@ console.log(`https://explorer.cow.fi/orders/${uid}`);
 ```
 
 **External signing** (production, Safe / WalletConnect / browser
-wallets): the wasm crate never sees the private key. The caller's
-wallet signs the EIP-712 typed data with viem / ethers / Safe, then
-hands the `(r, s, v)` bag back. Works against the default
-(no-feature) build.
+wallets): the wasm crate never sees the private key. The shim's
+`eip712_payload(orderData, chain)` returns a ready-to-use
+`{ domain, primaryType, types, message }` object — the exact shape
+both viem and ethers's `signTypedData` accept. Works against the
+default (no-feature) build.
 
 ```js
 import init, {
-  chain_info,
+  eip712_payload,
   get_quote_simple,
   build_order_creation,
   post_order,
 } from '@cowdao-grants/cow-sdk-wasm';
-import { createWalletClient, custom, hexToBytes } from 'viem';
-import { mainnet } from 'viem/chains';
 
 await init();
-
-const wallet = createWalletClient({ chain: mainnet, transport: custom(window.ethereum) });
-const [account] = await wallet.getAddresses();
 
 const { response } = await get_quote_simple(
   'mainnet',
   '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
   '0x6B175474E89094C44Da98b954EedeAC495271d0F',
-  account,
+  ACCOUNT,
   '100000000',
 );
+const payload = eip712_payload(response.quote, 'mainnet');
+```
 
-// Wallet signs the canonical GPv2Order typed data. Define the domain
-// + types once (see https://docs.cow.fi/cow-protocol/reference/core/signing-schemes).
-const info = chain_info('mainnet');
-const signatureHex = await wallet.signTypedData({
-  account,
-  domain: {
-    name: 'Gnosis Protocol',
-    version: 'v2',
-    chainId: info.id,
-    verifyingContract: info.settlement,
-  },
-  types: {
-    Order: [
-      { name: 'sellToken',          type: 'address' },
-      { name: 'buyToken',           type: 'address' },
-      { name: 'receiver',           type: 'address' },
-      { name: 'sellAmount',         type: 'uint256' },
-      { name: 'buyAmount',          type: 'uint256' },
-      { name: 'validTo',            type: 'uint32'  },
-      { name: 'appData',            type: 'bytes32' },
-      { name: 'feeAmount',          type: 'uint256' },
-      { name: 'kind',               type: 'string'  },
-      { name: 'partiallyFillable',  type: 'bool'    },
-      { name: 'sellTokenBalance',   type: 'string'  },
-      { name: 'buyTokenBalance',    type: 'string'  },
-    ],
-  },
-  primaryType: 'Order',
-  // The orderbook serialises `receiver: null` as the zero address inside
-  // the EIP-712 struct hash; mirror that on the JS side.
-  message: { ...response.quote, receiver: response.quote.receiver ?? '0x0000000000000000000000000000000000000000' },
-});
+Hand `payload` to whichever wallet you have. Split the resulting
+65-byte signature into `(r, s, v)` and feed it back through
+`build_order_creation`.
 
-// Split the 65-byte signature into (r, s, v) for build_order_creation.
-const bytes = hexToBytes(signatureHex);
+```js
+// viem
+import { hexToBytes } from 'viem';
+const signatureHex = await walletClient.signTypedData({ account: ACCOUNT, ...payload });
+
+// ethers v6
+const signatureHex = await ethersSigner.signTypedData(
+  payload.domain, { Order: payload.types.Order }, payload.message,
+);
+
+// either path → (r, s, v)
+const bytes = hexToBytes(signatureHex); // or ethers.getBytes
 const sig = {
   signingScheme: 'eip712',
   r: '0x' + Buffer.from(bytes.slice(0, 32)).toString('hex'),
@@ -266,12 +245,21 @@ const sig = {
   v: bytes[64],
 };
 
-const creation = build_order_creation(response.quote, sig, account, '{}', response.id);
+const creation = build_order_creation(response.quote, sig, ACCOUNT, '{}', response.id);
 const uid = await post_order('mainnet', creation);
 ```
 
+**Conformance**. `eip712_payload` produces the digest
+`OrderData::hash_struct` computes server-side; the Rust test suite
+already locks that hash byte-for-byte against ethers's
+`TypedDataEncoder` on all eleven chains. The in-browser harness
+(`test-harness/index.html`, panel 3) re-asserts the equality at
+runtime across the shim, viem, and ethers. `@cowprotocol/cow-sdk`'s
+own typed-data path delegates to ethers's `TypedDataEncoder`, so
+parity with cow-sdk follows transitively.
+
 For Safe wallets, replace `signTypedData` with the Safe SDK's
-`signTransaction` flow and use [`build_order_creation_eip1271`] instead;
+`signMessage` flow and use `build_order_creation_eip1271` instead;
 the shim wraps the bytes into a `Signature::Eip1271` envelope.
 
 See [`crates/cow-sdk-wasm/README.md`](crates/cow-sdk-wasm/README.md)

@@ -175,7 +175,10 @@ pub fn eip712_payload(order_data: JsValue, chain: &str) -> Result<JsValue, JsVal
     let mut message = serde_json::to_value(order)
         .map_err(|err| JsValue::from_str(&format!("serialise order failed: {err}")))?;
     // null receiver gets hashed as address(0); make that explicit.
-    if message.get("receiver").is_none_or(serde_json::Value::is_null) {
+    if message
+        .get("receiver")
+        .is_none_or(serde_json::Value::is_null)
+    {
         message["receiver"] = serde_json::Value::String(Address::ZERO.to_string());
     }
     let payload = serde_json::json!({
@@ -423,8 +426,7 @@ pub fn empty_app_data_hash() -> String {
 pub async fn get_quote(chain: &str, request: JsValue) -> Result<JsValue, JsValue> {
     let request: QuoteRequest = from_js(request)?;
     let url = endpoint(parse_chain(chain)?, "api/v1/quote");
-    let response: cowprotocol::OrderQuoteResponse =
-        transport::post_json(&url, &request).await?;
+    let response: cowprotocol::OrderQuoteResponse = transport::post_json(&url, &request).await?;
     to_js(&response)
 }
 
@@ -448,8 +450,7 @@ pub async fn get_quote_simple(
     );
     let c = parse_chain(chain)?;
     let url = endpoint(c, "api/v1/quote");
-    let response: cowprotocol::OrderQuoteResponse =
-        transport::post_json(&url, &request).await?;
+    let response: cowprotocol::OrderQuoteResponse = transport::post_json(&url, &request).await?;
     let order_data = response.quote.to_order_data();
     let domain = DomainSeparator::new(c.id(), c.settlement());
     let uid = order_data.uid(&domain, response.from);
@@ -610,4 +611,70 @@ pub fn compute_order_uid(
     let domain = DomainSeparator::new(Chain::Mainnet.id(), Chain::Mainnet.settlement());
     let uid = order.uid(&domain, parse_address(owner)?);
     Ok(uid.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Mainnet's base URL ends with `/orderbook/`. The joined path should
+    /// land at `/orderbook/api/v1/quote` with exactly one slash between
+    /// the base and the path, regardless of trailing-slash quirks.
+    #[test]
+    fn endpoint_joins_mainnet_quote_without_double_slash() {
+        let url = endpoint(Chain::Mainnet, "api/v1/quote");
+        assert!(
+            url.ends_with("/api/v1/quote"),
+            "expected /api/v1/quote suffix, got: {url}"
+        );
+        assert!(!url.contains("//api/"), "double-slash in: {url}");
+        assert!(url.starts_with("https://api.cow.fi/"), "wrong host: {url}");
+    }
+
+    /// All eleven chains should produce a parseable absolute URL when
+    /// asked for the same path. Catches an accidental missing
+    /// `orderbook_base_url()` impl on a future chain.
+    #[test]
+    fn endpoint_works_for_every_chain() {
+        for chain in [
+            Chain::Mainnet,
+            Chain::Bnb,
+            Chain::Gnosis,
+            Chain::Polygon,
+            Chain::Base,
+            Chain::Plasma,
+            Chain::ArbitrumOne,
+            Chain::Avalanche,
+            Chain::Ink,
+            Chain::Linea,
+            Chain::Sepolia,
+        ] {
+            let url = endpoint(chain, "api/v1/quote");
+            assert!(url.ends_with("/api/v1/quote"), "{chain:?} -> {url}");
+            assert!(
+                url.starts_with("https://"),
+                "{chain:?} produced a non-https URL: {url}"
+            );
+            // Reject double-slashes in the joined path. Allow exactly one
+            // pair (the `https://` after the scheme).
+            let after_scheme = url.trim_start_matches("https://");
+            assert!(
+                !after_scheme.contains("//"),
+                "{chain:?} double-slash: {url}"
+            );
+        }
+    }
+
+    /// `cancel_order` builds paths of the form `api/v1/orders/{uid}`; the
+    /// uid is hex-prefixed and must not be percent-encoded by us (the
+    /// orderbook decodes it raw).
+    #[test]
+    fn endpoint_preserves_hex_path_segments() {
+        let uid = "0x0000000000000000000000000000000000000000000000000000000000000000\
+                   0000000000000000000000000000000000000000\
+                   00000000";
+        let path = format!("api/v1/orders/{uid}");
+        let url = endpoint(Chain::Mainnet, &path);
+        assert!(url.contains(uid), "uid stripped from: {url}");
+    }
 }

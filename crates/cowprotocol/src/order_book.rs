@@ -1624,11 +1624,9 @@ mod tests {
     /// JSON round-trip for [`OrderCreation`]. Deserialising what we
     /// serialise lets wasm / JS consumers hand the type back across the
     /// boundary without losing fields.
-    #[test]
-    fn order_creation_json_round_trip() {
+    fn round_trip_with_signature(signature: Signature) -> OrderCreation {
         let quote = load_mainnet_quote();
         let signed = quote.to_signed_order_data(EMPTY_APP_DATA_HASH).unwrap();
-        let signature = Signature::default_with(SigningScheme::Eip712);
         let original = OrderCreation::from_signed_order_data(
             signed,
             signature,
@@ -1647,6 +1645,55 @@ mod tests {
         assert_eq!(parsed.quote_id, original.quote_id);
         assert_eq!(parsed.app_data, original.app_data);
         assert_eq!(parsed.app_data_hash, original.app_data_hash);
+        assert_eq!(parsed.signing_scheme, original.signing_scheme);
+        parsed
+    }
+
+    #[test]
+    fn order_creation_json_round_trip() {
+        let parsed = round_trip_with_signature(Signature::default_with(SigningScheme::Eip712));
+        assert!(matches!(parsed.signature, Signature::Eip712(_)));
+    }
+
+    /// EthSign round-trip exercises the 65-byte EcdsaSignature path with a
+    /// non-zero v; `Signature::from_bytes` normalises 0 / 27 to 27 and
+    /// 1 / 28 to 28, so we use 27 here to keep the wire shape stable.
+    #[test]
+    fn order_creation_json_round_trip_ethsign() {
+        let bytes = {
+            let mut buf = [0u8; 65];
+            buf[64] = 27;
+            buf
+        };
+        let signature = EcdsaSignature::from_bytes(&bytes)
+            .unwrap()
+            .to_signature(EcdsaSigningScheme::EthSign);
+        let parsed = round_trip_with_signature(signature);
+        match &parsed.signature {
+            Signature::EthSign(sig) => assert_eq!(sig.to_bytes(), bytes),
+            other => panic!("expected EthSign, got {other:?}"),
+        }
+    }
+
+    /// Eip1271 carries variable-length wrapper bytes; the round trip needs
+    /// to preserve them exactly (length and content).
+    #[test]
+    fn order_creation_json_round_trip_eip1271() {
+        let payload: Vec<u8> = (0..32).collect();
+        let signature = Signature::Eip1271(payload.clone());
+        let parsed = round_trip_with_signature(signature);
+        match &parsed.signature {
+            Signature::Eip1271(bytes) => assert_eq!(bytes, &payload),
+            other => panic!("expected Eip1271, got {other:?}"),
+        }
+    }
+
+    /// PreSign carries no bytes; the on-wire `signature` is the empty hex
+    /// string `0x`. Make sure the round trip survives that.
+    #[test]
+    fn order_creation_json_round_trip_presign() {
+        let parsed = round_trip_with_signature(Signature::PreSign);
+        assert!(matches!(parsed.signature, Signature::PreSign));
     }
 
     /// JSON round-trip for [`QuoteRequest`]: serialise, deserialise,

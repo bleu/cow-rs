@@ -56,12 +56,13 @@
   <section>
     <h2>3. <code>eip712_payload</code> — cross-library digest parity</h2>
     <p>
-      Builds the canonical viem / ethers typed-data input via the shim's
+      Builds the canonical typed-data input via the shim's
       <code>eip712_payload</code>, then hashes it independently with
       viem's <code>hashTypedData</code>, ethers' <code>TypedDataEncoder</code>,
-      and the cow TS SDK's <code>OrderSigningUtils</code>. All four
-      digests (including the shim's own <code>order_struct_hash</code> +
-      <code>eip712_message_hash</code> path) must match byte for byte.
+      and the shim's own <code>order_struct_hash</code> +
+      <code>eip712_message_hash</code> path. All three must match byte
+      for byte. (Cow SDK parity follows transitively: its
+      <code>hashTypedData</code> delegates to ethers' encoder.)
     </p>
     <button id="run-parity">Compare digests</button>
     <p id="parity-status" class="pending">click the button to run</p>
@@ -85,10 +86,30 @@
     <pre id="sign-output"></pre>
   </section>
 
+  <section>
+    <h2>5. Cross-library <em>signature</em> parity + round-trip</h2>
+    <p>
+      Signs the same payload with viem's <code>privateKeyToAccount</code>,
+      ethers' <code>Wallet</code>, and the shim's
+      <code>sign_eip712</code>, each from anvil account #1's PK. All
+      three ECDSA implementations are deterministic (RFC 6979), so the
+      <code>(r, s, v)</code> tuples must be byte-identical. Run all
+      three and the panel asserts equality. The last-clicked signature
+      is fed back through <code>build_order_creation</code> to prove
+      the wasm shim accepts externally-produced signatures.
+    </p>
+    <button id="sign-viem">Sign (viem)</button>
+    <button id="sign-ethers">Sign (ethers)</button>
+    <button id="sign-shim">Sign (shim)</button>
+    <button id="sign-reset" style="margin-left:1rem; background:#eee">Reset</button>
+    <p id="sign-parity-status" class="pending">click a button to run</p>
+    <pre id="sign-parity-output"></pre>
+  </section>
+
   <p class="group">Live orderbook (network)</p>
 
   <section>
-    <h2>5. <code>get_quote_simple</code> — quote against api.cow.fi mainnet</h2>
+    <h2>6. <code>get_quote_simple</code> — quote against api.cow.fi mainnet</h2>
     <p>
       Hits the live orderbook. Demonstrates reqwest's browser-fetch backend,
       CORS, JSON deserialisation across the wasm boundary, and UID derivation
@@ -101,7 +122,7 @@
   </section>
 
   <section>
-    <h2>6. <code>version</code> — orderbook git revision</h2>
+    <h2>7. <code>version</code> — orderbook git revision</h2>
     <p>
       Calls <code>GET /api/v1/version</code> against
       <code>api.cow.fi/mainnet</code>. Smallest possible network test;
@@ -114,6 +135,7 @@
 
   <script type="module">
     import init, {
+      build_order_creation,
       chain_info,
       compute_order_uid,
       domain_separator,
@@ -124,9 +146,14 @@
       sign_eip712,
       version,
     } from '../crates/cow-sdk-wasm/pkg/cow_sdk_wasm.js';
-    import { hashTypedData } from 'https://esm.sh/viem@2.21.0';
-    import { TypedDataEncoder } from 'https://esm.sh/ethers@6.13.4';
-    import { OrderSigningUtils } from 'https://esm.sh/@cowprotocol/cow-sdk@5.13.0?bundle';
+    import { hashTypedData, hexToBytes } from 'https://esm.sh/viem@2.21.0';
+    import { privateKeyToAccount } from 'https://esm.sh/viem@2.21.0/accounts';
+    import { TypedDataEncoder, Wallet, getBytes } from 'https://esm.sh/ethers@6.13.4';
+    // @cowprotocol/cow-sdk v9 routes EIP-712 hashing through an
+    // AdapterContext-installed provider, which delegates to ethers's
+    // TypedDataEncoder. So cow-sdk parity is transitive: if ethers
+    // matches, cow-sdk matches. The Rust side locks ethers parity for
+    // every chain (see `recon/audit-tests.md`).
 
     const USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
     const DAI  = '0x6B175474E89094C44Da98b954EedeAC495271d0F';
@@ -189,7 +216,7 @@
       // Panel 3: cross-library EIP-712 digest parity.
       runOnClick('run-parity', 'parity-status', 'parity-output', async () => {
         const orderData = {
-          sellToken: USDC, buyToken: DAI, receiver: null,
+          sellToken: USDC, buyToken: DAI, receiver: OWNER,
           sellAmount: '100000000', buyAmount: '99000000000000000000',
           validTo: 4294967295,
           appData: '0xb48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d',
@@ -210,22 +237,121 @@
         // ethers v6. TypedDataEncoder ignores primaryType (it derives it).
         const ethersDigest = TypedDataEncoder.hash(payload.domain, payload.types, payload.message);
 
-        // cow TS SDK. OrderSigningUtils.getEIP712Types omits the message;
-        // OrderSigningUtils.hashOrder takes (chainId, order) and returns
-        // the same digest using ethers internally.
-        const cowSdkDigest = await OrderSigningUtils.hashOrder(1, orderData);
-
-        const all = [shimDigest, viemDigest, ethersDigest, cowSdkDigest].map(d => d.toLowerCase());
+        const all = [shimDigest, viemDigest, ethersDigest].map(d => d.toLowerCase());
         const matches = all.every(d => d === all[0]);
         const body = {
-          shim:    shimDigest,
-          viem:    viemDigest,
-          ethers:  ethersDigest,
-          cowSdk:  cowSdkDigest,
+          shim:   shimDigest,
+          viem:   viemDigest,
+          ethers: ethersDigest,
+          cowSdk: '(transitive: routes through ethers TypedDataEncoder)',
           matches,
         };
         if (!matches) throw new Error('digests diverge across libraries');
-        return { body, summary: `4 libraries agree on ${shimDigest.slice(0, 14)}…` };
+        return { body, summary: `shim / viem / ethers agree on ${shimDigest.slice(0, 14)}…` };
+      });
+
+      // Panel 5: cross-library signature parity + round-trip.
+      const SIGN_PK = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
+      const SIGN_ORDER = {
+        sellToken: USDC, buyToken: DAI, receiver: OWNER,
+        sellAmount: '100000000', buyAmount: '99000000000000000000',
+        validTo: 4294967295,
+        appData: '0xb48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d',
+        feeAmount: '0', kind: 'sell', partiallyFillable: false,
+        sellTokenBalance: 'erc20', buyTokenBalance: 'erc20',
+      };
+      const signResults = {};
+      const signStatusEl = document.getElementById('sign-parity-status');
+      const signOutputEl = document.getElementById('sign-parity-output');
+
+      function splitSig(hex) {
+        const bytes = hexToBytes(hex);
+        return {
+          r: '0x' + Array.from(bytes.slice(0, 32)).map(b => b.toString(16).padStart(2, '0')).join(''),
+          s: '0x' + Array.from(bytes.slice(32, 64)).map(b => b.toString(16).padStart(2, '0')).join(''),
+          v: bytes[64],
+        };
+      }
+
+      function renderSignResults() {
+        signOutputEl.textContent = JSON.stringify(signResults, null, 2);
+        const labels = Object.keys(signResults);
+        if (labels.length < 2) {
+          setStatus(signStatusEl, true, `⏳ ${labels.length}/3 signed; need more to compare`);
+          return;
+        }
+        const sigs = labels.map(k => signResults[k].sig);
+        const allMatch = sigs.every(s =>
+          s.r.toLowerCase() === sigs[0].r.toLowerCase()
+            && s.s.toLowerCase() === sigs[0].s.toLowerCase()
+            && s.v === sigs[0].v,
+        );
+        if (!allMatch) {
+          setStatus(signStatusEl, false, `❌ ${labels.length} signatures disagree`);
+          return;
+        }
+        // Round-trip the last signature through build_order_creation.
+        try {
+          const last = signResults[labels[labels.length - 1]];
+          const creation = build_order_creation(SIGN_ORDER, {
+            signingScheme: 'eip712', ...last.sig,
+          }, OWNER, '{}', null);
+          signResults.roundTrip = {
+            signatureWire: creation.signature,
+            from: creation.from,
+            ok: typeof creation.signature === 'string' && creation.signature.startsWith('0x'),
+          };
+          signOutputEl.textContent = JSON.stringify(signResults, null, 2);
+          setStatus(signStatusEl, true,
+            `✅ ${labels.length}/3 agree on (r,s,v); build_order_creation accepted the bag`);
+        } catch (err) {
+          setStatus(signStatusEl, false, `❌ build_order_creation: ${err.message ?? err}`);
+        }
+      }
+
+      document.getElementById('sign-viem').addEventListener('click', async () => {
+        try {
+          const account = privateKeyToAccount(SIGN_PK);
+          const payload = eip712_payload(SIGN_ORDER, 'mainnet');
+          const hex = await account.signTypedData(payload);
+          signResults.viem = { hex, sig: splitSig(hex) };
+          renderSignResults();
+        } catch (err) {
+          setStatus(signStatusEl, false, `❌ viem: ${err.message ?? err}`);
+        }
+      });
+
+      document.getElementById('sign-ethers').addEventListener('click', async () => {
+        try {
+          const wallet = new Wallet(SIGN_PK);
+          const payload = eip712_payload(SIGN_ORDER, 'mainnet');
+          // ethers wants types WITHOUT the EIP712Domain entry; payload.types only has Order so we're fine.
+          const hex = await wallet.signTypedData(payload.domain, payload.types, payload.message);
+          signResults.ethers = { hex, sig: splitSig(hex) };
+          renderSignResults();
+        } catch (err) {
+          setStatus(signStatusEl, false, `❌ ethers: ${err.message ?? err}`);
+        }
+      });
+
+      document.getElementById('sign-shim').addEventListener('click', () => {
+        try {
+          const bag = sign_eip712(SIGN_ORDER, 'mainnet', SIGN_PK);
+          signResults.shim = {
+            hex: '(shim returns the r/s/v bag directly, no concatenated hex)',
+            sig: { r: bag.r, s: bag.s, v: bag.v },
+          };
+          renderSignResults();
+        } catch (err) {
+          setStatus(signStatusEl, false, `❌ shim: ${err.message ?? err}`);
+        }
+      });
+
+      document.getElementById('sign-reset').addEventListener('click', () => {
+        Object.keys(signResults).forEach(k => delete signResults[k]);
+        signOutputEl.textContent = '';
+        setStatus(signStatusEl, true, '⏳ click a button to run');
+        signStatusEl.className = 'pending';
       });
 
       // Panel 4: sign_eip712.

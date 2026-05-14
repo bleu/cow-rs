@@ -73,6 +73,36 @@ jobs:
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
       - run: cargo check --workspace --all-features --target wasm32-unknown-unknown
 
+  wasm-size:
+    name: wasm-size
+    runs-on: ubuntu-latest
+    # Fail-loud guardrail: if a future commit re-pulls reqwest (or any
+    # other 100+ KB dependency) into the wasm graph, the size jumps and
+    # this job blocks the merge. Bump the ceiling consciously when API
+    # surface growth justifies it.
+    env:
+      # Avoid `-Dwarnings` here -- the upstream `wasm-bindgen` JS glue
+      # has warnings under the workspace's strict lint set that would
+      # otherwise fail the release build.
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-04
+        with:
+          toolchain: "1.91.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          key: wasm-size
+      - run: cargo install --locked wasm-pack
+      - name: Build cow-sdk-wasm release (web target)
+        run: |
+          cd crates/cow-sdk-wasm
+          wasm-pack build --target web --release --out-dir pkg-web
+      - name: Assert .wasm size under ceiling
+        # 665600 bytes = 650 KB; current ~584 KB leaves ~66 KB of headroom.
+        run: bash scripts/wasm-size-check.sh 665600
+
   docs:
     name: docs
     runs-on: ubuntu-latest
