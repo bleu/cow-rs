@@ -23,7 +23,7 @@
 #![cfg(target_arch = "wasm32")]
 
 use {
-    js_sys::{Object, Promise, Reflect, global},
+    js_sys::{JSON, Object, Promise, Reflect, global},
     wasm_bindgen::{JsCast, JsValue, closure::Closure},
     wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure},
 };
@@ -285,4 +285,67 @@ async fn version_surfaces_http_error_status() {
     let msg = err.as_string().unwrap_or_default();
     assert!(msg.contains("503"), "error should mention status: {msg}");
     restore_real_fetch();
+}
+
+// ===== In-shim signing (feature-gated) =================================
+//
+// Only compiled / run when wasm-pack is invoked with
+// `--features in_shim_signing`. A second CI job runs this branch so a
+// future change that breaks the signing path does not slip past the
+// default-features test job.
+
+#[cfg(feature = "in_shim_signing")]
+#[wasm_bindgen_test]
+fn sign_eip712_owner_matches_anvil_account_zero() {
+    // Anvil / Hardhat default account #0 -- well-known across the
+    // Ethereum dev tooling, never represents real funds.
+    const PRIVATE_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+    const ADDRESS: &str = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
+
+    let order = serde_json::json!({
+        "sellToken": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "buyToken": "0x6b175474e89094c44da98b954eedeac495271d0f",
+        "receiver": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+        "sellAmount": "100000000",
+        "buyAmount": "99000000000000000000",
+        "validTo": 4_294_967_295u32,
+        "appData": "0xe7e95e6cb40eea2a5e1ee72d7d6fb27c8c0b32a64a6e3a3a44d4c54e10c4dafc",
+        "feeAmount": "0",
+        "kind": "sell",
+        "partiallyFillable": false,
+        "sellTokenSource": "erc20",
+        "buyTokenDestination": "erc20",
+    });
+    // Round-trip through JSON.parse so the JsValue is a plain JS
+    // Object (not a Map). `from_js<OrderData>` on the wasm side
+    // expects sibling fields, which serde-wasm-bindgen's default Map
+    // serialisation does not satisfy.
+    let order_json = serde_json::to_string(&order).expect("order to json");
+    let order_js = JSON::parse(&order_json).expect("JSON.parse order");
+
+    let sig = cow_sdk_wasm::sign_eip712(order_js, "mainnet", PRIVATE_KEY)
+        .unwrap_or_else(|err| panic!("sign_eip712: {}", err.as_string().unwrap_or_default()));
+
+    let owner = Reflect::get(&sig, &JsValue::from_str("owner"))
+        .expect("owner present")
+        .as_string()
+        .expect("owner is a string");
+    assert_eq!(
+        owner.to_lowercase(),
+        ADDRESS,
+        "in-shim signer should derive the well-known Anvil address"
+    );
+
+    // (r, s, v) shape sanity. The signing path that fills these in
+    // should produce 32-byte hex blobs and a v in {27, 28}.
+    let r = Reflect::get(&sig, &JsValue::from_str("r"))
+        .unwrap()
+        .as_string()
+        .unwrap();
+    assert!(r.starts_with("0x") && r.len() == 2 + 64, "r: {r}");
+    let v = Reflect::get(&sig, &JsValue::from_str("v"))
+        .unwrap()
+        .as_f64()
+        .unwrap() as u8;
+    assert!(v == 27 || v == 28, "v should be 27 or 28, got {v}");
 }

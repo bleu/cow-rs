@@ -63,6 +63,13 @@ wasm-size: wasm-build-all
 wasm-size-check: wasm-build-web
 	bash scripts/wasm-size-check.sh 665600
 
+# Combine the three wasm-pack targets into a single publishable npm
+# package with one shared .wasm + an exports map that routes the right
+# JS glue per consumer. Outputs to crates/cow-sdk-wasm/pkg-npm/, ready
+# for `npm publish`.
+npm-pack: wasm-build-all
+	bash scripts/wasm-npm-pack.sh
+
 doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace --all-features
 

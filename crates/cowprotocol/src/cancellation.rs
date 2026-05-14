@@ -298,4 +298,43 @@ mod tests {
         assert!(value.get("orderUid").is_some());
         assert!(value.get("signingScheme").is_some());
     }
+
+    /// `OrderCancellations` is the unsigned collection (just the UIDs).
+    /// JSON round-trip ensures `serde_with` adapters around `OrderUid`
+    /// stay symmetric across serialise / deserialise.
+    #[test]
+    fn order_cancellations_json_round_trip() {
+        let original = OrderCancellations {
+            order_uids: vec![OrderUid([0x01; 56]), OrderUid([0x02; 56])],
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let parsed: OrderCancellations = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, original);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(value.get("orderUids").is_some());
+    }
+
+    /// `SignedOrderCancellations` is the body of `DELETE /api/v1/orders`.
+    /// Same round-trip pattern as the single-order case: serialise into
+    /// camelCase JSON, deserialise back, assert byte equality plus a
+    /// shape sanity check on the wire keys.
+    #[test]
+    fn signed_order_cancellations_json_round_trip() {
+        let original = OrderCancellations {
+            order_uids: vec![OrderUid([0x33; 56]), OrderUid([0x44; 56])],
+        }
+        .sign(
+            EcdsaSigningScheme::EthSign,
+            &DomainSeparator(B256::repeat_byte(0xcd).into()),
+            &fixed_signer(),
+        )
+        .unwrap();
+        let json = serde_json::to_string(&original).unwrap();
+        let parsed: SignedOrderCancellations = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, original);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(value.get("orderUids").is_some());
+        assert!(value.get("signature").is_some());
+        assert!(value.get("signingScheme").is_some());
+    }
 }
