@@ -10,7 +10,7 @@ use {
         app_data::AppDataHash,
         chain::Chain,
         error::{ApiError, Error, Result},
-        order::{BuyTokenDestination, OrderData, OrderKind, OrderUid, SellTokenSource},
+        order::{BuyTokenDestination, Order, OrderData, OrderKind, OrderUid, SellTokenSource},
         signature::Signature,
         signing_scheme::SigningScheme,
     },
@@ -18,6 +18,43 @@ use {
     serde::{Deserialize, Serialize},
     serde_with::{DisplayFromStr, serde_as},
 };
+
+/// Auction lifecycle stage returned by `GET /api/v1/orders/{uid}/status`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AuctionStatusType {
+    /// Quoted but not yet in an auction.
+    Open,
+    /// Scheduled for inclusion in an upcoming auction.
+    Scheduled,
+    /// In the currently active auction.
+    Active,
+    /// Solved by one or more solvers; awaiting settlement.
+    Solved,
+    /// Solver transaction is being submitted on chain.
+    Executing,
+    /// Settlement transaction was mined.
+    Traded,
+    /// Cancelled before settlement.
+    Cancelled,
+}
+
+/// Auction-status payload returned by `GET /api/v1/orders/{uid}/status`.
+///
+/// `value` carries solver execution proposals when relevant
+/// (`solved`/`executing`), and is empty for `open`/`cancelled`. We surface
+/// it as opaque JSON to stay forward-compatible with solver-side schema
+/// additions.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuctionStatus {
+    /// Stage of the auction lifecycle.
+    #[serde(rename = "type")]
+    pub status_type: AuctionStatusType,
+    /// Solver execution proposals attached to the current stage.
+    #[serde(default)]
+    pub value: Vec<serde_json::Value>,
+}
 
 /// Quote request body for `POST /api/v1/quote`.
 ///
@@ -428,13 +465,44 @@ impl OrderBookApi {
         self.post_json("api/v1/orders", order).await
     }
 
+    /// `GET /api/v1/orders/{uid}` — fetch the full order record, including
+    /// execution counters and lifecycle status.
+    pub async fn get_order(&self, uid: &OrderUid) -> Result<Order> {
+        self.get_json(&format!("api/v1/orders/{uid}")).await
+    }
+
+    /// `GET /api/v1/orders/{uid}/status` — fetch the auction lifecycle
+    /// stage and any attached solver proposals.
+    pub async fn get_order_status(&self, uid: &OrderUid) -> Result<AuctionStatus> {
+        self.get_json(&format!("api/v1/orders/{uid}/status")).await
+    }
+
     async fn post_json<TReq, TResp>(&self, path: &str, body: &TReq) -> Result<TResp>
     where
         TReq: Serialize + ?Sized,
         TResp: for<'de> Deserialize<'de>,
     {
-        let url = self.base_url.join(path)?;
-        let response = self.client.post(url).json(body).send().await?;
+        let response = self
+            .client
+            .post(self.base_url.join(path)?)
+            .json(body)
+            .send()
+            .await?;
+        Self::decode_response(response).await
+    }
+
+    async fn get_json<T>(&self, path: &str) -> Result<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let response = self.client.get(self.base_url.join(path)?).send().await?;
+        Self::decode_response(response).await
+    }
+
+    async fn decode_response<T>(response: reqwest::Response) -> Result<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
         let status = response.status();
         let text = response.text().await?;
         if status.is_success() {

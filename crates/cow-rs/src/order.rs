@@ -30,6 +30,38 @@ use {
 /// Gnosis Chain).
 pub const BUY_ETH_ADDRESS: Address = Address::repeat_byte(0xee);
 
+/// Server-side lifecycle status returned by
+/// `GET /api/v1/orders/{uid}`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OrderStatus {
+    /// On-chain pre-signature has not yet been observed.
+    PresignaturePending,
+    /// Order is live and may be matched.
+    #[default]
+    Open,
+    /// Order is fully filled.
+    Fulfilled,
+    /// Order was cancelled (off-chain delete or on-chain pre-sign reversal).
+    Cancelled,
+    /// `validTo` passed before the order could be filled.
+    Expired,
+}
+
+/// Server-side classification of an order, returned alongside the lifecycle
+/// status. Determines fee handling and solver routing.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OrderClass {
+    /// Standard market order, settled quickly.
+    #[default]
+    Market,
+    /// Solver-internal liquidity order — placed by whitelisted participants.
+    Liquidity,
+    /// Limit order: fee taken from surplus once the price target is met.
+    Limit,
+}
+
 /// The exact 12 fields signed by the order owner and verified by the
 /// settlement contract.
 ///
@@ -141,6 +173,78 @@ impl OrderData {
             crate::signature::EcdsaSignature::sign(scheme, domain, &self.hash_struct(), signer)?;
         Ok(ecdsa.to_signature(scheme))
     }
+}
+
+/// Full order representation returned by `GET /api/v1/orders/{uid}`.
+///
+/// Carries the 12 signed-payload fields of [`OrderData`] (via `#[serde(flatten)]`)
+/// plus server-derived metadata: identity, signature, lifecycle status,
+/// execution counters. Less-common contextual sub-objects (`quote`,
+/// `interactions`, `ethflowData`, `onchainOrderData`) are preserved as
+/// opaque [`serde_json::Value`]s in this first iteration so the type stays
+/// forward-compatible with orderbook schema additions.
+#[serde_as]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Order {
+    /// The 12 fields that were signed.
+    #[serde(flatten)]
+    pub data: OrderData,
+    /// 56-byte order UID assigned by the orderbook at submission.
+    pub uid: OrderUid,
+    /// Recovered (or declared) signer.
+    pub owner: alloy_primitives::Address,
+    /// Off-chain signing scheme used to authenticate the order.
+    pub signing_scheme: crate::signing_scheme::SigningScheme,
+    /// Raw signature bytes, hex-encoded.
+    pub signature: String,
+    /// ISO-8601 timestamp at which the orderbook accepted the order.
+    pub creation_date: String,
+    /// Lifecycle status.
+    pub status: OrderStatus,
+    /// Solver-routing classification.
+    pub class: OrderClass,
+    /// Cumulative buy-token amount filled so far.
+    #[serde_as(as = "DisplayFromStr")]
+    pub executed_buy_amount: alloy_primitives::U256,
+    /// Cumulative sell-token amount filled so far.
+    #[serde_as(as = "DisplayFromStr")]
+    pub executed_sell_amount: alloy_primitives::U256,
+    /// Cumulative fee charged in `executed_fee_token` atomic units.
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub executed_fee: Option<alloy_primitives::U256>,
+    /// Token the executed fee was charged in.
+    #[serde(default)]
+    pub executed_fee_token: Option<alloy_primitives::Address>,
+    /// Whether the order has been invalidated (e.g. cancelled).
+    #[serde(default)]
+    pub invalidated: bool,
+    /// Whether the order was placed by a whitelisted liquidity provider.
+    #[serde(default)]
+    pub is_liquidity_order: bool,
+    /// Canonical JSON of the app-data document, when the orderbook has seen it.
+    #[serde(default)]
+    pub full_app_data: Option<String>,
+    /// Quote that produced the order, when one was supplied at submission.
+    #[serde(default)]
+    pub quote: Option<serde_json::Value>,
+    /// Pre/post settlement interactions attached via app-data hooks.
+    #[serde(default)]
+    pub interactions: Option<serde_json::Value>,
+    /// EthFlow-specific metadata for native-sell orders.
+    #[serde(default)]
+    pub ethflow_data: Option<serde_json::Value>,
+    /// On-chain placement metadata for orders posted via `EthFlow`.
+    #[serde(default)]
+    pub onchain_order_data: Option<serde_json::Value>,
+    /// On-chain user that placed the order (distinct from `owner` for
+    /// proxy/relayer flows).
+    #[serde(default)]
+    pub onchain_user: Option<alloy_primitives::Address>,
+    /// Settlement contract this order is bound to.
+    #[serde(default)]
+    pub settlement_contract: Option<alloy_primitives::Address>,
 }
 
 /// Direction of an order — whether the owner is fixing the buy side or the

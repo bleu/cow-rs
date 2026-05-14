@@ -66,9 +66,13 @@ pub use crate::{
     domain::{DomainSeparator, hashed_eip712_message, hashed_ethsign_message},
     error::{ApiError, Error, Result},
     order::{
-        BUY_ETH_ADDRESS, BuyTokenDestination, OrderData, OrderKind, OrderUid, SellTokenSource,
+        BUY_ETH_ADDRESS, BuyTokenDestination, Order, OrderClass, OrderData, OrderKind, OrderStatus,
+        OrderUid, SellTokenSource,
     },
-    order_book::{OrderBookApi, OrderCreation, OrderQuote, OrderQuoteResponse, QuoteRequest},
+    order_book::{
+        AuctionStatus, AuctionStatusType, OrderBookApi, OrderCreation, OrderQuote,
+        OrderQuoteResponse, QuoteRequest,
+    },
     signature::{EcdsaSignature, Recovered, Signature, SignatureError},
     signing_scheme::{EcdsaSigningScheme, SigningScheme},
 };
