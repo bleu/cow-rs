@@ -359,7 +359,7 @@ async fn orders_by_tx_fetches_settlement_orders() {
 #[tokio::test]
 async fn upload_app_data_returns_server_computed_hash() {
     let server = MockServer::start().await;
-    let computed_hash = AppDataHash([0xcd; 32]);
+    let computed_hash = AppDataHash::from([0xcd; 32]);
     let expected_hex = format!("0x{}", const_hex::encode(computed_hash.0));
 
     Mock::given(method("PUT"))
@@ -457,7 +457,7 @@ async fn get_app_data_rejects_response_with_wrong_hash() {
     use cowprotocol::Error;
 
     let server = MockServer::start().await;
-    let requested = AppDataHash([0xab; 32]);
+    let requested = AppDataHash::from([0xab; 32]);
     Mock::given(method("GET"))
         .and(path(format!(
             "/api/v1/app_data/0x{}",
@@ -509,7 +509,7 @@ async fn put_app_data_rejects_document_with_wrong_hash() {
     let document = AppDataDocument {
         full_app_data: "{\"appCode\":\"cow-rs\"}".into(),
     };
-    let wrong_hash = AppDataHash([0xab; 32]);
+    let wrong_hash = AppDataHash::from([0xab; 32]);
 
     let err = api(&server)
         .put_app_data(&wrong_hash, &document)

@@ -322,7 +322,7 @@ impl Serialize for HexBytes {
     where
         S: Serializer,
     {
-        crate::bytes_hex::serialize(&self.0, serializer)
+        serializer.serialize_str(&const_hex::encode_prefixed(&self.0))
     }
 }
 

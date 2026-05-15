@@ -2,7 +2,7 @@
 //! shape. Carries the owner's signature, the canonical app-data JSON
 //! and the same amounts that were hashed for EIP-712 signing.
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::{Address, Bytes, U256};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
@@ -84,7 +84,7 @@ fn serialise_signature_bytes<S>(
 where
     S: serde::Serializer,
 {
-    crate::bytes_hex::serialize(signature.to_bytes(), serializer)
+    serializer.serialize_str(&const_hex::encode_prefixed(signature.to_bytes()))
 }
 
 /// Deserialisation helper for [`OrderCreation`].
@@ -117,8 +117,7 @@ struct OrderCreationWire {
     sell_token_balance: SellTokenSource,
     buy_token_balance: BuyTokenDestination,
     signing_scheme: SigningScheme,
-    #[serde(deserialize_with = "crate::bytes_hex::deserialize")]
-    signature: Vec<u8>,
+    signature: Bytes,
     from: Address,
     #[serde(default)]
     quote_id: Option<i64>,
@@ -254,7 +253,7 @@ impl OrderCreation {
         // signature to bytes the orderbook never sees, while pinning a
         // different document under the same hash via `put_app_data`.
         let json_digest = alloy_primitives::keccak256(app_data_json.as_bytes());
-        if AppDataHash(json_digest.0) != order_data.app_data {
+        if AppDataHash(json_digest) != order_data.app_data {
             return Err(Error::OrderCreationInvalid {
                 field: "app_data",
                 reason: "JSON digest does not match signed app_data hash",

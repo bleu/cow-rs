@@ -92,7 +92,6 @@
 use getrandom as _;
 
 pub mod app_data;
-pub mod bytes_hex;
 pub mod cancellation;
 pub mod chain;
 pub mod composable;

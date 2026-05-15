@@ -184,7 +184,7 @@ mod tests {
             receiver: SAMPLE_RECEIVER,
             sell_amount: U256::from(1_000_000_000_000_000_000_u128), // 1 ETH
             buy_amount: U256::from(3_500_000_000_000_000_000_000_u128), // 3,500 DAI
-            app_data: AppDataHash([0xab; 32]),
+            app_data: AppDataHash::from([0xab; 32]),
             fee_amount: U256::from(1_500_000_000_000_000_u128), // 0.0015 ETH
             // The user-facing expiry on EthFlow is unrelated to the
             // settlement `validTo`, which must always be `u32::MAX`.

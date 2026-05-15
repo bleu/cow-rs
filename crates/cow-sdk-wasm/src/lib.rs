@@ -482,7 +482,7 @@ pub fn app_data_cid_from_hash(hash_hex: &str) -> Result<String, JsValue> {
         .as_slice()
         .try_into()
         .map_err(|_| JsValue::from_str("app-data hash must be 32 bytes"))?;
-    Ok(AppDataCid::from_hash(AppDataHash(array)).to_string())
+    Ok(AppDataCid::from_hash(AppDataHash::from(array)).to_string())
 }
 
 /// 32-byte digest of `keccak256("{}")` — the empty app-data sentinel.
@@ -538,7 +538,7 @@ pub fn to_signed_order_data(
 ) -> Result<JsValue, JsValue> {
     let request: QuoteRequest = from_js(request)?;
     let response: cowprotocol::OrderQuoteResponse = from_js(response)?;
-    let app_data = parse_b256(app_data_hash_hex).map(|b| AppDataHash(b.0))?;
+    let app_data = parse_b256(app_data_hash_hex).map(AppDataHash)?;
     let order_data = response
         .to_signed_order_data(&request, app_data)
         .map_err(|err| JsValue::from_str(&format!("to_signed_order_data failed: {err}")))?;

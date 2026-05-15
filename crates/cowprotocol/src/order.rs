@@ -124,7 +124,7 @@ impl OrderData {
         hash_data[128..160].copy_from_slice(&self.sell_amount.to_be_bytes::<32>());
         hash_data[160..192].copy_from_slice(&self.buy_amount.to_be_bytes::<32>());
         hash_data[220..224].copy_from_slice(&self.valid_to.to_be_bytes());
-        hash_data[224..256].copy_from_slice(&self.app_data.0);
+        hash_data[224..256].copy_from_slice(self.app_data.0.as_slice());
         hash_data[256..288].copy_from_slice(&self.fee_amount.to_be_bytes::<32>());
         hash_data[288..320].copy_from_slice(match self.kind {
             OrderKind::Sell => &OrderKind::SELL,
@@ -634,7 +634,7 @@ mod tests {
             sell_amount: U256::from(0x0246ddf97976680000_u128),
             buy_amount: U256::from(0xb98bc829a6f90000_u128),
             valid_to: 0xffffffff,
-            app_data: AppDataHash([0u8; 32]),
+            app_data: AppDataHash::default(),
             fee_amount: U256::from(0x0de0b6b3a7640000_u128),
             kind: OrderKind::Sell,
             partially_fillable: false,

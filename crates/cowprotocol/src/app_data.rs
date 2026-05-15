@@ -13,12 +13,11 @@
 //! with the existing 32-byte digest and emits the bytes in base32 lower-case
 //! (RFC 4648, no padding) with the `b` multibase tag.
 
-use alloy_primitives::{Address, U256, keccak256};
+use alloy_primitives::{Address, B256, Bytes, U256, b256, keccak256};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_with::{DisplayFromStr, serde_as};
 use std::fmt;
 
-use crate::bytes_hex::BytesHex;
 use crate::order::{OrderClass, OrderUid};
 
 /// 32-byte keccak256 digest of an [app-data] document, embedded
@@ -26,32 +25,32 @@ use crate::order::{OrderClass, OrderUid};
 /// [`Self::to_cid`] for the IPFS CID the orderbook pins the
 /// document under.
 ///
+/// Newtype over [`B256`]: inherits its `Debug` / `Display` / serde
+/// behaviour (`0x`-prefixed lower-case hex on the wire) and its
+/// `From<[u8; 32]>` / `AsRef<[u8]>` impls.
+///
 /// [app-data]: https://docs.cow.fi/cow-protocol/reference/core/intents/app-data
-#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct AppDataHash(pub [u8; 32]);
-
-impl fmt::Debug for AppDataHash {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "AppDataHash({})", const_hex::encode_prefixed(self.0))
-    }
-}
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct AppDataHash(pub B256);
 
 impl fmt::Display for AppDataHash {
-    /// `0x`-prefixed lower-case hex, matching the wire form.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&const_hex::encode_prefixed(self.0))
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
 impl From<[u8; 32]> for AppDataHash {
     fn from(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+        Self(B256::from(bytes))
     }
 }
 
 impl AsRef<[u8]> for AppDataHash {
     fn as_ref(&self) -> &[u8] {
-        &self.0
+        self.0.as_slice()
     }
 }
 
@@ -63,7 +62,7 @@ impl AppDataHash {
 }
 
 /// `keccak256("{}")`: digest of the canonical empty app-data document.
-pub const EMPTY_APP_DATA_HASH: AppDataHash = AppDataHash(hex_literal::hex!(
+pub const EMPTY_APP_DATA_HASH: AppDataHash = AppDataHash(b256!(
     "b48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d"
 ));
 
@@ -85,29 +84,6 @@ pub const COW_RS_WASM_APP_CODE: &str = "cow-rs-wasm";
 /// `PUT /api/v1/app_data/{hash}`. Mirrors
 /// `Validator::DEFAULT_SIZE_LIMIT` in `cowprotocol/services`.
 pub const APP_DATA_SIZE_LIMIT: usize = 8192;
-
-impl Serialize for AppDataHash {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        crate::bytes_hex::serialize(self.0, serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for AppDataHash {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let bytes = crate::bytes_hex::deserialize(deserializer)?;
-        let arr: [u8; 32] = bytes
-            .as_slice()
-            .try_into()
-            .map_err(|_| D::Error::custom(format!("expected 32 bytes, got {}", bytes.len())))?;
-        Ok(Self(arr))
-    }
-}
 
 /// Canonical app-data JSON document. Mirrors cow-sdk's
 /// `@cowprotocol/app-data` v1.x schema and cow-py's `AppDataDoc`.
@@ -411,15 +387,13 @@ pub struct AppDataReplacedOrder {
 
 /// `metadata.wrappers[]` entry: wrapper-contract calls the solver
 /// invokes as part of the settlement transaction.
-#[serde_as]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataWrapperCall {
     /// Wrapper-contract address invoked during settlement.
     pub address: Address,
     /// Wrapper calldata; serialises as `0x`-prefixed hex.
-    #[serde_as(as = "BytesHex")]
-    pub data: Vec<u8>,
+    pub data: Bytes,
     /// If `true`, solvers may settle without invoking the wrapper.
     #[serde(default)]
     pub is_omittable: bool,
@@ -612,7 +586,7 @@ impl AppDataDoc {
                 max: APP_DATA_SIZE_LIMIT,
             });
         }
-        Ok(AppDataHash(keccak256(json.as_bytes()).0))
+        Ok(AppDataHash(keccak256(json.as_bytes())))
     }
 }
 
@@ -695,7 +669,7 @@ impl AppDataCid {
         bytes[1] = CID_CODEC_RAW;
         bytes[2] = MULTIHASH_KECCAK_256;
         bytes[3] = MULTIHASH_LEN_32;
-        bytes[4..].copy_from_slice(&hash.0);
+        bytes[4..].copy_from_slice(hash.0.as_slice());
 
         let mut out = String::with_capacity(1 + base32_encoded_len(CID_BYTES_LEN));
         out.push('b');
@@ -746,7 +720,7 @@ impl AppDataCid {
         }
         let mut digest = [0u8; 32];
         digest.copy_from_slice(&bytes[4..]);
-        Ok(AppDataHash(digest))
+        Ok(AppDataHash::from(digest))
     }
 }
 
@@ -891,7 +865,7 @@ mod tests {
 
     #[test]
     fn json_round_trip_zero() {
-        let zero = AppDataHash([0; 32]);
+        let zero = AppDataHash::default();
         let json = serde_json::to_value(zero).unwrap();
         assert_eq!(
             json,
@@ -906,7 +880,7 @@ mod tests {
         let mut bytes = [0u8; 32];
         bytes[0] = 0xab;
         bytes[31] = 0xcd;
-        let original = AppDataHash(bytes);
+        let original = AppDataHash::from(bytes);
         let json = serde_json::to_value(original).unwrap();
         let parsed: AppDataHash = serde_json::from_value(json).unwrap();
         assert_eq!(parsed, original);
@@ -919,21 +893,13 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn rejects_missing_prefix() {
-        let json =
-            serde_json::json!("0000000000000000000000000000000000000000000000000000000000000000");
-        let result: Result<AppDataHash, _> = serde_json::from_value(json);
-        assert!(result.is_err());
-    }
-
     /// Lock [`EMPTY_APP_DATA_HASH`] against `keccak256("{}")`: any drift
     /// would either break interop with cow-sdk fixtures or signal that the
     /// canonical empty document changed.
     #[test]
     fn empty_app_data_hash_matches_keccak() {
         let computed = alloy_primitives::keccak256(EMPTY_APP_DATA_JSON);
-        assert_eq!(EMPTY_APP_DATA_HASH.0, *computed);
+        assert_eq!(EMPTY_APP_DATA_HASH.0, computed);
     }
 
     /// SDK-attribution doc pins appCode + metadata.quote.version. The
@@ -1009,7 +975,7 @@ mod tests {
         // Re-hash from the JSON string and compare: guards against any
         // path where canonical_json and hash drift apart.
         let direct = alloy_primitives::keccak256(json.as_bytes());
-        assert_eq!(hash.0, *direct);
+        assert_eq!(hash.0, direct);
 
         let parsed: AppDataDoc = serde_json::from_str(&json).unwrap();
         let parsed_referrer = parsed.metadata.referrer.expect("referrer preserved");
@@ -1028,8 +994,7 @@ mod tests {
             doc.canonical_json(),
             r#"{"appCode":"","metadata":{},"version":"1.6.0"}"#
         );
-        let expected =
-            hex_literal::hex!("3929e2c230dc41c0c053ff5f9211eb32def3a737b2bf36eb5b8862ea317fcd9e");
+        let expected = b256!("3929e2c230dc41c0c053ff5f9211eb32def3a737b2bf36eb5b8862ea317fcd9e");
         assert_eq!(doc.hash().0, expected);
     }
 
@@ -1066,7 +1031,7 @@ mod tests {
         // it against the bytes produced by the current path so any
         // serialiser flip (raw → escaped) trips this test.
         let direct = alloy_primitives::keccak256(json.as_bytes());
-        assert_eq!(doc.hash().0, *direct);
+        assert_eq!(doc.hash().0, direct);
 
         // Round-trip: parsing back through serde must reconstruct the
         // same appCode bytes.
@@ -1319,7 +1284,7 @@ mod tests {
 
         let wrapper = AppDataWrapperCall {
             address: address!("5555555555555555555555555555555555555555"),
-            data: vec![0xde, 0xad, 0xbe, 0xef],
+            data: Bytes::from_static(&[0xde, 0xad, 0xbe, 0xef]),
             is_omittable: true,
         };
         let doc = doc.with_wrapper(wrapper.clone());
@@ -1362,7 +1327,7 @@ mod tests {
         for i in 0..32 {
             let mut bytes = [0u8; 32];
             bytes[i] = 0xff;
-            let hash = AppDataHash(bytes);
+            let hash = AppDataHash::from(bytes);
             let cid = hash.to_cid();
             assert_eq!(
                 cid.to_hash().unwrap(),
@@ -1402,7 +1367,7 @@ mod tests {
     /// -b base16` and `-b base32` strings, both of which we lock here.
     #[test]
     fn cid_matches_services_known_good_vector() {
-        let hash = AppDataHash(hex_literal::hex!(
+        let hash = AppDataHash(b256!(
             "8af4e8c9973577b08ac21d17d331aade86c11ebcc5124744d621ca8365ec9424"
         ));
         let cid = hash.to_cid();
@@ -1442,7 +1407,7 @@ mod tests {
     /// accepts either prefix, so cow-rs must too.
     #[test]
     fn cid_parse_accepts_base16_multibase_prefix() {
-        let hash = AppDataHash(hex_literal::hex!(
+        let hash = AppDataHash(b256!(
             "8af4e8c9973577b08ac21d17d331aade86c11ebcc5124744d621ca8365ec9424"
         ));
         let mut hex_body = String::with_capacity(2 * CID_BYTES_LEN);
@@ -1470,7 +1435,7 @@ mod tests {
         bytes[1] = 0x70; // dag-pb, not raw
         bytes[2] = 0x1b;
         bytes[3] = 0x20;
-        bytes[4..].copy_from_slice(&EMPTY_APP_DATA_HASH.0);
+        bytes[4..].copy_from_slice(EMPTY_APP_DATA_HASH.0.as_slice());
         let mut s = String::from("b");
         base32_encode_into(&bytes, &mut s);
         let cid = AppDataCid(s);
@@ -1491,7 +1456,7 @@ mod tests {
         bytes[1] = 0x55;
         bytes[2] = 0x12; // sha2-256
         bytes[3] = 0x20;
-        bytes[4..].copy_from_slice(&EMPTY_APP_DATA_HASH.0);
+        bytes[4..].copy_from_slice(EMPTY_APP_DATA_HASH.0.as_slice());
         let mut s = String::from("b");
         base32_encode_into(&bytes, &mut s);
         let cid = AppDataCid(s);
@@ -1522,7 +1487,7 @@ mod tests {
         bytes[1] = 0x55;
         bytes[2] = 0x1b;
         bytes[3] = 0x20;
-        bytes[4..].copy_from_slice(&EMPTY_APP_DATA_HASH.0);
+        bytes[4..].copy_from_slice(EMPTY_APP_DATA_HASH.0.as_slice());
         let mut s = String::from("b");
         base32_encode_into(&bytes, &mut s);
         let cid = AppDataCid(s);
@@ -1541,7 +1506,7 @@ mod tests {
         bytes[1] = 0x55;
         bytes[2] = 0x1b;
         bytes[3] = 0x10; // 16, not 32
-        bytes[4..].copy_from_slice(&EMPTY_APP_DATA_HASH.0);
+        bytes[4..].copy_from_slice(EMPTY_APP_DATA_HASH.0.as_slice());
         let mut s = String::from("b");
         base32_encode_into(&bytes, &mut s);
         let cid = AppDataCid(s);

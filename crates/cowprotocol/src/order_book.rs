@@ -180,7 +180,7 @@ impl AppDataDocument {
     /// [`crate::app_data::AppDataDoc::canonical_json`] first if
     /// deterministic key order matters.
     pub fn computed_hash(&self) -> AppDataHash {
-        AppDataHash(keccak256(self.full_app_data.as_bytes()).0)
+        AppDataHash(keccak256(self.full_app_data.as_bytes()))
     }
 }
 
@@ -1330,7 +1330,7 @@ mod tests {
         assert_eq!(response.quote.buy_token, DAI);
         assert_eq!(response.quote.kind, OrderKind::Sell);
         assert_eq!(response.quote.signing_scheme, SigningScheme::Eip712);
-        assert_eq!(response.quote.app_data, AppDataHash([0u8; 32]));
+        assert_eq!(response.quote.app_data, AppDataHash::default());
 
         // The order data projected from the quote round-trips into the
         // signed-payload type and hashes deterministically.
@@ -1722,7 +1722,7 @@ mod tests {
     #[test]
     fn to_signed_order_data_rejects_swapped_app_data() {
         let quote = load_mainnet_quote();
-        let pinned = AppDataHash([0x42; 32]);
+        let pinned = AppDataHash::from([0x42; 32]);
         let request = QuoteRequest::sell_amount_before_fee(
             quote.quote.sell_token,
             quote.quote.buy_token,
