@@ -182,7 +182,7 @@ impl TradingClient {
         let from = params.request.from;
 
         let body = OrderCreation::from_signed_order_data(
-            order_data,
+            &order_data,
             signature,
             from,
             app_data_json.clone(),

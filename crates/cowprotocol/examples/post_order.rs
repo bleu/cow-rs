@@ -99,7 +99,7 @@ async fn main() -> cowprotocol::Result<()> {
 
     // Step 4: assemble the submission body and POST it.
     let creation = OrderCreation::from_signed_order_data(
-        order_data,
+        &order_data,
         signature,
         owner,
         EMPTY_APP_DATA_JSON.to_owned(),

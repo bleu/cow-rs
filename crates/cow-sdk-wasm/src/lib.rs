@@ -407,7 +407,7 @@ pub fn build_order_creation(
     let c = parse_chain(chain)?;
     let domain = settlement_domain(c.id(), c.settlement());
     let creation = cowprotocol::OrderCreation::from_signed_order_data(
-        order,
+        &order,
         signature,
         owner,
         app_data_json.to_owned(),
@@ -453,7 +453,7 @@ pub fn build_order_creation_eip1271(
     let c = parse_chain(chain)?;
     let domain = settlement_domain(c.id(), c.settlement());
     let creation = cowprotocol::OrderCreation::from_signed_order_data(
-        order,
+        &order,
         signature,
         owner,
         app_data_json.to_owned(),

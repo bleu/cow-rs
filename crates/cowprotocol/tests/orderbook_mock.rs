@@ -80,7 +80,7 @@ async fn post_order_returns_assigned_uid() {
         ..OrderData::default()
     };
     let creation = OrderCreation::from_signed_order_data(
-        order,
+        &order,
         Signature::default_with(SigningScheme::Eip712),
         OWNER,
         cowprotocol::EMPTY_APP_DATA_JSON.to_owned(),
@@ -105,7 +105,7 @@ async fn post_order_surfaces_orderbook_api_error() {
         .await;
 
     let creation = OrderCreation::from_signed_order_data(
-        OrderData {
+        &OrderData {
             app_data: cowprotocol::EMPTY_APP_DATA_HASH,
             ..OrderData::default()
         },

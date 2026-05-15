@@ -31,7 +31,7 @@ in_shim_signing = ["dep:alloy-signer-local"]
 # `default-features = false` drops the `subgraph` GraphQL client from
 # cowprotocol; not reachable from the JS bindings and pure dead weight
 # in the wasm binary.
-cowprotocol = { path = "../cowprotocol", version = "1.0.0-alpha.1", default-features = false }
+cowprotocol = { path = "../cowprotocol", version = "1.0.0-alpha.2", default-features = false }
 alloy-primitives.workspace = true
 alloy-signer-local = { workspace = true, optional = true }
 const-hex.workspace = true

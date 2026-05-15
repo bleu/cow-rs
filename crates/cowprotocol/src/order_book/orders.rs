@@ -150,7 +150,7 @@ impl TryFrom<OrderCreationWire> for OrderCreation {
             buy_token_balance: wire.buy_token_balance,
         };
         Self::from_signed_order_data(
-            order_data,
+            &order_data,
             signature,
             wire.from,
             wire.app_data,
@@ -236,7 +236,7 @@ impl OrderCreation {
     /// recovered signer of an ECDSA signature can call
     /// [`OrderCreation::verify_owner`] on the assembled body.
     pub fn from_signed_order_data(
-        order_data: OrderData,
+        order_data: &OrderData,
         signature: Signature,
         from: Address,
         app_data_json: String,

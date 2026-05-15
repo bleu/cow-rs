@@ -1401,7 +1401,7 @@ mod tests {
             .unwrap();
         let signature = Signature::default_with(SigningScheme::Eip712);
         let creation = OrderCreation::from_signed_order_data(
-            signed,
+            &signed,
             signature,
             quote.from,
             EMPTY_APP_DATA_JSON.to_owned(),
@@ -1435,7 +1435,7 @@ mod tests {
             .to_signed_order_data(&fixture_quote_request(), EMPTY_APP_DATA_HASH)
             .unwrap();
         let original = OrderCreation::from_signed_order_data(
-            signed,
+            &signed,
             signature,
             quote.from,
             EMPTY_APP_DATA_JSON.to_owned(),
@@ -1569,7 +1569,7 @@ mod tests {
     #[test]
     fn order_creation_rejects_zero_from_address() {
         let err = OrderCreation::from_signed_order_data(
-            OrderData::default(),
+            &OrderData::default(),
             Signature::default_with(SigningScheme::Eip712),
             Address::ZERO,
             EMPTY_APP_DATA_JSON.to_owned(),
@@ -1914,7 +1914,7 @@ mod tests {
             .to_signed_order_data(&fixture_quote_request(), EMPTY_APP_DATA_HASH)
             .unwrap();
         let err = OrderCreation::from_signed_order_data(
-            signed,
+            &signed,
             Signature::default_with(SigningScheme::Eip712),
             quote.from,
             // Document does NOT match `EMPTY_APP_DATA_HASH`.
@@ -1947,7 +1947,7 @@ mod tests {
             .unwrap();
         let mut body = serde_json::to_value(
             OrderCreation::from_signed_order_data(
-                signed,
+                &signed,
                 Signature::default_with(SigningScheme::Eip712),
                 quote.from,
                 EMPTY_APP_DATA_JSON.to_owned(),
@@ -2039,7 +2039,7 @@ mod tests {
             .unwrap();
         // Build the body with the *wrong* declared owner.
         let creation = OrderCreation::from_signed_order_data(
-            order_data,
+            &order_data,
             signature,
             impostor,
             EMPTY_APP_DATA_JSON.to_owned(),
@@ -2067,7 +2067,7 @@ mod tests {
             .to_signed_order_data(&fixture_quote_request(), EMPTY_APP_DATA_HASH)
             .unwrap();
         let creation = OrderCreation::from_signed_order_data(
-            signed,
+            &signed,
             Signature::default_with(SigningScheme::Eip712),
             quote.from,
             EMPTY_APP_DATA_JSON.to_owned(),
