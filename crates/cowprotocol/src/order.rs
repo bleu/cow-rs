@@ -10,7 +10,9 @@
 //!
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/model/src/order.rs
 
-use alloy_primitives::{Address, B256, U256, keccak256};
+#[cfg(test)]
+use alloy_primitives::keccak256;
+use alloy_primitives::{Address, B256, U256};
 use hex_literal::hex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_with::{DisplayFromStr, serde_as};
@@ -19,6 +21,41 @@ use std::str::FromStr;
 
 use crate::app_data::AppDataHash;
 use crate::domain::{DomainSeparator, hashed_eip712_message};
+
+/// Private `sol!` view of [`OrderData`] used to derive the EIP-712
+/// `typeHash` and `hashStruct` via [`alloy_sol_types::SolStruct`]. Lives
+/// in a sub-module so the generated `pub struct Order` is not part of
+/// the public API: callers should not have to know about it. The
+/// Solidity name `Order` is load-bearing: it appears verbatim in the
+/// EIP-712 type string that `GPv2Settlement` verifies.
+///
+/// `kind`, `sellTokenBalance` and `buyTokenBalance` are declared `string`
+/// here even though the on-chain [`crate::contracts::GPv2OrderData`]
+/// stores them as `bytes32`: the EIP-712 type string the contract
+/// verifies against uses `string`, and the resulting 32-byte slots are
+/// identical because the bytes32 values are pre-computed `keccak256` of
+/// the same strings.
+pub(crate) mod eip712 {
+    use alloy_sol_types::sol;
+
+    sol! {
+        #[derive(Debug)]
+        struct Order {
+            address sellToken;
+            address buyToken;
+            address receiver;
+            uint256 sellAmount;
+            uint256 buyAmount;
+            uint32 validTo;
+            bytes32 appData;
+            uint256 feeAmount;
+            string kind;
+            bool partiallyFillable;
+            string sellTokenBalance;
+            string buyTokenBalance;
+        }
+    }
+}
 
 /// Sentinel buy token meaning the order pays out in the chain's
 /// native currency (ETH on mainnet, xDAI on Gnosis, etc.).
@@ -97,43 +134,14 @@ pub struct OrderData {
 }
 
 impl OrderData {
-    /// EIP-712 `typeHash` of the `Order` struct.
-    /// `keccak256("Order(address sellToken,address buyToken,address receiver,
-    /// uint256 sellAmount,uint256 buyAmount,uint32 validTo,bytes32 appData,
-    /// uint256 feeAmount,string kind,bool partiallyFillable,string sellTokenBalance,
-    /// string buyTokenBalance)")`. Note `kind` and the two balance markers
-    /// are EIP-712 `string` even though `GPv2Order.Data` stores them as
-    /// `bytes32`.
-    pub const TYPE_HASH: [u8; 32] =
-        hex!("d5a25ba2e97094ad7d83dc28a6572da797d6b3e7fc6663bd93efb789fc17e489");
-
     /// EIP-712 `hashStruct` over the order; the 32-byte input expected
-    /// by [`hashed_eip712_message`].
+    /// by [`hashed_eip712_message`]. Delegates to
+    /// [`alloy_sol_types::SolStruct`] applied to the private
+    /// [`eip712::Order`] declaration, whose `typeHash` and field encoding
+    /// are conformance-locked against the canonical contract type string.
     pub fn hash_struct(&self) -> [u8; 32] {
-        let mut hash_data = [0u8; 416];
-        hash_data[0..32].copy_from_slice(&Self::TYPE_HASH);
-        // Most slots are left zero so the address / uint32 fields are left-padded
-        // to 32 bytes.
-        // Leave most slots zero so address / uint32 fields are
-        // left-padded to 32 bytes.
-        // Leave most slots zero so address / uint32 fields are
-        // left-padded to 32 bytes.
-        hash_data[44..64].copy_from_slice(self.sell_token.as_slice());
-        hash_data[76..96].copy_from_slice(self.buy_token.as_slice());
-        hash_data[108..128].copy_from_slice(self.receiver.unwrap_or(Address::ZERO).as_slice());
-        hash_data[128..160].copy_from_slice(&self.sell_amount.to_be_bytes::<32>());
-        hash_data[160..192].copy_from_slice(&self.buy_amount.to_be_bytes::<32>());
-        hash_data[220..224].copy_from_slice(&self.valid_to.to_be_bytes());
-        hash_data[224..256].copy_from_slice(self.app_data.0.as_slice());
-        hash_data[256..288].copy_from_slice(&self.fee_amount.to_be_bytes::<32>());
-        hash_data[288..320].copy_from_slice(match self.kind {
-            OrderKind::Sell => &OrderKind::SELL,
-            OrderKind::Buy => &OrderKind::BUY,
-        });
-        hash_data[351] = self.partially_fillable as u8;
-        hash_data[352..384].copy_from_slice(&self.sell_token_balance.as_bytes());
-        hash_data[384..416].copy_from_slice(&self.buy_token_balance.as_bytes());
-        *keccak256(hash_data)
+        use alloy_sol_types::SolStruct;
+        eip712::Order::from(self).eip712_hash_struct().0
     }
 
     /// 56-byte order UID on `domain` for `owner`.
@@ -158,6 +166,35 @@ impl OrderData {
         let ecdsa =
             crate::signature::EcdsaSignature::sign(scheme, domain, &self.hash_struct(), signer)?;
         Ok(ecdsa.to_signature(scheme))
+    }
+}
+
+impl From<&OrderData> for eip712::Order {
+    fn from(d: &OrderData) -> Self {
+        Self {
+            sellToken: d.sell_token,
+            buyToken: d.buy_token,
+            receiver: d.receiver.unwrap_or(Address::ZERO),
+            sellAmount: d.sell_amount,
+            buyAmount: d.buy_amount,
+            validTo: d.valid_to,
+            appData: d.app_data.0,
+            feeAmount: d.fee_amount,
+            kind: match d.kind {
+                OrderKind::Sell => "sell".to_owned(),
+                OrderKind::Buy => "buy".to_owned(),
+            },
+            partiallyFillable: d.partially_fillable,
+            sellTokenBalance: match d.sell_token_balance {
+                SellTokenSource::Erc20 => "erc20".to_owned(),
+                SellTokenSource::External => "external".to_owned(),
+                SellTokenSource::Internal => "internal".to_owned(),
+            },
+            buyTokenBalance: match d.buy_token_balance {
+                BuyTokenDestination::Erc20 => "erc20".to_owned(),
+                BuyTokenDestination::Internal => "internal".to_owned(),
+            },
+        }
     }
 }
 
@@ -378,14 +415,6 @@ impl OrderKind {
         }
     }
 
-    /// 32-byte EIP-712 encoding of this variant for inclusion in `hash_struct`.
-    pub const fn as_bytes(self) -> [u8; 32] {
-        match self {
-            Self::Buy => Self::BUY,
-            Self::Sell => Self::SELL,
-        }
-    }
-
     /// Parse the 32-byte on-chain marker (as returned by `GPv2Order.Data.kind`)
     /// into a Rust enum. Returns `None` for unknown markers; the contract
     /// itself only ever writes `BUY` or `SELL`.
@@ -441,15 +470,6 @@ impl SellTokenSource {
     pub const INTERNAL: [u8; 32] =
         hex!("4ac99ace14ee0a5ef932dc609df0943ab7ac16b7583634612f8dc35a4289a6ce");
 
-    /// EIP-712 32-byte marker for `hash_struct`.
-    pub const fn as_bytes(&self) -> [u8; 32] {
-        match self {
-            Self::Erc20 => Self::ERC20,
-            Self::External => Self::EXTERNAL,
-            Self::Internal => Self::INTERNAL,
-        }
-    }
-
     /// Parse the on-chain `GPv2Order.Data.sellTokenBalance` marker.
     /// Returns `None` for unknown values.
     pub const fn from_contract_bytes(bytes: [u8; 32]) -> Option<Self> {
@@ -483,14 +503,6 @@ impl BuyTokenDestination {
     /// `keccak256("internal")`.
     pub const INTERNAL: [u8; 32] =
         hex!("4ac99ace14ee0a5ef932dc609df0943ab7ac16b7583634612f8dc35a4289a6ce");
-
-    /// EIP-712 32-byte marker for `hash_struct`.
-    pub const fn as_bytes(&self) -> [u8; 32] {
-        match self {
-            Self::Erc20 => Self::ERC20,
-            Self::Internal => Self::INTERNAL,
-        }
-    }
 
     /// Parse the on-chain `GPv2Order.Data.buyTokenBalance` marker.
     /// Returns `None` for unknown values.
@@ -680,6 +692,24 @@ mod tests {
         );
     }
 
+    /// Locks the [`eip712::Order`] `SolStruct::eip712_type_hash` derivation
+    /// against the canonical
+    /// `keccak256("Order(address sellToken,..,string buyTokenBalance)")`
+    /// value the GPv2Settlement contract verifies signatures with. Any
+    /// drift in the `sol!` field types or order would diverge from the
+    /// contract's `typeHash` and silently invalidate every signature.
+    #[test]
+    fn eip712_order_type_hash_matches_canonical() {
+        use alloy_sol_types::SolStruct;
+
+        let sol_order = eip712::Order::from(&sample_order());
+        assert_eq!(
+            <eip712::Order as SolStruct>::eip712_type_hash(&sol_order).0,
+            hex!("d5a25ba2e97094ad7d83dc28a6572da797d6b3e7fc6663bd93efb789fc17e489"),
+            "Order(...) typeHash must match the GPv2Settlement-verified value",
+        );
+    }
+
     /// Locks `DomainSeparator::new` against ethers
     /// `TypedDataEncoder.hashDomain` for every one of the eleven chains
     /// cow-rs supports, using the canonical GPv2Settlement deployment.
@@ -863,14 +893,16 @@ mod tests {
         );
     }
 
-    /// Locks `OrderData::TYPE_HASH` against the canonical EIP-712 type
-    /// signature published in
+    /// Locks the [`eip712::Order`] `typeHash` against the canonical
+    /// EIP-712 type signature published in
     /// [`GPv2Order.sol`](https://github.com/cowprotocol/contracts/blob/main/src/contracts/libraries/GPv2Order.sol).
     /// Note that `kind`, `sellTokenBalance` and `buyTokenBalance` are typed
     /// as `string` in the EIP-712 schema even though `GPv2Order.Data` stores
     /// them as `bytes32` markers.
     #[test]
     fn order_type_hash_matches_canonical_signature() {
+        use alloy_sol_types::SolStruct;
+
         let signature = b"Order(\
             address sellToken,\
             address buyToken,\
@@ -885,7 +917,11 @@ mod tests {
             string sellTokenBalance,\
             string buyTokenBalance\
         )";
-        assert_eq!(OrderData::TYPE_HASH, *keccak256(signature));
+        let sol_order = eip712::Order::from(&sample_order());
+        assert_eq!(
+            <eip712::Order as SolStruct>::eip712_type_hash(&sol_order),
+            keccak256(signature),
+        );
     }
 
     #[test]

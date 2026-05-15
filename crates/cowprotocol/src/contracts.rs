@@ -42,9 +42,10 @@
 //!
 //! `kind`, `sellTokenBalance` and `buyTokenBalance` are `bytes32` markers in
 //! the on-chain Solidity struct, even though the EIP-712 type string hashes
-//! them as `string`. See the doc comment on
-//! [`crate::OrderData::TYPE_HASH`] for the discrepancy. The bindings here
-//! mirror the on-chain layout: callers that need the EIP-712 view should use
+//! them as `string`. The signing-side view lives in
+//! `crate::order::eip712::Order` and is routed through
+//! [`alloy_sol_types::SolStruct`]. The bindings here mirror the on-chain
+//! layout: callers that need the EIP-712 view should use
 //! [`crate::OrderData`] instead.
 
 use alloy_primitives::{Address, address};
@@ -91,7 +92,9 @@ sol! {
     ///
     /// `kind`, `sellTokenBalance` and `buyTokenBalance` are `bytes32` here
     /// (matching the storage layout) even though the EIP-712 hash treats them
-    /// as `string`. See [`crate::OrderData::TYPE_HASH`].
+    /// as `string`. The signing-side typed-data view lives in
+    /// `crate::order::eip712::Order` and is fed to
+    /// [`alloy_sol_types::SolStruct::eip712_hash_struct`].
     #[derive(Debug)]
     struct GPv2OrderData {
         address sellToken;
