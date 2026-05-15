@@ -187,7 +187,7 @@ impl From<&OrderData> for eip712::Order {
             sellAmount: d.sell_amount,
             buyAmount: d.buy_amount,
             validTo: d.valid_to,
-            appData: d.app_data.0,
+            appData: d.app_data,
             feeAmount: d.fee_amount,
             kind: match d.kind {
                 OrderKind::Sell => "sell".to_owned(),

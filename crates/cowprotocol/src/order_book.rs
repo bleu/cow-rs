@@ -180,7 +180,7 @@ impl AppDataDocument {
     /// [`crate::app_data::AppDataDoc::canonical_json`] first if
     /// deterministic key order matters.
     pub fn computed_hash(&self) -> AppDataHash {
-        AppDataHash(keccak256(self.full_app_data.as_bytes()))
+        keccak256(self.full_app_data.as_bytes())
     }
 }
 

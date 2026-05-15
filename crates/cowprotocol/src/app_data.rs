@@ -8,63 +8,30 @@
 //! resulting [`AppDataHash`] is stable across runs and matches the digest
 //! the orderbook pins to IPFS.
 //!
-//! [`AppDataCid`] derives the IPFS CID under which the orderbook pins the
-//! document. The derivation is pure: it concatenates a 4-byte CIDv1 prefix
-//! with the existing 32-byte digest and emits the bytes in base32 lower-case
-//! (RFC 4648, no padding) with the `b` multibase tag.
+//! [`app_data_cid`] derives the IPFS CID under which the orderbook pins
+//! the document, returning a [`cid::Cid`] whose `Display` already emits
+//! the base32 lower-case (`b`-prefixed) multibase string the orderbook
+//! indexes by.
 
 use alloy_primitives::{Address, B256, Bytes, U256, b256, keccak256};
+use cid::multihash::Multihash;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_with::{DisplayFromStr, serde_as};
-use std::fmt;
 
 use crate::order::{OrderClass, OrderUid};
 
-/// 32-byte keccak256 digest of an [app-data] document, embedded
-/// directly in the signed order's `appData` field. Call
-/// [`Self::to_cid`] for the IPFS CID the orderbook pins the
-/// document under.
-///
-/// Newtype over [`B256`]: inherits its `Debug` / `Display` / serde
-/// behaviour (`0x`-prefixed lower-case hex on the wire) and its
-/// `From<[u8; 32]>` / `AsRef<[u8]>` impls.
+/// 32-byte keccak256 digest of an [app-data] document, embedded directly
+/// in the signed order's `appData` field. Type-aliased onto alloy's
+/// [`B256`] so the `Debug` / `Display` / serde / `FromStr` / `AsRef<[u8]>`
+/// surface comes from there for free; call [`app_data_cid`] for the IPFS
+/// CID the orderbook pins the document under.
 ///
 /// [app-data]: https://docs.cow.fi/cow-protocol/reference/core/intents/app-data
-#[derive(
-    Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
-)]
-#[serde(transparent)]
-pub struct AppDataHash(pub B256);
-
-impl fmt::Display for AppDataHash {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl From<[u8; 32]> for AppDataHash {
-    fn from(bytes: [u8; 32]) -> Self {
-        Self(B256::from(bytes))
-    }
-}
-
-impl AsRef<[u8]> for AppDataHash {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_slice()
-    }
-}
-
-impl AppDataHash {
-    /// Shortcut for [`AppDataCid::from_hash`].
-    pub fn to_cid(&self) -> AppDataCid {
-        AppDataCid::from_hash(*self)
-    }
-}
+pub type AppDataHash = B256;
 
 /// `keccak256("{}")`: digest of the canonical empty app-data document.
-pub const EMPTY_APP_DATA_HASH: AppDataHash = AppDataHash(b256!(
-    "b48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d"
-));
+pub const EMPTY_APP_DATA_HASH: AppDataHash =
+    b256!("b48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d");
 
 /// JSON representation of the empty app-data document (`"{}"`).
 pub const EMPTY_APP_DATA_JSON: &str = "{}";
@@ -586,7 +553,7 @@ impl AppDataDoc {
                 max: APP_DATA_SIZE_LIMIT,
             });
         }
-        Ok(AppDataHash(keccak256(json.as_bytes())))
+        Ok(keccak256(json.as_bytes()))
     }
 }
 
@@ -641,137 +608,68 @@ fn sort_value(value: serde_json::Value) -> serde_json::Value {
     }
 }
 
-/// IPFS CID the orderbook pins app-data under. Format:
-/// `cidv1(raw=0x55, multihash=keccak256(0x1b 0x20 || hash))`,
-/// base32-encoded with the `b` multibase prefix. The multihash is
-/// keccak-256, so the CID round-trips with [`AppDataHash`] without
-/// any extra hashing. Matches `cowprotocol/services::app-data` and
-/// cow-sdk's `appDataHexToCid`.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct AppDataCid(String);
+/// IPFS CID the orderbook pins app-data under: `cidv1(raw=0x55,
+/// multihash=keccak-256(hash))`. Aliased onto [`cid::Cid`] so `Display`
+/// (base32 lower-case with the `b` multibase prefix), `FromStr` and
+/// validation come from the upstream crate. Build one with
+/// [`app_data_cid`] and recover the embedded digest with
+/// [`app_data_hash_from_cid`].
+pub type AppDataCid = cid::Cid;
 
-const CID_V1: u8 = 0x01;
-const CID_CODEC_RAW: u8 = 0x55;
-const MULTIHASH_KECCAK_256: u8 = 0x1b;
-const MULTIHASH_LEN_32: u8 = 0x20;
-const CID_BYTES_LEN: usize = 4 + 32;
-/// Upper bound on multibase-encoded CIDs. Real CIDs are <= 73 chars;
-/// 96 leaves slack while bounding [`AppDataCid::to_hash`] allocation.
-const CID_STRING_MAX_LEN: usize = 96;
+/// Raw codec (`0x55`) used for the app-data CID payload.
+const CID_CODEC_RAW: u64 = 0x55;
+/// Keccak-256 multihash code (`0x1b`).
+const MULTIHASH_KECCAK_256: u64 = 0x1b;
 
-impl AppDataCid {
-    /// CID for a 32-byte digest. Pure offline derivation: builds the
-    /// 36-byte CID `[0x01, 0x55, 0x1b, 0x20, ..hash]` and routes it
-    /// through [`multibase::encode`] with the `b` (base32 lower-case)
-    /// prefix.
-    pub fn from_hash(hash: AppDataHash) -> Self {
-        let mut bytes = [0u8; CID_BYTES_LEN];
-        bytes[0] = CID_V1;
-        bytes[1] = CID_CODEC_RAW;
-        bytes[2] = MULTIHASH_KECCAK_256;
-        bytes[3] = MULTIHASH_LEN_32;
-        bytes[4..].copy_from_slice(hash.0.as_slice());
-        Self(multibase::encode(multibase::Base::Base32Lower, bytes))
-    }
-
-    /// Canonical `b...` string.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Extract the embedded [`AppDataHash`]. Accepts `b`-prefixed
-    /// (base32) and `f`-prefixed (base16) multibase encodings; cow-rs
-    /// emits `b`, but cow-sdk emits `f`. Validates version, codec,
-    /// multihash, and digest length.
-    pub fn to_hash(&self) -> Result<AppDataHash, AppDataCidError> {
-        if self.0.len() > CID_STRING_MAX_LEN {
-            return Err(AppDataCidError::CidTooLong {
-                len: self.0.len(),
-                max: CID_STRING_MAX_LEN,
-            });
-        }
-        let (base, bytes) =
-            multibase::decode(&self.0).map_err(|_| AppDataCidError::InvalidMultibase)?;
-        // Only the two lower-case forms `b` / `f` round-trip with the
-        // orderbook (cow-rs emits the former, cow-sdk the latter).
-        match base {
-            multibase::Base::Base32Lower | multibase::Base::Base16Lower => {}
-            _ => return Err(AppDataCidError::InvalidMultibase),
-        }
-        if bytes.len() != CID_BYTES_LEN {
-            return Err(AppDataCidError::InvalidLength {
-                expected: CID_BYTES_LEN,
-                actual: bytes.len(),
-            });
-        }
-        if bytes[0] != CID_V1 {
-            return Err(AppDataCidError::UnexpectedVersion(bytes[0]));
-        }
-        if bytes[1] != CID_CODEC_RAW {
-            return Err(AppDataCidError::UnexpectedCodec(bytes[1]));
-        }
-        if bytes[2] != MULTIHASH_KECCAK_256 {
-            return Err(AppDataCidError::UnexpectedMultihashCode(bytes[2]));
-        }
-        if bytes[3] != MULTIHASH_LEN_32 {
-            return Err(AppDataCidError::UnexpectedDigestLength(bytes[3]));
-        }
-        let mut digest = [0u8; 32];
-        digest.copy_from_slice(&bytes[4..]);
-        Ok(AppDataHash::from(digest))
-    }
+/// Build the IPFS CID the orderbook pins for an app-data digest. Pure
+/// offline derivation: wraps `hash` in a keccak-256 multihash and folds
+/// it into a CIDv1 with the raw codec. The resulting [`cid::Cid`]
+/// displays as the canonical `b...` base32 string and round-trips
+/// through `cid::Cid::from_str`.
+pub fn app_data_cid(hash: AppDataHash) -> AppDataCid {
+    let multihash = Multihash::<32>::wrap(MULTIHASH_KECCAK_256, hash.as_slice())
+        .expect("digest fits a 32-byte multihash by construction");
+    AppDataCid::new_v1(CID_CODEC_RAW, multihash.resize().expect("32 <= 64"))
 }
 
-impl fmt::Display for AppDataCid {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+/// Recover the embedded 32-byte digest from an [`AppDataCid`].
+/// Validates the codec, multihash code, and digest length match
+/// `cidv1(raw=0x55, multihash=keccak-256/32)` so a hostile string cannot
+/// silently re-route the orderbook lookup to a different document.
+pub fn app_data_hash_from_cid(cid: &AppDataCid) -> Result<AppDataHash, AppDataCidError> {
+    if cid.codec() != CID_CODEC_RAW {
+        return Err(AppDataCidError::UnexpectedCodec(cid.codec()));
     }
-}
-
-impl AsRef<str> for AppDataCid {
-    fn as_ref(&self) -> &str {
-        &self.0
+    let multihash = cid.hash();
+    if multihash.code() != MULTIHASH_KECCAK_256 {
+        return Err(AppDataCidError::UnexpectedMultihashCode(multihash.code()));
     }
+    let digest = multihash.digest();
+    if digest.len() != 32 {
+        return Err(AppDataCidError::UnexpectedDigestLength(digest.len()));
+    }
+    Ok(AppDataHash::from_slice(digest))
 }
 
 /// Errors raised while parsing an [`AppDataCid`] back into an
-/// [`AppDataHash`].
-#[derive(Debug, thiserror::Error, Eq, PartialEq)]
+/// [`AppDataHash`]. Wraps [`cid::Error`] for syntactic failures and
+/// surfaces dedicated variants for codec / multihash / digest-length
+/// drift, which the upstream parser would otherwise silently accept.
+#[derive(Debug, thiserror::Error)]
 pub enum AppDataCidError {
-    /// The CID was not lower-case base32 (`b`) or base16 (`f`) multibase,
-    /// or the body could not be decoded by [`multibase::decode`].
-    #[error("expected multibase `b` (base32) or `f` (base16) prefix with a valid body")]
-    InvalidMultibase,
-    /// The decoded CID body had the wrong length.
-    #[error("expected {expected}-byte CID body, got {actual}")]
-    InvalidLength {
-        /// Number of bytes we expect (`36`).
-        expected: usize,
-        /// Number of bytes actually decoded.
-        actual: usize,
-    },
-    /// The version byte was not `0x01`.
-    #[error("expected CIDv1 (0x01), got 0x{0:02x}")]
-    UnexpectedVersion(u8),
-    /// The codec byte was not the raw codec `0x55`.
+    /// The string could not be parsed as a CID at all (bad multibase
+    /// prefix, invalid varint, truncated body, etc).
+    #[error("invalid CID: {0}")]
+    InvalidCid(#[from] cid::Error),
+    /// The CID codec was not the raw codec (`0x55`).
     #[error("expected raw codec (0x55), got 0x{0:02x}")]
-    UnexpectedCodec(u8),
+    UnexpectedCodec(u64),
     /// The multihash code was not keccak-256 (`0x1b`).
     #[error("expected keccak-256 multihash (0x1b), got 0x{0:02x}")]
-    UnexpectedMultihashCode(u8),
-    /// The multihash length byte was not `0x20`.
-    #[error("expected 32-byte digest (0x20), got 0x{0:02x}")]
-    UnexpectedDigestLength(u8),
-    /// The CID string was longer than `CID_STRING_MAX_LEN`. Real CIDs
-    /// are at most 73 chars; longer inputs are rejected before any
-    /// attacker-driven allocation runs.
-    #[error("cid string too long: {len} chars (max {max})")]
-    CidTooLong {
-        /// Length of the offending CID string.
-        len: usize,
-        /// Maximum accepted length.
-        max: usize,
-    },
+    UnexpectedMultihashCode(u64),
+    /// The multihash digest was not 32 bytes long.
+    #[error("expected 32-byte digest, got {0}")]
+    UnexpectedDigestLength(usize),
 }
 
 #[cfg(test)]
@@ -814,7 +712,7 @@ mod tests {
     #[test]
     fn empty_app_data_hash_matches_keccak() {
         let computed = alloy_primitives::keccak256(EMPTY_APP_DATA_JSON);
-        assert_eq!(EMPTY_APP_DATA_HASH.0, computed);
+        assert_eq!(EMPTY_APP_DATA_HASH, computed);
     }
 
     /// SDK-attribution doc pins appCode + metadata.quote.version. The
@@ -890,7 +788,7 @@ mod tests {
         // Re-hash from the JSON string and compare: guards against any
         // path where canonical_json and hash drift apart.
         let direct = alloy_primitives::keccak256(json.as_bytes());
-        assert_eq!(hash.0, direct);
+        assert_eq!(hash, direct);
 
         let parsed: AppDataDoc = serde_json::from_str(&json).unwrap();
         let parsed_referrer = parsed.metadata.referrer.expect("referrer preserved");
@@ -910,7 +808,7 @@ mod tests {
             r#"{"appCode":"","metadata":{},"version":"1.6.0"}"#
         );
         let expected = b256!("3929e2c230dc41c0c053ff5f9211eb32def3a737b2bf36eb5b8862ea317fcd9e");
-        assert_eq!(doc.hash().0, expected);
+        assert_eq!(doc.hash(), expected);
     }
 
     /// `canonical_json` must emit non-ASCII characters as raw UTF-8
@@ -946,7 +844,7 @@ mod tests {
         // it against the bytes produced by the current path so any
         // serialiser flip (raw → escaped) trips this test.
         let direct = alloy_primitives::keccak256(json.as_bytes());
-        assert_eq!(doc.hash().0, direct);
+        assert_eq!(doc.hash(), direct);
 
         // Round-trip: parsing back through serde must reconstruct the
         // same appCode bytes.
@@ -1233,27 +1131,31 @@ mod tests {
     }
 
     /// Round-trip every byte position so any off-by-one in the base32 packer
-    /// or in the `to_hash` slice arithmetic shows up immediately.
+    /// or in the `app_data_hash_from_cid` recovery shows up immediately.
     #[test]
     fn cid_round_trip_default_and_walking_bytes() {
         let default = AppDataHash::default();
-        assert_eq!(default.to_cid().to_hash().unwrap(), default);
+        assert_eq!(
+            app_data_hash_from_cid(&app_data_cid(default)).unwrap(),
+            default
+        );
 
         for i in 0..32 {
             let mut bytes = [0u8; 32];
             bytes[i] = 0xff;
             let hash = AppDataHash::from(bytes);
-            let cid = hash.to_cid();
+            let cid = app_data_cid(hash);
+            let rendered = cid.to_string();
             assert_eq!(
-                cid.to_hash().unwrap(),
+                app_data_hash_from_cid(&cid).unwrap(),
                 hash,
                 "round-trip failed at byte {i}"
             );
             // Multibase tag is always `b`, body is always lower-case alpha
             // or `234567`, never any other character.
-            assert!(cid.as_str().starts_with('b'));
+            assert!(rendered.starts_with('b'));
             assert!(
-                cid.as_str()
+                rendered
                     .chars()
                     .skip(1)
                     .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c))
@@ -1268,11 +1170,10 @@ mod tests {
     /// what the orderbook pins under.
     #[test]
     fn cid_for_empty_app_data_hash_starts_with_bafkrw() {
-        let cid = EMPTY_APP_DATA_HASH.to_cid();
+        let cid = app_data_cid(EMPTY_APP_DATA_HASH).to_string();
         assert!(
-            cid.as_str().starts_with("bafkrw"),
-            "expected bafkrw prefix, got {}",
-            cid.as_str()
+            cid.starts_with("bafkrw"),
+            "expected bafkrw prefix, got {cid}"
         );
     }
 
@@ -1282,15 +1183,13 @@ mod tests {
     /// -b base16` and `-b base32` strings, both of which we lock here.
     #[test]
     fn cid_matches_services_known_good_vector() {
-        let hash = AppDataHash(b256!(
-            "8af4e8c9973577b08ac21d17d331aade86c11ebcc5124744d621ca8365ec9424"
-        ));
-        let cid = hash.to_cid();
+        let hash = b256!("8af4e8c9973577b08ac21d17d331aade86c11ebcc5124744d621ca8365ec9424");
+        let cid = app_data_cid(hash);
         assert_eq!(
-            cid.as_str(),
+            cid.to_string(),
             "bafkrwiek6tumtfzvo6yivqq5c7jtdkw6q3ar5pgfcjdujvrbzkbwl3eueq"
         );
-        assert_eq!(cid.to_hash().unwrap(), hash);
+        assert_eq!(app_data_hash_from_cid(&cid).unwrap(), hash);
     }
 
     /// Lock the canonical CID for the default-empty document
@@ -1298,22 +1197,21 @@ mod tests {
     /// over `01 55 1b 20 || EMPTY_APP_DATA_HASH`.
     #[test]
     fn cid_for_empty_doc_golden() {
-        let cid = EMPTY_APP_DATA_HASH.to_cid();
+        let cid = app_data_cid(EMPTY_APP_DATA_HASH);
         assert_eq!(
-            cid.as_str(),
+            cid.to_string(),
             "bafkrwifuru4pspvkbbadh7czoc7znzkzym6ezxah3ce2wafu2y7zledttu"
         );
     }
 
     #[test]
     fn cid_parse_rejects_missing_multibase_prefix() {
-        // Drop the leading `b`.
-        let cid =
-            AppDataCid("afkrwifuru4pspvkbbadh7czoc7znzkzym6ezxah3ce2wafu2y7zledttu".to_string());
-        assert_eq!(
-            cid.to_hash().unwrap_err(),
-            AppDataCidError::InvalidMultibase
-        );
+        // Drop the leading `b`. `cid::Cid::from_str` rejects via the
+        // upstream multibase decoder (no prefix => parse failure).
+        let err = "afkrwifuru4pspvkbbadh7czoc7znzkzym6ezxah3ce2wafu2y7zledttu"
+            .parse::<AppDataCid>()
+            .unwrap_err();
+        assert!(matches!(err, cid::Error::ParsingError), "got: {err:?}");
     }
 
     /// Round-trip the same `services` golden vector through the `f`
@@ -1322,39 +1220,31 @@ mod tests {
     /// accepts either prefix, so cow-rs must too.
     #[test]
     fn cid_parse_accepts_base16_multibase_prefix() {
-        let hash = AppDataHash(b256!(
-            "8af4e8c9973577b08ac21d17d331aade86c11ebcc5124744d621ca8365ec9424"
-        ));
-        let mut hex_body = String::with_capacity(2 * CID_BYTES_LEN);
+        let hash = b256!("8af4e8c9973577b08ac21d17d331aade86c11ebcc5124744d621ca8365ec9424");
+        let mut hex_body = String::with_capacity(72);
         hex_body.push_str("01551b20");
-        hex_body.push_str(&const_hex::encode(hash.0));
-        let cid = AppDataCid(format!("f{hex_body}"));
-        assert_eq!(cid.to_hash().unwrap(), hash);
+        hex_body.push_str(&const_hex::encode(hash));
+        let cid = format!("f{hex_body}").parse::<AppDataCid>().unwrap();
+        assert_eq!(app_data_hash_from_cid(&cid).unwrap(), hash);
     }
 
     #[test]
     fn cid_parse_rejects_invalid_base16_body() {
-        let cid = AppDataCid("f01551b20zzzz".to_string());
-        assert_eq!(
-            cid.to_hash().unwrap_err(),
-            AppDataCidError::InvalidMultibase
-        );
+        let err = "f01551b20zzzz".parse::<AppDataCid>().unwrap_err();
+        assert!(matches!(err, cid::Error::ParsingError), "got: {err:?}");
     }
 
     #[test]
     fn cid_parse_rejects_wrong_codec() {
-        // Build a CID where the codec byte is `0x70` (dag-pb) instead of
-        // raw. Keccak code stays at `0x1b`, length stays at `0x20`.
-        let mut bytes = [0u8; CID_BYTES_LEN];
-        bytes[0] = 0x01;
-        bytes[1] = 0x70; // dag-pb, not raw
-        bytes[2] = 0x1b;
-        bytes[3] = 0x20;
-        bytes[4..].copy_from_slice(EMPTY_APP_DATA_HASH.0.as_slice());
-        let cid = AppDataCid(multibase::encode(multibase::Base::Base32Lower, bytes));
-        assert_eq!(
-            cid.to_hash().unwrap_err(),
-            AppDataCidError::UnexpectedCodec(0x70)
+        // dag-pb (0x70) codec instead of raw (0x55). Build via the cid
+        // crate so the byte layout matches what a real CID parser sees.
+        let multihash =
+            Multihash::<32>::wrap(MULTIHASH_KECCAK_256, EMPTY_APP_DATA_HASH.as_slice()).unwrap();
+        let cid = AppDataCid::new_v1(0x70, multihash.resize().unwrap());
+        let err = app_data_hash_from_cid(&cid).unwrap_err();
+        assert!(
+            matches!(err, AppDataCidError::UnexpectedCodec(0x70)),
+            "got: {err:?}"
         );
     }
 
@@ -1362,74 +1252,74 @@ mod tests {
     fn cid_parse_rejects_wrong_multihash() {
         // sha2-256 (0x12) instead of keccak-256 (0x1b): this is the
         // distinct "legacy" CID family that cow-sdk's `appDataHexToCidLegacy`
-        // emits. We do **not** want to silently accept it as our CID since
+        // emits. We do not want to silently accept it as our CID since
         // its digest semantics are different.
-        let mut bytes = [0u8; CID_BYTES_LEN];
-        bytes[0] = 0x01;
-        bytes[1] = 0x55;
-        bytes[2] = 0x12; // sha2-256
-        bytes[3] = 0x20;
-        bytes[4..].copy_from_slice(EMPTY_APP_DATA_HASH.0.as_slice());
-        let cid = AppDataCid(multibase::encode(multibase::Base::Base32Lower, bytes));
-        assert_eq!(
-            cid.to_hash().unwrap_err(),
-            AppDataCidError::UnexpectedMultihashCode(0x12)
+        let multihash = Multihash::<32>::wrap(0x12, EMPTY_APP_DATA_HASH.as_slice()).unwrap();
+        let cid = AppDataCid::new_v1(CID_CODEC_RAW, multihash.resize().unwrap());
+        let err = app_data_hash_from_cid(&cid).unwrap_err();
+        assert!(
+            matches!(err, AppDataCidError::UnexpectedMultihashCode(0x12)),
+            "got: {err:?}"
         );
     }
 
     #[test]
-    fn cid_parse_rejects_wrong_length() {
-        // Truncate the base32 body so the decoded byte length is wrong.
-        let cid = AppDataCid("babcdefgh".to_string());
-        match cid.to_hash() {
-            Err(AppDataCidError::InvalidLength { expected, actual }) => {
-                assert_eq!(expected, CID_BYTES_LEN);
-                assert_ne!(actual, CID_BYTES_LEN);
-            }
-            other => panic!("expected InvalidLength, got {other:?}"),
-        }
+    fn cid_parse_rejects_truncated_body() {
+        // Body too short to even contain a valid CID header. The cid
+        // parser raises one of several syntactic errors depending on
+        // exactly where the truncation lands; all are acceptable here.
+        let err = "babcdefgh".parse::<AppDataCid>().unwrap_err();
+        assert!(
+            matches!(
+                err,
+                cid::Error::ParsingError
+                    | cid::Error::VarIntDecodeError
+                    | cid::Error::InputTooShort
+                    | cid::Error::InvalidExplicitCidV0
+                    | cid::Error::Io(_)
+            ),
+            "got: {err:?}"
+        );
     }
 
     #[test]
     fn cid_parse_rejects_wrong_version() {
-        // Version byte `0x00` (CIDv0 marker) is invalid in this raw form.
-        let mut bytes = [0u8; CID_BYTES_LEN];
-        bytes[0] = 0x00;
-        bytes[1] = 0x55;
-        bytes[2] = 0x1b;
-        bytes[3] = 0x20;
-        bytes[4..].copy_from_slice(EMPTY_APP_DATA_HASH.0.as_slice());
-        let cid = AppDataCid(multibase::encode(multibase::Base::Base32Lower, bytes));
-        assert_eq!(
-            cid.to_hash().unwrap_err(),
-            AppDataCidError::UnexpectedVersion(0x00)
+        // Version byte `0x00` is the CIDv0 marker. The cid crate rejects
+        // it in CIDv1-shaped input via `InvalidExplicitCidV0`.
+        let bytes = [
+            0x00, 0x55, 0x1b, 0x20, 0xb4, 0x8d, 0x38, 0xf9, 0x3e, 0xaa, 0x08, 0x40, 0x33, 0xfc,
+            0x59, 0x70, 0xbf, 0x96, 0xe5, 0x59, 0xc3, 0x3c, 0x4c, 0xdc, 0x07, 0xd8, 0x89, 0xab,
+            0x00, 0xb4, 0xd6, 0x3f, 0x95, 0x90, 0x73, 0x9d,
+        ];
+        let encoded = cid::multibase::encode(cid::multibase::Base::Base32Lower, bytes);
+        let err = encoded.parse::<AppDataCid>().unwrap_err();
+        assert!(
+            matches!(err, cid::Error::InvalidExplicitCidV0),
+            "got: {err:?}"
         );
     }
 
     #[test]
     fn cid_parse_rejects_wrong_digest_length() {
-        // Multihash length `0x10` (16 bytes) instead of `0x20` (32). Pad
-        // with the digest so the overall body length matches the constant.
-        let mut bytes = [0u8; CID_BYTES_LEN];
-        bytes[0] = 0x01;
-        bytes[1] = 0x55;
-        bytes[2] = 0x1b;
-        bytes[3] = 0x10; // 16, not 32
-        bytes[4..].copy_from_slice(EMPTY_APP_DATA_HASH.0.as_slice());
-        let cid = AppDataCid(multibase::encode(multibase::Base::Base32Lower, bytes));
-        assert_eq!(
-            cid.to_hash().unwrap_err(),
-            AppDataCidError::UnexpectedDigestLength(0x10)
+        // Multihash length 16 (0x10) instead of 32 (0x20).
+        let multihash =
+            Multihash::<32>::wrap(MULTIHASH_KECCAK_256, &EMPTY_APP_DATA_HASH.as_slice()[..16])
+                .unwrap();
+        let cid = AppDataCid::new_v1(CID_CODEC_RAW, multihash.resize().unwrap());
+        let err = app_data_hash_from_cid(&cid).unwrap_err();
+        assert!(
+            matches!(err, AppDataCidError::UnexpectedDigestLength(16)),
+            "got: {err:?}"
         );
     }
 
     #[test]
     fn cid_parse_rejects_invalid_base32_char() {
         // `8` is outside RFC 4648's lower-case 32-char alphabet.
-        let cid = AppDataCid("b8".to_string());
-        assert_eq!(
-            cid.to_hash().unwrap_err(),
-            AppDataCidError::InvalidMultibase
+        let err = "b8".parse::<AppDataCid>().unwrap_err();
+        assert!(
+            matches!(err, cid::Error::ParsingError | cid::Error::InputTooShort),
+            "got: {err:?}"
         );
     }
 }

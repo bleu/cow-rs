@@ -36,9 +36,9 @@ mod transport;
 use {
     alloy_primitives::{Address, B256, U256},
     cowprotocol::{
-        AppDataCid, AppDataDoc, AppDataHash, Chain, EMPTY_APP_DATA_HASH, EcdsaSignature,
-        EcdsaSigningScheme, OrderCancellation, OrderData, OrderUid, QuoteRequest, Signature,
-        SigningScheme, settlement_domain,
+        AppDataDoc, AppDataHash, Chain, EMPTY_APP_DATA_HASH, EcdsaSignature, EcdsaSigningScheme,
+        OrderCancellation, OrderData, OrderUid, QuoteRequest, Signature, SigningScheme,
+        app_data_cid, settlement_domain,
     },
     serde::{Deserialize, Serialize},
     wasm_bindgen::prelude::*,
@@ -483,8 +483,8 @@ pub fn app_data_hash_from_json(canonical_json: &str) -> Result<String, JsValue> 
 /// IPFS CIDv1 the orderbook pins for a given app-data digest.
 #[wasm_bindgen]
 pub fn app_data_cid_from_hash(hash_hex: &str) -> Result<String, JsValue> {
-    let hash = parse_b256(hash_hex).map(AppDataHash)?;
-    Ok(AppDataCid::from_hash(hash).to_string())
+    let hash: AppDataHash = parse_b256(hash_hex)?;
+    Ok(app_data_cid(hash).to_string())
 }
 
 /// 32-byte digest of `keccak256("{}")` — the empty app-data sentinel.
@@ -540,7 +540,7 @@ pub fn to_signed_order_data(
 ) -> Result<JsValue, JsValue> {
     let request: QuoteRequest = from_js(request)?;
     let response: cowprotocol::OrderQuoteResponse = from_js(response)?;
-    let app_data = parse_b256(app_data_hash_hex).map(AppDataHash)?;
+    let app_data: AppDataHash = parse_b256(app_data_hash_hex)?;
     let order_data = response
         .to_signed_order_data(&request, app_data)
         .map_err(|err| JsValue::from_str(&format!("to_signed_order_data failed: {err}")))?;

@@ -253,7 +253,7 @@ impl OrderCreation {
         // signature to bytes the orderbook never sees, while pinning a
         // different document under the same hash via `put_app_data`.
         let json_digest = alloy_primitives::keccak256(app_data_json.as_bytes());
-        if AppDataHash(json_digest) != order_data.app_data {
+        if json_digest != order_data.app_data {
             return Err(Error::OrderCreationInvalid {
                 field: "app_data",
                 reason: "JSON digest does not match signed app_data hash",
