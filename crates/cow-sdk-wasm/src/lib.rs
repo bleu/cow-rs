@@ -284,7 +284,7 @@ pub fn eip712_message_hash(domain_hex: &str, struct_hash_hex: &str) -> Result<St
     let struct_hash = parse_b256(struct_hash_hex)?;
     let separator = DomainSeparator(domain.0);
     let digest = hashed_eip712_message(&separator, &struct_hash);
-    Ok(format!("0x{}", const_hex::encode(digest)))
+    Ok(digest.to_string())
 }
 
 /// In-shim ECDSA signing. Returns the (r, s, v) packed signature plus
@@ -337,8 +337,8 @@ fn sign_with_scheme(
         .map_err(|err| JsValue::from_str(&format!("sign failed: {err}")))?;
     let payload = serde_json::json!({
         "signingScheme": scheme_to_str(scheme),
-        "r": format!("0x{}", const_hex::encode(ecdsa.r.0)),
-        "s": format!("0x{}", const_hex::encode(ecdsa.s.0)),
+        "r": ecdsa.r.to_string(),
+        "s": ecdsa.s.to_string(),
         "v": ecdsa.v,
         "owner": signer.address().to_string(),
     });
@@ -438,7 +438,8 @@ pub fn build_order_creation_eip1271(
     quote_id: Option<u64>,
 ) -> Result<JsValue, JsValue> {
     let order: OrderData = from_js(order_data)?;
-    let bytes = const_hex::decode(signature_hex.trim_start_matches("0x"))
+    let bytes: alloy_primitives::Bytes = signature_hex
+        .parse()
         .map_err(|err| JsValue::from_str(&format!("invalid signature hex: {err}")))?;
     let signature = Signature::from_bytes(SigningScheme::Eip1271, &bytes)
         .map_err(|err| JsValue::from_str(&format!("invalid eip1271 signature: {err}")))?;
@@ -476,13 +477,8 @@ pub fn app_data_hash_from_json(canonical_json: &str) -> Result<String, JsValue> 
 /// IPFS CIDv1 the orderbook pins for a given app-data digest.
 #[wasm_bindgen]
 pub fn app_data_cid_from_hash(hash_hex: &str) -> Result<String, JsValue> {
-    let bytes = const_hex::decode(hash_hex.trim_start_matches("0x"))
-        .map_err(|err| JsValue::from_str(&format!("invalid app-data hash hex: {err}")))?;
-    let array: [u8; 32] = bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| JsValue::from_str("app-data hash must be 32 bytes"))?;
-    Ok(AppDataCid::from_hash(AppDataHash::from(array)).to_string())
+    let hash = parse_b256(hash_hex).map(AppDataHash)?;
+    Ok(AppDataCid::from_hash(hash).to_string())
 }
 
 /// 32-byte digest of `keccak256("{}")` — the empty app-data sentinel.
