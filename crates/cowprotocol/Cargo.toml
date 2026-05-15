@@ -30,6 +30,7 @@ alloy-signer.workspace = true
 alloy-sol-types.workspace = true
 const-hex.workspace = true
 hex-literal.workspace = true
+multibase.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 serde_with.workspace = true

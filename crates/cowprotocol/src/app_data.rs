@@ -661,8 +661,9 @@ const CID_STRING_MAX_LEN: usize = 96;
 
 impl AppDataCid {
     /// CID for a 32-byte digest. Pure offline derivation: builds the
-    /// 36-byte CID `[0x01, 0x55, 0x1b, 0x20, ..hash]` and base32
-    /// -encodes with the `b` prefix.
+    /// 36-byte CID `[0x01, 0x55, 0x1b, 0x20, ..hash]` and routes it
+    /// through [`multibase::encode`] with the `b` (base32 lower-case)
+    /// prefix.
     pub fn from_hash(hash: AppDataHash) -> Self {
         let mut bytes = [0u8; CID_BYTES_LEN];
         bytes[0] = CID_V1;
@@ -670,11 +671,7 @@ impl AppDataCid {
         bytes[2] = MULTIHASH_KECCAK_256;
         bytes[3] = MULTIHASH_LEN_32;
         bytes[4..].copy_from_slice(hash.0.as_slice());
-
-        let mut out = String::with_capacity(1 + base32_encoded_len(CID_BYTES_LEN));
-        out.push('b');
-        base32_encode_into(&bytes, &mut out);
-        Self(out)
+        Self(multibase::encode(multibase::Base::Base32Lower, bytes))
     }
 
     /// Canonical `b...` string.
@@ -693,13 +690,14 @@ impl AppDataCid {
                 max: CID_STRING_MAX_LEN,
             });
         }
-        let bytes = match self.0.as_bytes().first() {
-            Some(b'b') => base32_decode(&self.0[1..])?,
-            Some(b'f') => {
-                const_hex::decode(&self.0[1..]).map_err(|_| AppDataCidError::InvalidBase16Body)?
-            }
-            _ => return Err(AppDataCidError::MissingMultibasePrefix),
-        };
+        let (base, bytes) =
+            multibase::decode(&self.0).map_err(|_| AppDataCidError::InvalidMultibase)?;
+        // Only the two lower-case forms `b` / `f` round-trip with the
+        // orderbook (cow-rs emits the former, cow-sdk the latter).
+        match base {
+            multibase::Base::Base32Lower | multibase::Base::Base16Lower => {}
+            _ => return Err(AppDataCidError::InvalidMultibase),
+        }
         if bytes.len() != CID_BYTES_LEN {
             return Err(AppDataCidError::InvalidLength {
                 expected: CID_BYTES_LEN,
@@ -740,15 +738,10 @@ impl AsRef<str> for AppDataCid {
 /// [`AppDataHash`].
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
 pub enum AppDataCidError {
-    /// The CID string was not multibase base32 (`b`) or base16 (`f`).
-    #[error("expected multibase `b` (base32) or `f` (base16) prefix")]
-    MissingMultibasePrefix,
-    /// A character outside the RFC 4648 lower-case alphabet was found.
-    #[error("invalid base32 character {0:?}")]
-    InvalidBase32Char(char),
-    /// The base16-encoded body contained a character outside `[0-9a-f]`.
-    #[error("invalid base16 (hex) body")]
-    InvalidBase16Body,
+    /// The CID was not lower-case base32 (`b`) or base16 (`f`) multibase,
+    /// or the body could not be decoded by [`multibase::decode`].
+    #[error("expected multibase `b` (base32) or `f` (base16) prefix with a valid body")]
+    InvalidMultibase,
     /// The decoded CID body had the wrong length.
     #[error("expected {expected}-byte CID body, got {actual}")]
     InvalidLength {
@@ -779,84 +772,6 @@ pub enum AppDataCidError {
         /// Maximum accepted length.
         max: usize,
     },
-}
-
-/// RFC 4648 base32 lower-case alphabet, no padding.
-const BASE32_ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
-
-/// Output length of base32 encoding without padding.
-const fn base32_encoded_len(input_len: usize) -> usize {
-    input_len.div_ceil(5) * 8
-}
-
-/// Encode `input` as RFC 4648 base32 lower-case (no padding) into `out`.
-fn base32_encode_into(input: &[u8], out: &mut String) {
-    // Walk 5-byte groups, pack into 40 bits, slice off the high 5-bit chunks.
-    // The final partial group emits only the bytes its bits actually cover,
-    // which matches "no padding" by simply stopping early.
-    let mut chunks = input.chunks_exact(5);
-    for chunk in chunks.by_ref() {
-        let buf: u64 = (u64::from(chunk[0]) << 32)
-            | (u64::from(chunk[1]) << 24)
-            | (u64::from(chunk[2]) << 16)
-            | (u64::from(chunk[3]) << 8)
-            | u64::from(chunk[4]);
-        for shift in (0..8).rev() {
-            let idx = ((buf >> (shift * 5)) & 0x1f) as usize;
-            out.push(BASE32_ALPHABET[idx] as char);
-        }
-    }
-    let tail = chunks.remainder();
-    if !tail.is_empty() {
-        let mut buf: u64 = 0;
-        for (i, b) in tail.iter().enumerate() {
-            buf |= u64::from(*b) << ((4 - i) * 8);
-        }
-        // Bytes per remainder length: 1->2, 2->4, 3->5, 4->7.
-        let out_chars = match tail.len() {
-            1 => 2,
-            2 => 4,
-            3 => 5,
-            4 => 7,
-            _ => unreachable!("chunks_exact remainder is < 5"),
-        };
-        for i in 0..out_chars {
-            let idx = ((buf >> ((7 - i) * 5)) & 0x1f) as usize;
-            out.push(BASE32_ALPHABET[idx] as char);
-        }
-    }
-}
-
-/// Decode an RFC 4648 base32 lower-case string (no padding).
-///
-/// Accepts the encoding produced by [`base32_encode_into`] and rejects any
-/// character outside the lower-case alphabet. Upper-case input is rejected
-/// to keep the round-trip canonical.
-fn base32_decode(input: &str) -> Result<Vec<u8>, AppDataCidError> {
-    let bytes = input.as_bytes();
-    // Strip any trailing `=` padding tolerantly: the canonical form has none,
-    // but accepting it costs nothing and survives copy-paste of padded CIDs.
-    let len = bytes.iter().rposition(|b| *b != b'=').map_or(0, |p| p + 1);
-    let trimmed = &bytes[..len];
-
-    let mut out = Vec::with_capacity(trimmed.len() * 5 / 8);
-    let mut buf: u64 = 0;
-    let mut bits: u32 = 0;
-    for &b in trimmed {
-        let value = match b {
-            b'a'..=b'z' => b - b'a',
-            b'2'..=b'7' => b - b'2' + 26,
-            _ => return Err(AppDataCidError::InvalidBase32Char(b as char)),
-        };
-        buf = (buf << 5) | u64::from(value);
-        bits += 5;
-        if bits >= 8 {
-            bits -= 8;
-            let byte = ((buf >> bits) & 0xff) as u8;
-            out.push(byte);
-        }
-    }
-    Ok(out)
 }
 
 #[cfg(test)]
@@ -1397,7 +1312,7 @@ mod tests {
             AppDataCid("afkrwifuru4pspvkbbadh7czoc7znzkzym6ezxah3ce2wafu2y7zledttu".to_string());
         assert_eq!(
             cid.to_hash().unwrap_err(),
-            AppDataCidError::MissingMultibasePrefix
+            AppDataCidError::InvalidMultibase
         );
     }
 
@@ -1422,7 +1337,7 @@ mod tests {
         let cid = AppDataCid("f01551b20zzzz".to_string());
         assert_eq!(
             cid.to_hash().unwrap_err(),
-            AppDataCidError::InvalidBase16Body
+            AppDataCidError::InvalidMultibase
         );
     }
 
@@ -1436,9 +1351,7 @@ mod tests {
         bytes[2] = 0x1b;
         bytes[3] = 0x20;
         bytes[4..].copy_from_slice(EMPTY_APP_DATA_HASH.0.as_slice());
-        let mut s = String::from("b");
-        base32_encode_into(&bytes, &mut s);
-        let cid = AppDataCid(s);
+        let cid = AppDataCid(multibase::encode(multibase::Base::Base32Lower, bytes));
         assert_eq!(
             cid.to_hash().unwrap_err(),
             AppDataCidError::UnexpectedCodec(0x70)
@@ -1457,9 +1370,7 @@ mod tests {
         bytes[2] = 0x12; // sha2-256
         bytes[3] = 0x20;
         bytes[4..].copy_from_slice(EMPTY_APP_DATA_HASH.0.as_slice());
-        let mut s = String::from("b");
-        base32_encode_into(&bytes, &mut s);
-        let cid = AppDataCid(s);
+        let cid = AppDataCid(multibase::encode(multibase::Base::Base32Lower, bytes));
         assert_eq!(
             cid.to_hash().unwrap_err(),
             AppDataCidError::UnexpectedMultihashCode(0x12)
@@ -1488,9 +1399,7 @@ mod tests {
         bytes[2] = 0x1b;
         bytes[3] = 0x20;
         bytes[4..].copy_from_slice(EMPTY_APP_DATA_HASH.0.as_slice());
-        let mut s = String::from("b");
-        base32_encode_into(&bytes, &mut s);
-        let cid = AppDataCid(s);
+        let cid = AppDataCid(multibase::encode(multibase::Base::Base32Lower, bytes));
         assert_eq!(
             cid.to_hash().unwrap_err(),
             AppDataCidError::UnexpectedVersion(0x00)
@@ -1507,9 +1416,7 @@ mod tests {
         bytes[2] = 0x1b;
         bytes[3] = 0x10; // 16, not 32
         bytes[4..].copy_from_slice(EMPTY_APP_DATA_HASH.0.as_slice());
-        let mut s = String::from("b");
-        base32_encode_into(&bytes, &mut s);
-        let cid = AppDataCid(s);
+        let cid = AppDataCid(multibase::encode(multibase::Base::Base32Lower, bytes));
         assert_eq!(
             cid.to_hash().unwrap_err(),
             AppDataCidError::UnexpectedDigestLength(0x10)
@@ -1522,30 +1429,7 @@ mod tests {
         let cid = AppDataCid("b8".to_string());
         assert_eq!(
             cid.to_hash().unwrap_err(),
-            AppDataCidError::InvalidBase32Char('8')
+            AppDataCidError::InvalidMultibase
         );
-    }
-
-    /// Cover base32 encoding for every remainder length so a fix to one
-    /// branch does not silently corrupt another. Vectors are RFC 4648
-    /// §10 ("Test vectors"), lower-cased and stripped of padding.
-    #[test]
-    fn base32_encode_rfc4648_vectors() {
-        let cases: &[(&[u8], &str)] = &[
-            (b"", ""),
-            (b"f", "my"),
-            (b"fo", "mzxq"),
-            (b"foo", "mzxw6"),
-            (b"foob", "mzxw6yq"),
-            (b"fooba", "mzxw6ytb"),
-            (b"foobar", "mzxw6ytboi"),
-        ];
-        for (input, expected) in cases {
-            let mut out = String::new();
-            base32_encode_into(input, &mut out);
-            assert_eq!(&out, expected, "encode mismatch for {input:?}");
-            let decoded = base32_decode(expected).unwrap();
-            assert_eq!(&decoded, input, "decode mismatch for {expected:?}");
-        }
     }
 }
