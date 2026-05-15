@@ -10,7 +10,7 @@
 //!
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/model/src/signature.rs
 
-use alloy_primitives::{Address, B256, Signature as PrimSignature};
+use alloy_primitives::{Address, B256, Bytes, FixedBytes, Signature as PrimSignature};
 use alloy_signer::{SignerSync, k256::ecdsa::Error as K256Error};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::fmt::{self, Debug, Formatter};
@@ -83,7 +83,7 @@ impl Debug for Signature {
             Self::PreSign => f.write_str("PreSign"),
             other => {
                 let scheme = format!("{:?}", other.scheme());
-                let bytes = const_hex::encode_prefixed(other.to_bytes());
+                let bytes = Bytes::from(other.to_bytes()).to_string();
                 f.debug_tuple(&scheme).field(&bytes).finish()
             }
         }
@@ -128,16 +128,10 @@ impl Signature {
     pub fn from_bytes(scheme: SigningScheme, bytes: &[u8]) -> Result<Self, SignatureError> {
         match scheme {
             SigningScheme::Eip712 => {
-                let bytes: [u8; 65] = bytes
-                    .try_into()
-                    .map_err(|_| SignatureError::Length(bytes.len()))?;
-                Ok(EcdsaSignature::from_bytes(&bytes)?.to_signature(EcdsaSigningScheme::Eip712))
+                Ok(EcdsaSignature::from_bytes(bytes)?.to_signature(EcdsaSigningScheme::Eip712))
             }
             SigningScheme::EthSign => {
-                let bytes: [u8; 65] = bytes
-                    .try_into()
-                    .map_err(|_| SignatureError::Length(bytes.len()))?;
-                Ok(EcdsaSignature::from_bytes(&bytes)?.to_signature(EcdsaSigningScheme::EthSign))
+                Ok(EcdsaSignature::from_bytes(bytes)?.to_signature(EcdsaSigningScheme::EthSign))
             }
             SigningScheme::Eip1271 => {
                 if bytes.len() > EIP1271_MAX_LEN {
@@ -222,7 +216,7 @@ impl Default for EcdsaSignature {
 impl Debug for EcdsaSignature {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("EcdsaSignature")
-            .field("bytes", &const_hex::encode_prefixed(self.to_bytes()))
+            .field("bytes", &FixedBytes::from(self.to_bytes()).to_string())
             .finish()
     }
 }
@@ -247,7 +241,10 @@ impl EcdsaSignature {
 
     /// Decode an `r || s || v` (65-byte) payload, normalising `v` to `27`
     /// or `28`.
-    pub fn from_bytes(bytes: &[u8; 65]) -> Result<Self, SignatureError> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, SignatureError> {
+        if bytes.len() != 65 {
+            return Err(SignatureError::Length(bytes.len()));
+        }
         let v = bytes[64];
         let normalised_v = match v {
             0 | 27 => 27,
@@ -307,70 +304,15 @@ fn hashed_signing_message(
 
 // --- serde --------------------------------------------------------------
 
+/// Serde-only wire shape: `{ signingScheme, signature: "0x..." }`. The
+/// `signature` payload reuses `alloy_primitives::Bytes`, whose serde
+/// emits / accepts `0x`-prefixed hex; the EIP-1271 length cap is
+/// enforced post-decode by [`Signature::from_bytes`].
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JsonSignature {
     signing_scheme: SigningScheme,
-    signature: HexBytes,
-}
-
-#[derive(Default)]
-struct HexBytes(Vec<u8>);
-
-impl Serialize for HexBytes {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&const_hex::encode_prefixed(&self.0))
-    }
-}
-
-impl<'de> Deserialize<'de> for HexBytes {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        /// Largest hex string this deserialiser will accept: the `0x`
-        /// prefix plus two characters per byte of an EIP-1271 payload
-        /// capped at [`EIP1271_MAX_LEN`]. The check runs before
-        /// `const_hex::decode` so a hostile orderbook cannot force a
-        /// multi-megabyte `Vec<u8>` allocation in advance of the
-        /// post-decode length check inside [`Signature::from_bytes`].
-        const MAX_HEX_LEN: usize = 2 + EIP1271_MAX_LEN * 2;
-
-        struct Visitor;
-        impl de::Visitor<'_> for Visitor {
-            type Value = HexBytes;
-
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(
-                    f,
-                    "an 0x-prefixed hex string of at most {MAX_HEX_LEN} characters"
-                )
-            }
-
-            fn visit_str<E>(self, s: &str) -> Result<HexBytes, E>
-            where
-                E: de::Error,
-            {
-                if s.len() > MAX_HEX_LEN {
-                    return Err(de::Error::custom(format!(
-                        "signature hex exceeds EIP-1271 cap: {} > {MAX_HEX_LEN}",
-                        s.len()
-                    )));
-                }
-                let hex_str = s
-                    .strip_prefix("0x")
-                    .ok_or_else(|| de::Error::custom("missing '0x' prefix"))?;
-                const_hex::decode(hex_str)
-                    .map(HexBytes)
-                    .map_err(de::Error::custom)
-            }
-        }
-
-        deserializer.deserialize_str(Visitor)
-    }
+    signature: Bytes,
 }
 
 impl Serialize for Signature {
@@ -380,7 +322,7 @@ impl Serialize for Signature {
     {
         JsonSignature {
             signing_scheme: self.scheme(),
-            signature: HexBytes(self.to_bytes()),
+            signature: Bytes::from(self.to_bytes()),
         }
         .serialize(serializer)
     }
@@ -392,7 +334,7 @@ impl<'de> Deserialize<'de> for Signature {
         D: Deserializer<'de>,
     {
         let json = JsonSignature::deserialize(deserializer)?;
-        Self::from_bytes(json.signing_scheme, &json.signature.0).map_err(de::Error::custom)
+        Self::from_bytes(json.signing_scheme, &json.signature).map_err(de::Error::custom)
     }
 }
 
@@ -401,7 +343,7 @@ impl Serialize for EcdsaSignature {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&const_hex::encode_prefixed(self.to_bytes()))
+        FixedBytes::from(self.to_bytes()).serialize(serializer)
     }
 }
 
@@ -410,27 +352,8 @@ impl<'de> Deserialize<'de> for EcdsaSignature {
     where
         D: Deserializer<'de>,
     {
-        struct Visitor;
-        impl de::Visitor<'_> for Visitor {
-            type Value = EcdsaSignature;
-
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("an 0x-prefixed 65-byte ecdsa signature (r||s||v)")
-            }
-
-            fn visit_str<E>(self, s: &str) -> Result<EcdsaSignature, E>
-            where
-                E: de::Error,
-            {
-                let s = s
-                    .strip_prefix("0x")
-                    .ok_or_else(|| de::Error::custom("missing 0x prefix"))?;
-                let mut bytes = [0u8; 65];
-                const_hex::decode_to_slice(s, &mut bytes).map_err(de::Error::custom)?;
-                EcdsaSignature::from_bytes(&bytes).map_err(de::Error::custom)
-            }
-        }
-        deserializer.deserialize_str(Visitor)
+        let bytes = FixedBytes::<65>::deserialize(deserializer)?;
+        Self::from_bytes(bytes.as_slice()).map_err(de::Error::custom)
     }
 }
 
@@ -473,23 +396,22 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_rejects_oversize_hex_before_decoding() {
-        // One byte over the EIP-1271 cap, expressed as hex. The deserialiser
-        // must refuse this before `const_hex::decode` allocates the decoded
-        // `Vec<u8>`; otherwise a hostile orderbook could force a multi-MB
-        // allocation per response. `EIP1271_MAX_LEN + 1` bytes encodes to
-        // `2 + (EIP1271_MAX_LEN + 1) * 2` hex characters.
+    fn deserialize_rejects_oversize_eip1271_payload() {
+        // One byte over the EIP-1271 cap, expressed as hex. The
+        // post-decode chokepoint in `Signature::from_bytes` must reject
+        // it, surfaced through `serde_json::from_value` as a custom
+        // error referencing the cap.
         let oversize_hex = format!("0x{}", "00".repeat(EIP1271_MAX_LEN + 1));
         let body = json!({
             "signingScheme": "eip1271",
             "signature": oversize_hex,
         });
         let err = serde_json::from_value::<Signature>(body)
-            .expect_err("oversize signature hex must be rejected on deserialise");
+            .expect_err("oversize signature payload must be rejected on deserialise");
         let msg = err.to_string();
         assert!(
-            msg.contains("EIP-1271 cap"),
-            "error should reference the pre-decode cap, got: {msg}"
+            msg.contains("eip1271 signature payload too long"),
+            "error should reference the EIP-1271 length cap, got: {msg}"
         );
 
         // The same payload encoded one byte under the cap still decodes
