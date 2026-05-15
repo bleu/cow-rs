@@ -130,15 +130,15 @@ fn parse_scheme(value: &str) -> Result<EcdsaSigningScheme, JsValue> {
 /// Build an `api/v1/...` URL against the given chain's orderbook base.
 /// Used by every networked endpoint below. Replaces the prior
 /// `OrderBookApi::new(...)` path so the wasm output does not need to
-/// link reqwest.
+/// link reqwest. Delegates path resolution to [`url::Url::join`];
+/// [`Chain::orderbook_base_url`] guarantees the trailing slash that
+/// `join` needs to append, rather than replace, the last segment.
 fn endpoint(chain: Chain, path: &str) -> String {
-    let base = chain.orderbook_base_url();
-    let base = base.as_str();
-    if base.ends_with('/') {
-        format!("{base}{path}")
-    } else {
-        format!("{base}/{path}")
-    }
+    chain
+        .orderbook_base_url()
+        .join(path)
+        .expect("orderbook base url + relative path resolves cleanly")
+        .to_string()
 }
 
 // ===== Pure-compute helpers ============================================

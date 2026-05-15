@@ -86,17 +86,22 @@ impl Chain {
         GPV2_VAULT_RELAYER
     }
 
-    /// Production orderbook base URL, e.g. `https://api.cow.fi/mainnet`.
+    /// Production orderbook base URL, e.g. `https://api.cow.fi/mainnet/`.
+    /// The trailing slash is load-bearing: callers join relative
+    /// `api/v1/...` paths with [`url::Url::join`], which treats the
+    /// last segment as a "file" and replaces it unless the base has a
+    /// trailing slash.
     pub fn orderbook_base_url(self) -> url::Url {
         // `Url::parse` is fallible only on user-supplied input; the strings
         // here are constants and are validated by the test below.
-        url::Url::parse(&format!("https://api.cow.fi/{}", self.orderbook_slug()))
+        url::Url::parse(&format!("https://api.cow.fi/{}/", self.orderbook_slug()))
             .expect("hard-coded orderbook URL")
     }
 
     /// Staging ("barn") orderbook base URL, e.g.
-    /// `https://barn.api.cow.fi/mainnet`. Returns `None` for chains
-    /// that do not have a published barn deployment.
+    /// `https://barn.api.cow.fi/mainnet/`. Returns `None` for chains
+    /// that do not have a published barn deployment. Trailing slash
+    /// rationale matches [`Self::orderbook_base_url`].
     ///
     /// Barn is the pre-production environment the CoW team runs
     /// alongside production. Integrators wire their staging stack
@@ -107,7 +112,7 @@ impl Chain {
         }
         Some(
             url::Url::parse(&format!(
-                "https://barn.api.cow.fi/{}",
+                "https://barn.api.cow.fi/{}/",
                 self.orderbook_slug()
             ))
             .expect("hard-coded barn URL"),
