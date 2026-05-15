@@ -42,8 +42,8 @@ use {
     alloy_primitives::{Address, U256, address},
     alloy_signer_local::PrivateKeySigner,
     cowprotocol::{
-        Chain, DomainSeparator, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON, EcdsaSigningScheme,
-        GPV2_SETTLEMENT, OrderBookApi, OrderCreation, QuoteRequest,
+        Chain, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON, EcdsaSigningScheme, GPV2_SETTLEMENT,
+        OrderBookApi, OrderCreation, QuoteRequest, settlement_domain,
     },
     std::str::FromStr,
 };
@@ -94,7 +94,7 @@ async fn main() -> cowprotocol::Result<()> {
     let order_data = quote.to_signed_order_data(&request, EMPTY_APP_DATA_HASH)?;
 
     // Step 3: sign under the Sepolia GPv2Settlement domain.
-    let domain = DomainSeparator::new(Chain::Sepolia.id(), GPV2_SETTLEMENT);
+    let domain = settlement_domain(Chain::Sepolia.id(), GPV2_SETTLEMENT);
     let signature = order_data.sign(EcdsaSigningScheme::Eip712, &domain, &signer)?;
 
     // Step 4: assemble the submission body and POST it.

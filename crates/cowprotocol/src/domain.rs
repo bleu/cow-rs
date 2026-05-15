@@ -1,72 +1,44 @@
 //! EIP-712 domain separator for CoW Protocol orders.
 //!
 //! The settlement contract identifies itself with the EIP-712 domain
-//! `name = "Gnosis Protocol"`, `version = "v2"`. Together with the
-//! deployment's `chainId` and `verifyingContract` address this yields a
-//! 32-byte separator that prefixes every signed order hash.
+//! `name = "Gnosis Protocol"`, `version = "v2"`. Combined with the
+//! deployment's `chainId` and `verifyingContract` address it scopes
+//! every signed order hash to a specific chain.
 //!
-//! Adapted from [`cowprotocol/services`] (MIT OR Apache-2.0).
-//!
-//! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/model/src/lib.rs
+//! [`DomainSeparator`] is a type alias for
+//! [`alloy_sol_types::Eip712Domain`]; the typed-data envelope is
+//! supplied by [`alloy_sol_types::SolStruct::eip712_signing_hash`] and
+//! the EIP-191 personal-sign wrap by
+//! [`alloy_primitives::eip191_hash_message`], so there are no bespoke
+//! `keccak256(0x19 0x01 || ...)` or `\x19Ethereum Signed Message:\n32`
+//! helpers in this crate.
 
-use alloy_primitives::{Address, B256, U256, eip191_hash_message, keccak256};
+use alloy_primitives::{Address, U256};
 use alloy_sol_types::Eip712Domain;
 
-/// EIP-712 domain separator: 32 bytes that scope a struct hash to a specific
-/// chain and settlement contract.
-///
-/// Newtype over [`B256`]: inherits its `Debug` / `Display` / `FromStr`
-/// behaviour (`0x`-prefixed lower-case hex).
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct DomainSeparator(pub B256);
+/// EIP-712 domain for the CoW Protocol settlement contract. Re-exported
+/// as a type alias so callers using `cowprotocol::DomainSeparator` do
+/// not need to import the underlying alloy type, while getting all of
+/// `Eip712Domain`'s `Debug`, `Display`, `Eq`, `Hash`, `Serialize`,
+/// `Deserialize`, and `separator()` derivations for free.
+pub type DomainSeparator = Eip712Domain;
 
-impl DomainSeparator {
-    /// Build the separator for the CoW Protocol settlement contract on a
-    /// given chain.
-    ///
-    /// The Solidity domain string is `"Gnosis Protocol" v2`. The
-    /// `contract_address` is the deployed `GPv2Settlement` for that chain.
-    pub fn new(chain_id: u64, contract_address: Address) -> Self {
-        let domain = Eip712Domain {
-            name: Some("Gnosis Protocol".into()),
-            version: Some("v2".into()),
-            chain_id: Some(U256::from(chain_id)),
-            verifying_contract: Some(contract_address),
-            salt: None,
-        };
-
-        Self(domain.separator())
+/// Build the EIP-712 domain for the `GPv2Settlement` deployment on a
+/// given chain. The Solidity domain string is `"Gnosis Protocol" v2`;
+/// `contract_address` is the deployed `GPv2Settlement` for that chain.
+pub fn settlement_domain(chain_id: u64, contract_address: Address) -> DomainSeparator {
+    Eip712Domain {
+        name: Some("Gnosis Protocol".into()),
+        version: Some("v2".into()),
+        chain_id: Some(U256::from(chain_id)),
+        verifying_contract: Some(contract_address),
+        salt: None,
     }
-}
-
-/// Compute the EIP-712 typed-data hash: `keccak256(0x19 0x01 || domain || struct_hash)`.
-///
-/// This is the value that is signed by the order owner: see
-/// [EIP-712 §`eth_signTypedData`](https://eips.ethereum.org/EIPS/eip-712#eth_signTypedData).
-pub fn hashed_eip712_message(domain_separator: &DomainSeparator, struct_hash: &[u8; 32]) -> B256 {
-    let mut message = [0u8; 66];
-    message[0..2].copy_from_slice(&[0x19, 0x01]);
-    message[2..34].copy_from_slice(domain_separator.0.as_slice());
-    message[34..66].copy_from_slice(struct_hash);
-    keccak256(message)
-}
-
-/// Compute the EIP-191 personal-sign wrapping over the EIP-712 typed-data
-/// hash: `keccak256("\x19Ethereum Signed Message:\n32" || hashed_eip712_message)`.
-///
-/// This is the message wallets sign when the owner uses the
-/// [`SigningScheme::EthSign`] flow. Delegates the envelope to
-/// [`alloy_primitives::eip191_hash_message`].
-///
-/// [`SigningScheme::EthSign`]: crate::signing_scheme::SigningScheme::EthSign
-pub fn hashed_ethsign_message(domain_separator: &DomainSeparator, struct_hash: &[u8; 32]) -> B256 {
-    eip191_hash_message(hashed_eip712_message(domain_separator, struct_hash))
 }
 
 #[cfg(test)]
 mod tests {
     use alloy_primitives::b256;
-    use std::str::FromStr;
 
     use super::*;
     use crate::contracts::GPV2_SETTLEMENT;
@@ -78,19 +50,9 @@ mod tests {
         // https://sepolia.etherscan.io/address/0x9008d19f58aabd9ed0d60971565aa8510560ab41
         let chain_id: u64 = 11_155_111;
 
-        let computed = DomainSeparator::new(chain_id, GPV2_SETTLEMENT);
-        let expected = DomainSeparator(b256!(
-            "daee378bd0eb30ddf479272accf91761e697bc00e067a268f95f1d2732ed230b"
-        ));
+        let domain = settlement_domain(chain_id, GPV2_SETTLEMENT);
+        let expected = b256!("daee378bd0eb30ddf479272accf91761e697bc00e067a268f95f1d2732ed230b");
 
-        assert_eq!(computed, expected);
-    }
-
-    #[test]
-    fn domain_separator_from_str_round_trips() {
-        let body = "9d7e07ef92761aa9453ae5ff25083a2b19764131b15295d3c7e89f1f1b8c67d9";
-        let prefixed = format!("0x{body}");
-        let parsed = B256::from_str(&prefixed).map(DomainSeparator).unwrap();
-        assert_eq!(format!("{:?}", parsed.0), prefixed);
+        assert_eq!(domain.separator(), expected);
     }
 }

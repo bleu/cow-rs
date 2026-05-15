@@ -199,7 +199,7 @@ async fn cancel_orders_sends_signed_collection_and_accepts_200() {
     let signer =
         alloy_signer_local::PrivateKeySigner::from_bytes(&U256::from(1u64).to_be_bytes().into())
             .unwrap();
-    let domain = cowprotocol::DomainSeparator::new(
+    let domain = cowprotocol::settlement_domain(
         Chain::Mainnet.id(),
         address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
     );
@@ -233,7 +233,7 @@ async fn cancel_order_puts_uid_in_path_and_omits_it_from_body() {
     let signer =
         alloy_signer_local::PrivateKeySigner::from_bytes(&U256::from(1u64).to_be_bytes().into())
             .unwrap();
-    let domain = cowprotocol::DomainSeparator::new(
+    let domain = cowprotocol::settlement_domain(
         Chain::Mainnet.id(),
         address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
     );

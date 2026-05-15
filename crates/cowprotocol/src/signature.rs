@@ -10,12 +10,15 @@
 //!
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/model/src/signature.rs
 
-use alloy_primitives::{Address, B256, Bytes, FixedBytes, Signature as PrimSignature};
+use alloy_primitives::{
+    Address, B256, Bytes, FixedBytes, Signature as PrimSignature, eip191_hash_message,
+};
 use alloy_signer::{SignerSync, k256::ecdsa::Error as K256Error};
+use alloy_sol_types::SolStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::fmt::{self, Debug, Formatter};
 
-use crate::domain::{DomainSeparator, hashed_eip712_message, hashed_ethsign_message};
+use crate::domain::DomainSeparator;
 use crate::signing_scheme::{EcdsaSigningScheme, SigningScheme};
 
 /// Maximum accepted EIP-1271 payload, in bytes. Matches the
@@ -156,21 +159,21 @@ impl Signature {
     /// Returns `Ok(None)` for [`Signature::Eip1271`] and
     /// [`Signature::PreSign`]: those schemes carry the owner explicitly,
     /// they do not derive it.
-    pub fn recover(
+    pub fn recover<T: SolStruct>(
         &self,
-        domain_separator: &DomainSeparator,
-        struct_hash: &[u8; 32],
+        domain: &DomainSeparator,
+        payload: &T,
     ) -> Result<Option<Recovered>, SignatureError> {
         match self {
             Self::Eip712(s) => Ok(Some(s.recover(
                 EcdsaSigningScheme::Eip712,
-                domain_separator,
-                struct_hash,
+                domain,
+                payload,
             )?)),
             Self::EthSign(s) => Ok(Some(s.recover(
                 EcdsaSigningScheme::EthSign,
-                domain_separator,
-                struct_hash,
+                domain,
+                payload,
             )?)),
             Self::Eip1271(_) | Self::PreSign => Ok(None),
         }
@@ -262,27 +265,28 @@ impl EcdsaSignature {
     ///
     /// `signing_scheme` determines whether the EIP-712 typed-data hash or
     /// the EthSign-wrapped variant is used as the recovery message.
-    pub fn recover(
+    pub fn recover<T: SolStruct>(
         &self,
         signing_scheme: EcdsaSigningScheme,
-        domain_separator: &DomainSeparator,
-        struct_hash: &[u8; 32],
+        domain: &DomainSeparator,
+        payload: &T,
     ) -> Result<Recovered, SignatureError> {
-        let message = hashed_signing_message(signing_scheme, domain_separator, struct_hash);
+        let message = signing_message(signing_scheme, domain, payload);
         let signature = PrimSignature::from_raw(&self.to_bytes())?;
         let signer = signature.recover_address_from_prehash(&message)?;
         Ok(Recovered { message, signer })
     }
 
-    /// Sign the order's `struct_hash` with a `SignerSync`-implementing
-    /// signer (e.g. `alloy_signer_local::PrivateKeySigner`).
-    pub fn sign<S: SignerSync>(
+    /// Sign an EIP-712 [`SolStruct`] payload with a
+    /// `SignerSync`-implementing signer (e.g.
+    /// `alloy_signer_local::PrivateKeySigner`).
+    pub fn sign<T: SolStruct, S: SignerSync>(
         signing_scheme: EcdsaSigningScheme,
-        domain_separator: &DomainSeparator,
-        struct_hash: &[u8; 32],
+        domain: &DomainSeparator,
+        payload: &T,
         signer: &S,
     ) -> Result<Self, SignatureError> {
-        let message = hashed_signing_message(signing_scheme, domain_separator, struct_hash);
+        let message = signing_message(signing_scheme, domain, payload);
         let raw = signer.sign_hash_sync(&message).map_err(|e| match e {
             alloy_signer::Error::Ecdsa(k) => SignatureError::Signer(k),
             other => SignatureError::SignerOther(other.to_string()),
@@ -291,14 +295,20 @@ impl EcdsaSignature {
     }
 }
 
-fn hashed_signing_message(
+/// Compute the message bytes the owner actually signs for the given
+/// scheme. `Eip712` returns the typed-data hash supplied directly by
+/// [`SolStruct::eip712_signing_hash`]; `EthSign` wraps that hash in the
+/// EIP-191 personal-sign envelope via
+/// [`alloy_primitives::eip191_hash_message`].
+fn signing_message<T: SolStruct>(
     signing_scheme: EcdsaSigningScheme,
-    domain_separator: &DomainSeparator,
-    struct_hash: &[u8; 32],
+    domain: &DomainSeparator,
+    payload: &T,
 ) -> B256 {
+    let eip712 = payload.eip712_signing_hash(domain);
     match signing_scheme {
-        EcdsaSigningScheme::Eip712 => hashed_eip712_message(domain_separator, struct_hash),
-        EcdsaSigningScheme::EthSign => hashed_ethsign_message(domain_separator, struct_hash),
+        EcdsaSigningScheme::Eip712 => eip712,
+        EcdsaSigningScheme::EthSign => eip191_hash_message(eip712),
     }
 }
 
@@ -359,7 +369,7 @@ impl<'de> Deserialize<'de> for EcdsaSignature {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{U256, b256, hex};
+    use alloy_primitives::{U256, hex};
     use alloy_signer_local::PrivateKeySigner;
     use serde_json::json;
 
@@ -484,6 +494,22 @@ mod tests {
         }
     }
 
+    alloy_sol_types::sol! {
+        /// Minimal `SolStruct` view used only by the tests in this
+        /// module: a single `bytes32` field. Decoupled from
+        /// [`crate::order::eip712::Order`] so the signature primitives
+        /// can be exercised without dragging in an `OrderData` fixture.
+        struct Probe {
+            bytes32 value;
+        }
+    }
+
+    fn probe_payload(value: [u8; 32]) -> Probe {
+        Probe {
+            value: B256::from(value),
+        }
+    }
+
     /// Sign-and-recover round trip for both ECDSA schemes against the
     /// `alloy_signer_local::PrivateKeySigner` reference implementation.
     /// Mirrors `cowprotocol/services/.../signature.rs::test_ecdsa_signature_recovery`.
@@ -492,65 +518,28 @@ mod tests {
         let signer = PrivateKeySigner::from_bytes(&U256::from(1u64).to_be_bytes().into()).unwrap();
         let address = signer.address();
 
-        let domain = DomainSeparator(b256!(
-            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        let domain = crate::domain::settlement_domain(
+            1,
+            alloy_primitives::address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
+        );
+        let payload = probe_payload(hex!(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         ));
-        let struct_hash = hex!("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
 
         for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
-            let ecdsa = EcdsaSignature::sign(scheme, &domain, &struct_hash, &signer).unwrap();
+            let ecdsa = EcdsaSignature::sign(scheme, &domain, &payload, &signer).unwrap();
             let typed = ecdsa.to_signature(scheme);
-            let recovered = typed.recover(&domain, &struct_hash).unwrap().unwrap();
+            let recovered = typed.recover(&domain, &payload).unwrap().unwrap();
             assert_eq!(recovered.signer, address);
         }
     }
 
-    /// Locks `EcdsaSignature::sign` against the golden vector produced
-    /// by ethers `Wallet.signTypedData` for the mainnet `sample_order` +
-    /// the Hardhat #0 account. Regenerate via `tools/vector-gen`.
-    ///
-    /// Catches drift between alloy's signer and ethers' signer (which
-    /// the round-trip-only test cannot, since both sides would drift
-    /// together).
-    #[test]
-    fn eip712_signature_matches_ethers_golden() {
-        use alloy_primitives::B256;
-
-        // Hardhat account #0; same key the vector-gen tool uses.
-        let private_key = B256::from(hex!(
-            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-        ));
-        let signer = PrivateKeySigner::from_bytes(&private_key).unwrap();
-        // Mainnet domain separator from tools/vector-gen.
-        let domain = DomainSeparator(b256!(
-            "c078f884a2676e1345748b1feace7b0abee5d00ecadb6e574dcdd109a63e8943"
-        ));
-        // Sample-order struct hash from tools/vector-gen.
-        let struct_hash = hex!("7d9bf070168f9950003bdad00194ef63a5389dd0b594a1288407d551abf147d5");
-
-        let ecdsa =
-            EcdsaSignature::sign(EcdsaSigningScheme::Eip712, &domain, &struct_hash, &signer)
-                .unwrap();
-
-        // Expected (r, s, v) from ethers Wallet.signTypedData on the same
-        // inputs. v=28 (the high-order normalised form).
-        let expected_r = B256::from(hex!(
-            "78bd3f7f240eb91bf94264f1bab99a5efaf97e8c76b9f76eeb4520f46861ed13"
-        ));
-        let expected_s = B256::from(hex!(
-            "70c2f3362f17d4668a02ad82f61bff52bd33a785afeff727ddab43210dfebea2"
-        ));
-        assert_eq!(ecdsa.r, expected_r, "r component");
-        assert_eq!(ecdsa.s, expected_s, "s component");
-        assert_eq!(ecdsa.v, 28, "v component");
-    }
-
     #[test]
     fn recover_returns_none_for_onchain_schemes() {
+        let domain = crate::domain::DomainSeparator::default();
+        let payload = probe_payload([0u8; 32]);
         for signature in [Signature::PreSign, Signature::Eip1271(Vec::new())] {
-            let recovered = signature
-                .recover(&DomainSeparator::default(), &[0u8; 32])
-                .unwrap();
+            let recovered = signature.recover(&domain, &payload).unwrap();
             assert!(recovered.is_none());
         }
     }

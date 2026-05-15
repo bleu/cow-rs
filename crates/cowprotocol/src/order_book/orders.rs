@@ -194,15 +194,15 @@ impl OrderCreation {
     ///   themselves.
     ///
     /// Recommended belt-and-suspenders call site:
-    /// `creation.verify_owner(&DomainSeparator::new(chain.id(), chain.settlement()))?;`
+    /// `creation.verify_owner(&settlement_domain(chain.id(), chain.settlement()))?;`
     /// before `OrderBookApi::post_order` to catch signing-key /
     /// `from`-address divergence client-side.
     pub fn verify_owner(
         &self,
         domain: &crate::domain::DomainSeparator,
     ) -> std::result::Result<Address, crate::signature::SignatureError> {
-        let struct_hash = self.order_data().hash_struct();
-        match self.signature.recover(domain, &struct_hash)? {
+        let payload = crate::order::eip712::Order::from(&self.order_data());
+        match self.signature.recover(domain, &payload)? {
             Some(recovered) if recovered.signer == self.from => Ok(self.from),
             Some(recovered) => Err(crate::signature::SignatureError::SignerMismatch {
                 declared: self.from,

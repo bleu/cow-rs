@@ -22,7 +22,7 @@
 //!    Safe and never pass a raw private key to wasm.
 //! 2. **External signing** (recommended for production): build the
 //!    EIP-712 hash with [`order_struct_hash`] +
-//!    [`hashed_eip712_message`], have the caller's wallet (viem,
+//!    [`eip712_message_hash`], have the caller's wallet (viem,
 //!    ethers, Safe, WalletConnect) sign it, then feed the (r, s, v)
 //!    back through [`build_order_creation`].
 
@@ -36,9 +36,9 @@ mod transport;
 use {
     alloy_primitives::{Address, B256, U256},
     cowprotocol::{
-        AppDataCid, AppDataDoc, AppDataHash, Chain, DomainSeparator, EMPTY_APP_DATA_HASH,
-        EcdsaSignature, EcdsaSigningScheme, OrderCancellation, OrderData, OrderUid, QuoteRequest,
-        Signature, SigningScheme, hashed_eip712_message,
+        AppDataCid, AppDataDoc, AppDataHash, Chain, EMPTY_APP_DATA_HASH, EcdsaSignature,
+        EcdsaSigningScheme, OrderCancellation, OrderData, OrderUid, QuoteRequest, Signature,
+        SigningScheme, settlement_domain,
     },
     serde::{Deserialize, Serialize},
     wasm_bindgen::prelude::*,
@@ -168,8 +168,8 @@ pub fn chain_info(chain: &str) -> Result<JsValue, JsValue> {
 #[wasm_bindgen]
 pub fn domain_separator(chain: &str) -> Result<String, JsValue> {
     let c = parse_chain(chain)?;
-    let domain = DomainSeparator::new(c.id(), c.settlement());
-    Ok(domain.0.to_string())
+    let domain = settlement_domain(c.id(), c.settlement());
+    Ok(domain.separator().to_string())
 }
 
 /// Canonical EIP-712 typed-data payload for an order, ready to feed
@@ -273,18 +273,23 @@ pub fn order_struct_hash(order_data: JsValue) -> Result<String, JsValue> {
 pub fn order_uid(order_data: JsValue, chain: &str, owner: &str) -> Result<String, JsValue> {
     let order: OrderData = from_js(order_data)?;
     let c = parse_chain(chain)?;
-    let domain = DomainSeparator::new(c.id(), c.settlement());
+    let domain = settlement_domain(c.id(), c.settlement());
     Ok(order.uid(&domain, parse_address(owner)?).to_string())
 }
 
 /// EIP-712 wrapped hash `keccak256(0x1901 || domain || struct_hash)`.
+/// JS interop helper: callers that already hold the 32-byte domain
+/// separator and struct hash get the typed-data hash without having to
+/// reassemble an [`alloy_sol_types::Eip712Domain`].
 #[wasm_bindgen]
 pub fn eip712_message_hash(domain_hex: &str, struct_hash_hex: &str) -> Result<String, JsValue> {
-    let domain = parse_b256(domain_hex)?;
+    let separator = parse_b256(domain_hex)?;
     let struct_hash = parse_b256(struct_hash_hex)?;
-    let separator = DomainSeparator(domain);
-    let digest = hashed_eip712_message(&separator, &struct_hash);
-    Ok(digest.to_string())
+    let mut buf = [0u8; 66];
+    buf[..2].copy_from_slice(&[0x19, 0x01]);
+    buf[2..34].copy_from_slice(separator.as_slice());
+    buf[34..].copy_from_slice(struct_hash.as_slice());
+    Ok(alloy_primitives::keccak256(buf).to_string())
 }
 
 /// In-shim ECDSA signing. Returns the (r, s, v) packed signature plus
@@ -331,9 +336,10 @@ fn sign_with_scheme(
 ) -> Result<JsValue, JsValue> {
     let order: OrderData = from_js(order_data)?;
     let c = parse_chain(chain)?;
-    let domain = DomainSeparator::new(c.id(), c.settlement());
+    let domain = settlement_domain(c.id(), c.settlement());
     let signer = parse_signer(private_key_hex)?;
-    let ecdsa = EcdsaSignature::sign(scheme, &domain, &order.hash_struct(), &signer)
+    let ecdsa = order
+        .sign_ecdsa(scheme, &domain, &signer)
         .map_err(|err| JsValue::from_str(&format!("sign failed: {err}")))?;
     let payload = serde_json::json!({
         "signingScheme": scheme_to_str(scheme),
@@ -399,7 +405,7 @@ pub fn build_order_creation(
     let signature = ecdsa.to_signature(scheme);
     let owner = parse_address(owner)?;
     let c = parse_chain(chain)?;
-    let domain = DomainSeparator::new(c.id(), c.settlement());
+    let domain = settlement_domain(c.id(), c.settlement());
     let creation = cowprotocol::OrderCreation::from_signed_order_data(
         order,
         signature,
@@ -445,7 +451,7 @@ pub fn build_order_creation_eip1271(
         .map_err(|err| JsValue::from_str(&format!("invalid eip1271 signature: {err}")))?;
     let owner = parse_address(owner)?;
     let c = parse_chain(chain)?;
-    let domain = DomainSeparator::new(c.id(), c.settlement());
+    let domain = settlement_domain(c.id(), c.settlement());
     let creation = cowprotocol::OrderCreation::from_signed_order_data(
         order,
         signature,
@@ -594,7 +600,7 @@ pub async fn get_quote_simple(
     let order_data = response
         .to_signed_order_data(&request, cowprotocol::EMPTY_APP_DATA_HASH)
         .map_err(|err| JsValue::from_str(&format!("to_signed_order_data failed: {err}")))?;
-    let domain = DomainSeparator::new(c.id(), c.settlement());
+    let domain = settlement_domain(c.id(), c.settlement());
     let uid = order_data.uid(&domain, response.from);
     let payload = serde_json::json!({
         "response": response,
@@ -722,7 +728,7 @@ pub fn cancel_order_signed(
 ) -> Result<JsValue, JsValue> {
     let uid = parse_uid(uid)?;
     let c = parse_chain(chain)?;
-    let domain = DomainSeparator::new(c.id(), c.settlement());
+    let domain = settlement_domain(c.id(), c.settlement());
     let signer = parse_signer(private_key_hex)?;
     let cancellation =
         OrderCancellation::sign(uid, EcdsaSigningScheme::Eip712, &domain, &signer)

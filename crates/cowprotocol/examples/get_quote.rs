@@ -43,7 +43,7 @@ async fn main() -> cowprotocol::Result<()> {
     // Binding the response to `request` here makes the SDK reject a
     // hostile orderbook that tries to swap tokens / receiver / kind.
     let order_data = response.to_signed_order_data(&request, EMPTY_APP_DATA_HASH)?;
-    let domain = cowprotocol::DomainSeparator::new(
+    let domain = cowprotocol::settlement_domain(
         Chain::Mainnet.id(),
         address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
     );

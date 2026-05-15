@@ -86,8 +86,10 @@ impl OrderCancellation {
         domain: &DomainSeparator,
         signer: &S,
     ) -> Result<Self, SignatureError> {
-        let signature =
-            EcdsaSignature::sign(scheme, domain, &Self::hash_struct(&order_uid), signer)?;
+        let payload = eip712::OrderCancellation {
+            orderUid: Bytes::copy_from_slice(order_uid.0.as_slice()),
+        };
+        let signature = EcdsaSignature::sign(scheme, domain, &payload, signer)?;
         Ok(Self {
             order_uid,
             signature,
@@ -101,13 +103,12 @@ impl OrderCancellation {
         &self,
         domain: &DomainSeparator,
     ) -> Result<alloy_primitives::Address, SignatureError> {
+        let payload = eip712::OrderCancellation {
+            orderUid: Bytes::copy_from_slice(self.order_uid.0.as_slice()),
+        };
         Ok(self
             .signature
-            .recover(
-                self.signing_scheme,
-                domain,
-                &Self::hash_struct(&self.order_uid),
-            )?
+            .recover(self.signing_scheme, domain, &payload)?
             .signer)
     }
 }
@@ -170,12 +171,23 @@ impl OrderCancellations {
         domain: &DomainSeparator,
         signer: &S,
     ) -> Result<SignedOrderCancellations, SignatureError> {
-        let signature = EcdsaSignature::sign(scheme, domain, &self.hash_struct(), signer)?;
+        let payload = self.eip712_payload();
+        let signature = EcdsaSignature::sign(scheme, domain, &payload, signer)?;
         Ok(SignedOrderCancellations {
             order_uids: self.order_uids,
             signature,
             signing_scheme: scheme,
         })
+    }
+
+    fn eip712_payload(&self) -> eip712::OrderCancellations {
+        eip712::OrderCancellations {
+            orderUids: self
+                .order_uids
+                .iter()
+                .map(|u| Bytes::copy_from_slice(u.0.as_slice()))
+                .collect(),
+        }
     }
 }
 
@@ -200,10 +212,11 @@ impl SignedOrderCancellations {
     ) -> Result<alloy_primitives::Address, SignatureError> {
         let payload = OrderCancellations {
             order_uids: self.order_uids.clone(),
-        };
+        }
+        .eip712_payload();
         Ok(self
             .signature
-            .recover(self.signing_scheme, domain, &payload.hash_struct())?
+            .recover(self.signing_scheme, domain, &payload)?
             .signer)
     }
 }
@@ -212,7 +225,7 @@ impl SignedOrderCancellations {
 mod tests {
     use {
         super::*,
-        alloy_primitives::{B256, U256, keccak256},
+        alloy_primitives::{U256, keccak256},
         alloy_signer_local::PrivateKeySigner,
         hex_literal::hex,
     };
@@ -273,12 +286,22 @@ mod tests {
         PrivateKeySigner::from_bytes(&U256::from(1u64).to_be_bytes().into()).unwrap()
     }
 
+    /// Synthetic but valid `Eip712Domain` for tests: the round-trip
+    /// behaviour depends only on the domain being consistent between
+    /// sign and recover, not on it matching a real chain.
+    fn fixed_domain() -> DomainSeparator {
+        crate::domain::settlement_domain(
+            1,
+            alloy_primitives::address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
+        )
+    }
+
     /// Sign-and-recover round trip for a single-order cancellation,
     /// covering both ECDSA schemes.
     #[test]
     fn order_cancellation_sign_recover_round_trip() {
         let signer = fixed_signer();
-        let domain = DomainSeparator(B256::repeat_byte(0xde));
+        let domain = fixed_domain();
         let uid = OrderUid::from([0x42; 56]);
 
         for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
@@ -292,7 +315,7 @@ mod tests {
     #[test]
     fn order_cancellations_sign_recover_round_trip() {
         let signer = fixed_signer();
-        let domain = DomainSeparator(B256::repeat_byte(0xad));
+        let domain = fixed_domain();
         let cancellations = OrderCancellations {
             order_uids: vec![OrderUid::from([0x11; 56]), OrderUid::from([0x22; 56])],
         };
@@ -327,7 +350,7 @@ mod tests {
         let original = OrderCancellation::sign(
             OrderUid::from([0x77; 56]),
             EcdsaSigningScheme::Eip712,
-            &DomainSeparator(B256::repeat_byte(0xab)),
+            &fixed_domain(),
             &fixed_signer(),
         )
         .unwrap();
@@ -366,7 +389,7 @@ mod tests {
         }
         .sign(
             EcdsaSigningScheme::EthSign,
-            &DomainSeparator(B256::repeat_byte(0xcd)),
+            &fixed_domain(),
             &fixed_signer(),
         )
         .unwrap();

@@ -11,8 +11,11 @@
 //!   [`OrderData::hash_struct`] for EIP-712 hashing,
 //!   [`OrderData::uid`] for the 56-byte order identifier and
 //!   [`OrderData::sign`] for ECDSA signing.
-//! - [`DomainSeparator`], [`hashed_eip712_message`] and
-//!   [`hashed_ethsign_message`] for the typed-data envelope.
+//! - [`DomainSeparator`] (a type alias for
+//!   [`alloy_sol_types::Eip712Domain`]) and [`settlement_domain`] for the
+//!   `GPv2Settlement` EIP-712 domain. The typed-data envelope is supplied
+//!   by [`alloy_sol_types::SolStruct`] and the EIP-191 personal-sign wrap
+//!   by [`alloy_primitives::eip191_hash_message`].
 //! - [`Signature`], [`EcdsaSignature`] and [`SignatureError`] covering
 //!   EIP-712, EthSign, EIP-1271 and PreSign schemes.
 //! - [`Chain`]: all eleven chains the orderbook supports
@@ -127,7 +130,7 @@ pub use crate::{
         CoWSwapOnchainOrders, ERC20, GPV2_SETTLEMENT, GPV2_VAULT_RELAYER, GPv2OrderData,
         GPv2Settlement, OnchainSignature, OnchainSigningScheme, WETH9,
     },
-    domain::{DomainSeparator, hashed_eip712_message, hashed_ethsign_message},
+    domain::{DomainSeparator, settlement_domain},
     error::{ApiError, Error, Result},
     eth_flow::{ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowOrder},
     multiplexer::{Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof},

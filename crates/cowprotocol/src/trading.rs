@@ -17,8 +17,8 @@ use alloy_primitives::Address;
 use alloy_signer::SignerSync;
 
 use crate::{
-    AppDataDoc, Chain, DomainSeparator, Error, OrderBookApi, OrderCreation, OrderData,
-    OrderQuoteResponse, OrderUid, QuoteRequest, Result, signing_scheme::EcdsaSigningScheme,
+    AppDataDoc, Chain, Error, OrderBookApi, OrderCreation, OrderData, OrderQuoteResponse, OrderUid,
+    QuoteRequest, Result, signing_scheme::EcdsaSigningScheme,
 };
 
 /// Inputs to [`TradingClient::post_swap_order`]. Every field except
@@ -167,7 +167,7 @@ impl TradingClient {
             app_data_hash,
         )?;
 
-        let domain = DomainSeparator::new(self.chain.id(), self.chain.settlement());
+        let domain = crate::domain::settlement_domain(self.chain.id(), self.chain.settlement());
         let signature = order_data
             .sign(params.scheme, &domain, signer)
             .map_err(Error::Signature)?;

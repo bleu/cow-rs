@@ -19,7 +19,7 @@ use serde_with::{DisplayFromStr, serde_as};
 use std::fmt::{self, Display};
 
 use crate::app_data::AppDataHash;
-use crate::domain::{DomainSeparator, hashed_eip712_message};
+use crate::domain::DomainSeparator;
 
 /// Private `sol!` view of [`OrderData`] used to derive the EIP-712
 /// `typeHash` and `hashStruct` via [`alloy_sol_types::SolStruct`]. Lives
@@ -133,8 +133,7 @@ pub struct OrderData {
 }
 
 impl OrderData {
-    /// EIP-712 `hashStruct` over the order; the 32-byte input expected
-    /// by [`hashed_eip712_message`]. Delegates to
+    /// EIP-712 `hashStruct` over the order. Delegates to
     /// [`alloy_sol_types::SolStruct`] applied to the private
     /// [`eip712::Order`] declaration, whose `typeHash` and field encoding
     /// are conformance-locked against the canonical contract type string.
@@ -145,26 +144,37 @@ impl OrderData {
 
     /// 56-byte order UID on `domain` for `owner`.
     pub fn uid(&self, domain: &DomainSeparator, owner: Address) -> OrderUid {
-        OrderUid::from_parts(
-            hashed_eip712_message(domain, &self.hash_struct()),
-            owner,
-            self.valid_to,
-        )
+        use alloy_sol_types::SolStruct;
+        let signing_hash = eip712::Order::from(self).eip712_signing_hash(domain);
+        OrderUid::from_parts(signing_hash, owner, self.valid_to)
     }
 
     /// Sign with an ECDSA signer; equivalent to
-    /// [`crate::signature::EcdsaSignature::sign`] over
-    /// [`Self::hash_struct`] promoted into a
-    /// [`crate::signature::Signature`].
+    /// [`crate::signature::EcdsaSignature::sign`] applied to the
+    /// EIP-712 view of this order.
     pub fn sign<S: alloy_signer::SignerSync>(
         &self,
         scheme: crate::signing_scheme::EcdsaSigningScheme,
         domain: &DomainSeparator,
         signer: &S,
     ) -> Result<crate::signature::Signature, crate::signature::SignatureError> {
-        let ecdsa =
-            crate::signature::EcdsaSignature::sign(scheme, domain, &self.hash_struct(), signer)?;
-        Ok(ecdsa.to_signature(scheme))
+        Ok(self
+            .sign_ecdsa(scheme, domain, signer)?
+            .to_signature(scheme))
+    }
+
+    /// Sign with an ECDSA signer and return the raw
+    /// [`crate::signature::EcdsaSignature`] (`r || s || v`). Useful for
+    /// callers that want the unwrapped signature components without
+    /// promoting through the [`crate::signature::Signature`] enum.
+    pub fn sign_ecdsa<S: alloy_signer::SignerSync>(
+        &self,
+        scheme: crate::signing_scheme::EcdsaSigningScheme,
+        domain: &DomainSeparator,
+        signer: &S,
+    ) -> Result<crate::signature::EcdsaSignature, crate::signature::SignatureError> {
+        let payload = eip712::Order::from(self);
+        crate::signature::EcdsaSignature::sign(scheme, domain, &payload, signer)
     }
 }
 
@@ -593,7 +603,7 @@ impl std::str::FromStr for OrderUid {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{address, b256};
+    use alloy_primitives::address;
     use hex_literal::hex;
     use std::str::FromStr;
 
@@ -627,25 +637,11 @@ mod tests {
         address!("70997970C51812dc3A010C7d01b50e0d17dc79C8")
     }
 
-    /// Locks the full `OrderData::uid` output for the sample order against
-    /// the byte-perfect golden vector lifted from
-    /// `cowprotocol/services/crates/model/src/order.rs::compute_order_uid`.
-    /// The domain here is the synthetic value baked into the services test,
-    /// not a real chain, so a drift in `TYPE_HASH`, `hash_struct`,
-    /// `DomainSeparator` packing, `hashed_eip712_message` or
-    /// `OrderUid::from_parts` fails this test.
-    #[test]
-    fn compute_order_uid_matches_services_golden() {
-        let domain = DomainSeparator(b256!(
-            "74e0b11bd18120612556bae4578cfd3a254d7e2495f543c569a92ff5794d9b09"
-        ));
-        let expected = hex!(
-            "0e45d31fd31b28c26031cdd81b35a8938b2ccca2cc425fcf440fd3bfed1eede9\
-             70997970c51812dc3a010c7d01b50e0d17dc79c8\
-             ffffffff"
-        );
-        assert_eq!(sample_order().uid(&domain, sample_owner()).0, expected);
-    }
+    // The `compute_order_uid_matches_services_golden` test that lived
+    // here was redundant with `cross_chain_uids_match_ethers` below and
+    // baked in a synthetic raw-`B256` separator that no longer fits the
+    // `DomainSeparator = Eip712Domain` alias. The cross-chain UID
+    // pipeline lock is the load-bearing conformance gate.
 
     /// Locks `hash_struct` against the value produced by ethers
     /// `TypedDataEncoder.hashStruct("Order", types, sample_order)`.
@@ -657,6 +653,42 @@ mod tests {
             sample_order().hash_struct(),
             hex!("7d9bf070168f9950003bdad00194ef63a5389dd0b594a1288407d551abf147d5")
         );
+    }
+
+    /// Locks `EcdsaSignature::sign` against the golden vector produced
+    /// by ethers `Wallet.signTypedData` for the mainnet `sample_order` +
+    /// the Hardhat #0 account. Regenerate via `tools/vector-gen`.
+    /// Catches drift between alloy's signer and ethers' signer (which
+    /// a round-trip-only test cannot, since both sides would drift
+    /// together).
+    #[test]
+    fn eip712_signature_matches_ethers_golden() {
+        use crate::signature::EcdsaSignature;
+        use crate::signing_scheme::EcdsaSigningScheme;
+        use alloy_signer_local::PrivateKeySigner;
+
+        // Hardhat account #0; same key the vector-gen tool uses.
+        let private_key = B256::from(hex!(
+            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+        ));
+        let signer = PrivateKeySigner::from_bytes(&private_key).unwrap();
+        let domain = crate::domain::settlement_domain(1, SETTLEMENT);
+        let payload = eip712::Order::from(&sample_order());
+
+        let ecdsa =
+            EcdsaSignature::sign(EcdsaSigningScheme::Eip712, &domain, &payload, &signer).unwrap();
+
+        // Expected (r, s, v) from ethers Wallet.signTypedData on the same
+        // inputs. v=28 (the high-order normalised form).
+        let expected_r = B256::from(hex!(
+            "78bd3f7f240eb91bf94264f1bab99a5efaf97e8c76b9f76eeb4520f46861ed13"
+        ));
+        let expected_s = B256::from(hex!(
+            "70c2f3362f17d4668a02ad82f61bff52bd33a785afeff727ddab43210dfebea2"
+        ));
+        assert_eq!(ecdsa.r, expected_r, "r component");
+        assert_eq!(ecdsa.s, expected_s, "s component");
+        assert_eq!(ecdsa.v, 28, "v component");
     }
 
     /// Locks the [`eip712::Order`] `SolStruct::eip712_type_hash` derivation
@@ -677,7 +709,7 @@ mod tests {
         );
     }
 
-    /// Locks `DomainSeparator::new` against ethers
+    /// Locks the `settlement_domain` separator against ethers
     /// `TypedDataEncoder.hashDomain` for every one of the eleven chains
     /// cow-rs supports, using the canonical GPv2Settlement deployment.
     /// Regenerate via `tools/vector-gen`.
@@ -731,11 +763,8 @@ mod tests {
         ];
 
         for (chain_id, expected) in cases {
-            let separator = DomainSeparator::new(chain_id, SETTLEMENT);
-            assert_eq!(
-                separator.0, expected,
-                "domain separator for chain {chain_id}"
-            );
+            let separator = crate::domain::settlement_domain(chain_id, SETTLEMENT).separator();
+            assert_eq!(separator, expected, "domain separator for chain {chain_id}");
         }
     }
 
@@ -796,7 +825,7 @@ mod tests {
         let order = sample_order();
         let owner = sample_owner();
         for (chain_id, expected_digest) in cases {
-            let domain = DomainSeparator::new(chain_id, SETTLEMENT);
+            let domain = crate::domain::settlement_domain(chain_id, SETTLEMENT);
             let uid = order.uid(&domain, owner).0;
             let mut expected = [0u8; 56];
             expected[0..32].copy_from_slice(&expected_digest);
