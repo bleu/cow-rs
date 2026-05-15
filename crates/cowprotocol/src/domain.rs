@@ -9,7 +9,7 @@
 //!
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/model/src/lib.rs
 
-use alloy_primitives::{Address, B256, U256, keccak256};
+use alloy_primitives::{Address, B256, U256, eip191_hash_message, keccak256};
 use alloy_sol_types::Eip712Domain;
 use const_hex::{FromHex, FromHexError};
 use std::fmt;
@@ -75,14 +75,12 @@ pub fn hashed_eip712_message(domain_separator: &DomainSeparator, struct_hash: &[
 /// hash: `keccak256("\x19Ethereum Signed Message:\n32" || hashed_eip712_message)`.
 ///
 /// This is the message wallets sign when the owner uses the
-/// [`SigningScheme::EthSign`] flow.
+/// [`SigningScheme::EthSign`] flow. Delegates the envelope to
+/// [`alloy_primitives::eip191_hash_message`].
 ///
 /// [`SigningScheme::EthSign`]: crate::signing_scheme::SigningScheme::EthSign
 pub fn hashed_ethsign_message(domain_separator: &DomainSeparator, struct_hash: &[u8; 32]) -> B256 {
-    let mut message = [0u8; 60];
-    message[..28].copy_from_slice(b"\x19Ethereum Signed Message:\n32");
-    message[28..].copy_from_slice(hashed_eip712_message(domain_separator, struct_hash).as_slice());
-    keccak256(message)
+    eip191_hash_message(hashed_eip712_message(domain_separator, struct_hash))
 }
 
 #[cfg(test)]
