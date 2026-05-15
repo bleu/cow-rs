@@ -131,10 +131,10 @@ impl Signature {
     pub fn from_bytes(scheme: SigningScheme, bytes: &[u8]) -> Result<Self, SignatureError> {
         match scheme {
             SigningScheme::Eip712 => {
-                Ok(EcdsaSignature::from_bytes(bytes)?.to_signature(EcdsaSigningScheme::Eip712))
+                Ok(EcdsaSignature::from_bytes(bytes)?.into_signature(EcdsaSigningScheme::Eip712))
             }
             SigningScheme::EthSign => {
-                Ok(EcdsaSignature::from_bytes(bytes)?.to_signature(EcdsaSigningScheme::EthSign))
+                Ok(EcdsaSignature::from_bytes(bytes)?.into_signature(EcdsaSigningScheme::EthSign))
             }
             SigningScheme::Eip1271 => {
                 if bytes.len() > EIP1271_MAX_LEN {
@@ -225,8 +225,9 @@ impl Debug for EcdsaSignature {
 }
 
 impl EcdsaSignature {
-    /// Promote this ECDSA signature into a typed [`Signature`].
-    pub const fn to_signature(self, scheme: EcdsaSigningScheme) -> Signature {
+    /// Promote this ECDSA signature into a typed [`Signature`]. Consumes
+    /// `self`, hence the `into_` prefix per Rust API conventions.
+    pub const fn into_signature(self, scheme: EcdsaSigningScheme) -> Signature {
         match scheme {
             EcdsaSigningScheme::Eip712 => Signature::Eip712(self),
             EcdsaSigningScheme::EthSign => Signature::EthSign(self),
@@ -234,7 +235,7 @@ impl EcdsaSignature {
     }
 
     /// Encode as `r || s || v` (65 bytes).
-    pub fn to_bytes(self) -> [u8; 65] {
+    pub fn to_bytes(&self) -> [u8; 65] {
         let mut out = [0u8; 65];
         out[..32].copy_from_slice(self.r.as_slice());
         out[32..64].copy_from_slice(self.s.as_slice());
@@ -528,7 +529,7 @@ mod tests {
 
         for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
             let ecdsa = EcdsaSignature::sign(scheme, &domain, &payload, &signer).unwrap();
-            let typed = ecdsa.to_signature(scheme);
+            let typed = ecdsa.into_signature(scheme);
             let recovered = typed.recover(&domain, &payload).unwrap().unwrap();
             assert_eq!(recovered.signer, address);
         }

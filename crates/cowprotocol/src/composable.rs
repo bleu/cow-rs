@@ -377,8 +377,9 @@ impl TwapData {
     }
 
     /// Wrap into a [`ConditionalOrderParams`] with the canonical
-    /// [`TWAP_HANDLER`] address.
-    pub fn into_params(&self, salt: B256) -> Result<ConditionalOrderParams, TwapError> {
+    /// [`TWAP_HANDLER`] address. Allocates owned bytes from a `&self`
+    /// view, hence the `to_` prefix per Rust API conventions.
+    pub fn to_params(&self, salt: B256) -> Result<ConditionalOrderParams, TwapError> {
         Ok(ConditionalOrderParams {
             handler: TWAP_HANDLER,
             salt,
@@ -390,7 +391,7 @@ impl TwapData {
     /// `keccak256(abi.encode(ConditionalOrderParams))` for this TWAP and
     /// salt. Matches `ConditionalOrder.id` in cow-py.
     pub fn leaf_id(&self, salt: B256) -> Result<B256, TwapError> {
-        Ok(keccak256(self.into_params(salt)?.abi_encode()))
+        Ok(keccak256(self.to_params(salt)?.abi_encode()))
     }
 }
 

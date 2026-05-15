@@ -402,7 +402,7 @@ pub fn build_order_creation(
     raw[64] = sig.v;
     let ecdsa = EcdsaSignature::from_bytes(&raw)
         .map_err(|err| JsValue::from_str(&format!("invalid signature: {err}")))?;
-    let signature = ecdsa.to_signature(scheme);
+    let signature = ecdsa.into_signature(scheme);
     let owner = parse_address(owner)?;
     let c = parse_chain(chain)?;
     let domain = settlement_domain(c.id(), c.settlement());

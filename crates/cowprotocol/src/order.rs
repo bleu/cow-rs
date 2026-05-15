@@ -160,7 +160,7 @@ impl OrderData {
     ) -> Result<crate::signature::Signature, crate::signature::SignatureError> {
         Ok(self
             .sign_ecdsa(scheme, domain, signer)?
-            .to_signature(scheme))
+            .into_signature(scheme))
     }
 
     /// Sign with an ECDSA signer and return the raw

@@ -1472,7 +1472,7 @@ mod tests {
         };
         let signature = EcdsaSignature::from_bytes(&bytes)
             .unwrap()
-            .to_signature(EcdsaSigningScheme::EthSign);
+            .into_signature(EcdsaSigningScheme::EthSign);
         let parsed = round_trip_with_signature(signature);
         match &parsed.signature {
             Signature::EthSign(sig) => assert_eq!(sig.to_bytes(), bytes),
