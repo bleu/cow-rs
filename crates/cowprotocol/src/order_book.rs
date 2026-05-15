@@ -2014,7 +2014,7 @@ mod tests {
         let impostor = alloy_primitives::address!("dead0000dead0000dead0000dead0000dead0000");
         assert_ne!(real_signer, impostor);
 
-        let domain = crate::domain::DomainSeparator(alloy_primitives::B256::repeat_byte(0xab).0);
+        let domain = crate::domain::DomainSeparator(alloy_primitives::B256::repeat_byte(0xab));
         let order_data = OrderData {
             sell_token: alloy_primitives::address!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
             buy_token: alloy_primitives::address!("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),

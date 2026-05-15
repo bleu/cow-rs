@@ -436,7 +436,7 @@ impl<'de> Deserialize<'de> for EcdsaSignature {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{U256, hex};
+    use alloy_primitives::{U256, b256, hex};
     use alloy_signer_local::PrivateKeySigner;
     use serde_json::json;
 
@@ -570,7 +570,7 @@ mod tests {
         let signer = PrivateKeySigner::from_bytes(&U256::from(1u64).to_be_bytes().into()).unwrap();
         let address = signer.address();
 
-        let domain = DomainSeparator(hex!(
+        let domain = DomainSeparator(b256!(
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
         ));
         let struct_hash = hex!("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
@@ -600,7 +600,7 @@ mod tests {
         ));
         let signer = PrivateKeySigner::from_bytes(&private_key).unwrap();
         // Mainnet domain separator from tools/vector-gen.
-        let domain = DomainSeparator(hex!(
+        let domain = DomainSeparator(b256!(
             "c078f884a2676e1345748b1feace7b0abee5d00ecadb6e574dcdd109a63e8943"
         ));
         // Sample-order struct hash from tools/vector-gen.

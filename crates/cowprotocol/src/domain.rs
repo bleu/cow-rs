@@ -11,14 +11,14 @@
 
 use alloy_primitives::{Address, B256, U256, eip191_hash_message, keccak256};
 use alloy_sol_types::Eip712Domain;
-use const_hex::{FromHex, FromHexError};
-use std::fmt;
-use std::str::FromStr;
 
 /// EIP-712 domain separator: 32 bytes that scope a struct hash to a specific
 /// chain and settlement contract.
-#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct DomainSeparator(pub [u8; 32]);
+///
+/// Newtype over [`B256`]: inherits its `Debug` / `Display` / `FromStr`
+/// behaviour (`0x`-prefixed lower-case hex).
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DomainSeparator(pub B256);
 
 impl DomainSeparator {
     /// Build the separator for the CoW Protocol settlement contract on a
@@ -35,27 +35,7 @@ impl DomainSeparator {
             salt: None,
         };
 
-        Self(domain.separator().into())
-    }
-}
-
-impl FromStr for DomainSeparator {
-    type Err = FromHexError;
-
-    /// Parses a `0x`-prefixed 32-byte hex string. Bare hex (no `0x`) is
-    /// rejected so callers cannot accidentally hand a 64-char address-like
-    /// string to a domain-scope parser.
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let body = s
-            .strip_prefix("0x")
-            .ok_or(FromHexError::InvalidStringLength)?;
-        Ok(Self(FromHex::from_hex(body)?))
-    }
-}
-
-impl fmt::Debug for DomainSeparator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&const_hex::encode(self.0))
+        Self(domain.separator())
     }
 }
 
@@ -66,7 +46,7 @@ impl fmt::Debug for DomainSeparator {
 pub fn hashed_eip712_message(domain_separator: &DomainSeparator, struct_hash: &[u8; 32]) -> B256 {
     let mut message = [0u8; 66];
     message[0..2].copy_from_slice(&[0x19, 0x01]);
-    message[2..34].copy_from_slice(&domain_separator.0);
+    message[2..34].copy_from_slice(domain_separator.0.as_slice());
     message[34..66].copy_from_slice(struct_hash);
     keccak256(message)
 }
@@ -85,7 +65,8 @@ pub fn hashed_ethsign_message(domain_separator: &DomainSeparator, struct_hash: &
 
 #[cfg(test)]
 mod tests {
-    use hex_literal::hex;
+    use alloy_primitives::b256;
+    use std::str::FromStr;
 
     use super::*;
     use crate::contracts::GPV2_SETTLEMENT;
@@ -98,7 +79,7 @@ mod tests {
         let chain_id: u64 = 11_155_111;
 
         let computed = DomainSeparator::new(chain_id, GPV2_SETTLEMENT);
-        let expected = DomainSeparator(hex!(
+        let expected = DomainSeparator(b256!(
             "daee378bd0eb30ddf479272accf91761e697bc00e067a268f95f1d2732ed230b"
         ));
 
@@ -109,13 +90,7 @@ mod tests {
     fn domain_separator_from_str_round_trips() {
         let body = "9d7e07ef92761aa9453ae5ff25083a2b19764131b15295d3c7e89f1f1b8c67d9";
         let prefixed = format!("0x{body}");
-        let parsed = DomainSeparator::from_str(&prefixed).unwrap();
-        assert_eq!(format!("{parsed:?}"), body);
-    }
-
-    #[test]
-    fn domain_separator_from_str_requires_0x_prefix() {
-        let bare = "9d7e07ef92761aa9453ae5ff25083a2b19764131b15295d3c7e89f1f1b8c67d9";
-        assert!(DomainSeparator::from_str(bare).is_err());
+        let parsed = B256::from_str(&prefixed).map(DomainSeparator).unwrap();
+        assert_eq!(format!("{:?}", parsed.0), prefixed);
     }
 }

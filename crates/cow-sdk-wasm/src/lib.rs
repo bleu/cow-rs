@@ -169,7 +169,7 @@ pub fn chain_info(chain: &str) -> Result<JsValue, JsValue> {
 pub fn domain_separator(chain: &str) -> Result<String, JsValue> {
     let c = parse_chain(chain)?;
     let domain = DomainSeparator::new(c.id(), c.settlement());
-    Ok(format!("0x{}", const_hex::encode(domain.0)))
+    Ok(domain.0.to_string())
 }
 
 /// Canonical EIP-712 typed-data payload for an order, ready to feed
@@ -282,7 +282,7 @@ pub fn order_uid(order_data: JsValue, chain: &str, owner: &str) -> Result<String
 pub fn eip712_message_hash(domain_hex: &str, struct_hash_hex: &str) -> Result<String, JsValue> {
     let domain = parse_b256(domain_hex)?;
     let struct_hash = parse_b256(struct_hash_hex)?;
-    let separator = DomainSeparator(domain.0);
+    let separator = DomainSeparator(domain);
     let digest = hashed_eip712_message(&separator, &struct_hash);
     Ok(digest.to_string())
 }

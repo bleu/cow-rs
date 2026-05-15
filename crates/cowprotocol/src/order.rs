@@ -615,7 +615,7 @@ impl<'de> Deserialize<'de> for OrderUid {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::address;
+    use alloy_primitives::{address, b256};
     use hex_literal::hex;
 
     use super::*;
@@ -657,7 +657,7 @@ mod tests {
     /// `OrderUid::from_parts` fails this test.
     #[test]
     fn compute_order_uid_matches_services_golden() {
-        let domain = DomainSeparator(hex!(
+        let domain = DomainSeparator(b256!(
             "74e0b11bd18120612556bae4578cfd3a254d7e2495f543c569a92ff5794d9b09"
         ));
         let expected = hex!(

@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn order_cancellation_sign_recover_round_trip() {
         let signer = fixed_signer();
-        let domain = DomainSeparator(B256::repeat_byte(0xde).into());
+        let domain = DomainSeparator(B256::repeat_byte(0xde));
         let uid = OrderUid([0x42; 56]);
 
         for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn order_cancellations_sign_recover_round_trip() {
         let signer = fixed_signer();
-        let domain = DomainSeparator(B256::repeat_byte(0xad).into());
+        let domain = DomainSeparator(B256::repeat_byte(0xad));
         let cancellations = OrderCancellations {
             order_uids: vec![OrderUid([0x11; 56]), OrderUid([0x22; 56])],
         };
@@ -286,7 +286,7 @@ mod tests {
         let original = OrderCancellation::sign(
             OrderUid([0x77; 56]),
             EcdsaSigningScheme::Eip712,
-            &DomainSeparator(B256::repeat_byte(0xab).into()),
+            &DomainSeparator(B256::repeat_byte(0xab)),
             &fixed_signer(),
         )
         .unwrap();
@@ -325,7 +325,7 @@ mod tests {
         }
         .sign(
             EcdsaSigningScheme::EthSign,
-            &DomainSeparator(B256::repeat_byte(0xcd).into()),
+            &DomainSeparator(B256::repeat_byte(0xcd)),
             &fixed_signer(),
         )
         .unwrap();
