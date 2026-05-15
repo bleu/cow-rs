@@ -204,7 +204,7 @@ async fn cancel_orders_sends_signed_collection_and_accepts_200() {
         address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
     );
     let signed = OrderCancellations {
-        order_uids: vec![OrderUid([0x11; 56])],
+        order_uids: vec![OrderUid::from([0x11; 56])],
     }
     .sign(cowprotocol::EcdsaSigningScheme::Eip712, &domain, &signer)
     .unwrap();
@@ -215,7 +215,7 @@ async fn cancel_orders_sends_signed_collection_and_accepts_200() {
 #[tokio::test]
 async fn cancel_order_puts_uid_in_path_and_omits_it_from_body() {
     let server = MockServer::start().await;
-    let uid = OrderUid([0x11; 56]);
+    let uid = OrderUid::from([0x11; 56]);
     let uid_hex = uid.to_string();
 
     Mock::given(method("DELETE"))

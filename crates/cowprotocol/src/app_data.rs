@@ -1173,7 +1173,7 @@ mod tests {
     /// `metadata.replacedOrder.uid` round-trips through the wire form.
     #[test]
     fn replaced_order_round_trips() {
-        let uid = OrderUid([0x55; 56]);
+        let uid = OrderUid::from([0x55; 56]);
         let doc = AppDataDoc::new("app").with_replaced_order(uid);
         let json = doc.canonical_json();
         assert!(

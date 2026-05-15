@@ -1303,7 +1303,7 @@ mod tests {
 
     #[test]
     fn orders_by_uids_request_serialises_with_camel_case_key() {
-        let uids = vec![OrderUid([0x11; 56])];
+        let uids = vec![OrderUid::from([0x11; 56])];
         let req = OrdersByUidsRequest { order_uids: &uids };
         let body = serde_json::to_value(&req).unwrap();
         assert!(body["orderUids"].is_array());

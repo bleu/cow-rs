@@ -72,7 +72,7 @@ impl OrderCancellation {
     pub fn hash_struct(uid: &OrderUid) -> [u8; 32] {
         use alloy_sol_types::SolStruct;
         eip712::OrderCancellation {
-            orderUid: Bytes::copy_from_slice(&uid.0),
+            orderUid: Bytes::copy_from_slice(uid.0.as_slice()),
         }
         .eip712_hash_struct()
         .0
@@ -156,7 +156,7 @@ impl OrderCancellations {
             orderUids: self
                 .order_uids
                 .iter()
-                .map(|u| Bytes::copy_from_slice(&u.0))
+                .map(|u| Bytes::copy_from_slice(u.0.as_slice()))
                 .collect(),
         }
         .eip712_hash_struct()
@@ -261,7 +261,7 @@ mod tests {
         );
 
         let two = OrderCancellations {
-            order_uids: vec![OrderUid([0x11; 56]), OrderUid([0x22; 56])],
+            order_uids: vec![OrderUid::from([0x11; 56]), OrderUid::from([0x22; 56])],
         };
         assert_eq!(
             two.hash_struct(),
@@ -279,7 +279,7 @@ mod tests {
     fn order_cancellation_sign_recover_round_trip() {
         let signer = fixed_signer();
         let domain = DomainSeparator(B256::repeat_byte(0xde));
-        let uid = OrderUid([0x42; 56]);
+        let uid = OrderUid::from([0x42; 56]);
 
         for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
             let cancellation = OrderCancellation::sign(uid, scheme, &domain, &signer).unwrap();
@@ -294,7 +294,7 @@ mod tests {
         let signer = fixed_signer();
         let domain = DomainSeparator(B256::repeat_byte(0xad));
         let cancellations = OrderCancellations {
-            order_uids: vec![OrderUid([0x11; 56]), OrderUid([0x22; 56])],
+            order_uids: vec![OrderUid::from([0x11; 56]), OrderUid::from([0x22; 56])],
         };
         let signed = cancellations
             .sign(EcdsaSigningScheme::Eip712, &domain, &signer)
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn signed_cancellations_wire_format() {
         let signed = SignedOrderCancellations {
-            order_uids: vec![OrderUid([0x11; 56])],
+            order_uids: vec![OrderUid::from([0x11; 56])],
             signature: EcdsaSignature::default(),
             signing_scheme: EcdsaSigningScheme::Eip712,
         };
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn order_cancellation_json_round_trip() {
         let original = OrderCancellation::sign(
-            OrderUid([0x77; 56]),
+            OrderUid::from([0x77; 56]),
             EcdsaSigningScheme::Eip712,
             &DomainSeparator(B256::repeat_byte(0xab)),
             &fixed_signer(),
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn order_cancellations_json_round_trip() {
         let original = OrderCancellations {
-            order_uids: vec![OrderUid([0x01; 56]), OrderUid([0x02; 56])],
+            order_uids: vec![OrderUid::from([0x01; 56]), OrderUid::from([0x02; 56])],
         };
         let json = serde_json::to_string(&original).unwrap();
         let parsed: OrderCancellations = serde_json::from_str(&json).unwrap();
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn signed_order_cancellations_json_round_trip() {
         let original = OrderCancellations {
-            order_uids: vec![OrderUid([0x33; 56]), OrderUid([0x44; 56])],
+            order_uids: vec![OrderUid::from([0x33; 56]), OrderUid::from([0x44; 56])],
         }
         .sign(
             EcdsaSigningScheme::EthSign,

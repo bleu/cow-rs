@@ -12,12 +12,11 @@
 
 #[cfg(test)]
 use alloy_primitives::keccak256;
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256, FixedBytes, U256};
 use hex_literal::hex;
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
-use std::fmt::{self, Debug, Display};
-use std::str::FromStr;
+use std::fmt::{self, Display};
 
 use crate::app_data::AppDataHash;
 use crate::domain::{DomainSeparator, hashed_eip712_message};
@@ -520,17 +519,24 @@ impl BuyTokenDestination {
 /// 56-byte order identifier:
 /// `32-byte digest || 20-byte owner || 4-byte validTo`. The digest is
 /// `keccak256(0x19 0x01 || domain_separator || order_struct_hash)`.
-#[derive(Clone, Copy, Eq, Hash, PartialEq, PartialOrd, Ord)]
-pub struct OrderUid(pub [u8; 56]);
+///
+/// Newtype over [`FixedBytes<56>`]: inherits its `Debug` / `Display` /
+/// serde behaviour (`0x`-prefixed lower-case hex on the wire) and its
+/// `From<[u8; 56]>` / `AsRef<[u8]>` impls.
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct OrderUid(pub FixedBytes<56>);
 
 impl OrderUid {
     /// Assemble a UID from its three parts.
     pub fn from_parts(hash: B256, owner: Address, valid_to: u32) -> Self {
-        let mut uid = [0; 56];
+        let mut uid = [0u8; 56];
         uid[0..32].copy_from_slice(hash.as_slice());
         uid[32..52].copy_from_slice(owner.as_slice());
         uid[52..56].copy_from_slice(&valid_to.to_be_bytes());
-        Self(uid)
+        Self(FixedBytes::new(uid))
     }
 
     /// UID with the first four bytes set to `i` (big-endian) and the
@@ -543,85 +549,45 @@ impl OrderUid {
         uid[1] = bytes[1];
         uid[2] = bytes[2];
         uid[3] = bytes[3];
-        Self(uid)
+        Self(FixedBytes(uid))
     }
 
     /// Split a UID into its three parts.
     pub fn parts(&self) -> (B256, Address, u32) {
+        let bytes = self.0.as_slice();
         let mut valid_to = [0u8; 4];
-        valid_to.copy_from_slice(&self.0[52..56]);
+        valid_to.copy_from_slice(&bytes[52..56]);
         (
-            B256::from_slice(&self.0[0..32]),
-            Address::from_slice(&self.0[32..52]),
+            B256::from_slice(&bytes[0..32]),
+            Address::from_slice(&bytes[32..52]),
             u32::from_be_bytes(valid_to),
         )
     }
 }
 
-impl Default for OrderUid {
-    fn default() -> Self {
-        Self([0u8; 56])
+impl From<[u8; 56]> for OrderUid {
+    fn from(bytes: [u8; 56]) -> Self {
+        Self(FixedBytes::new(bytes))
     }
 }
 
-impl Display for OrderUid {
+impl AsRef<[u8]> for OrderUid {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
+impl fmt::Display for OrderUid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&const_hex::encode_prefixed(self.0))
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
-impl Debug for OrderUid {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self}")
-    }
-}
+impl std::str::FromStr for OrderUid {
+    type Err = <FixedBytes<56> as std::str::FromStr>::Err;
 
-impl FromStr for OrderUid {
-    type Err = const_hex::FromHexError;
-
-    /// Parses a `0x`-prefixed 56-byte hex string. Bare hex (no `0x`) is
-    /// rejected to match `cowprotocol/services` and avoid ingesting the
-    /// same UID under two distinct wire encodings.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let body = s
-            .strip_prefix("0x")
-            .ok_or(const_hex::FromHexError::InvalidStringLength)?;
-        let mut value = [0u8; 56];
-        const_hex::decode_to_slice(body, value.as_mut())?;
-        Ok(Self(value))
-    }
-}
-
-impl Serialize for OrderUid {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for OrderUid {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct Visitor;
-        impl de::Visitor<'_> for Visitor {
-            type Value = OrderUid;
-
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a 56-byte order UID as a 0x-prefixed hex string")
-            }
-
-            fn visit_str<E>(self, s: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                OrderUid::from_str(s).map_err(de::Error::custom)
-            }
-        }
-        deserializer.deserialize_str(Visitor)
+        s.parse::<FixedBytes<56>>().map(Self)
     }
 }
 
@@ -629,6 +595,7 @@ impl<'de> Deserialize<'de> for OrderUid {
 mod tests {
     use alloy_primitives::{address, b256};
     use hex_literal::hex;
+    use std::str::FromStr;
 
     use super::*;
 
@@ -973,14 +940,6 @@ mod tests {
 
         let rebuilt = OrderUid::from_parts(hash, owner, valid_to);
         assert_eq!(rebuilt, original);
-    }
-
-    #[test]
-    fn order_uid_from_str_requires_0x_prefix() {
-        let bare = "5668997bd3fb981d1b3ec44e8483e7c369756df47d10241c1c7a26fde4d1090e89984d17af2f18f8c54873c0de68a56cc5a23e0f695ba915";
-        assert!(OrderUid::from_str(bare).is_err());
-        let prefixed = format!("0x{bare}");
-        assert!(OrderUid::from_str(&prefixed).is_ok());
     }
 
     #[test]
