@@ -25,10 +25,31 @@ use {
         signature::{EcdsaSignature, SignatureError},
         signing_scheme::EcdsaSigningScheme,
     },
-    alloy_primitives::keccak256,
-    hex_literal::hex,
+    alloy_primitives::Bytes,
     serde::{Deserialize, Serialize},
 };
+
+/// Private `sol!` views of the two cancellation EIP-712 structs. Lives
+/// in a sub-module so the generated `pub` types are not part of the
+/// crate's public API.
+///
+/// The Solidity type names and field names are load-bearing: they
+/// appear verbatim in the EIP-712 type string the contract verifies.
+/// Single-cancel uses singular `orderUid`; the array variant uses
+/// plural `orderUids`.
+mod eip712 {
+    use alloy_sol_types::sol;
+
+    sol! {
+        struct OrderCancellation {
+            bytes orderUid;
+        }
+
+        struct OrderCancellations {
+            bytes[] orderUids;
+        }
+    }
+}
 
 /// Signed cancellation of a single order. Mirrors `cowprotocol/services`
 /// `OrderCancellation` exactly so any future on-chain verification path
@@ -45,16 +66,16 @@ pub struct OrderCancellation {
 }
 
 impl OrderCancellation {
-    /// `keccak256("OrderCancellation(bytes orderUid)")`.
-    pub const TYPE_HASH: [u8; 32] =
-        hex!("7b41b3a6e2b3cae020a3b2f9cdc997e0d420643957e7fea81747e984e47c88ec");
-
     /// EIP-712 `hashStruct` for the single-order cancellation type.
+    /// Delegates to [`alloy_sol_types::SolStruct`] applied to the
+    /// private [`eip712::OrderCancellation`] declaration.
     pub fn hash_struct(uid: &OrderUid) -> [u8; 32] {
-        let mut hash_data = [0u8; 64];
-        hash_data[0..32].copy_from_slice(&Self::TYPE_HASH);
-        hash_data[32..64].copy_from_slice(keccak256(uid.0).as_slice());
-        *keccak256(hash_data)
+        use alloy_sol_types::SolStruct;
+        eip712::OrderCancellation {
+            orderUid: Bytes::copy_from_slice(&uid.0),
+        }
+        .eip712_hash_struct()
+        .0
     }
 
     /// Sign a single-order cancellation. The caller chooses the ECDSA
@@ -126,24 +147,20 @@ impl IntoIterator for OrderCancellations {
 }
 
 impl OrderCancellations {
-    /// `keccak256("OrderCancellations(bytes[] orderUid)")`: note the
-    /// singular `orderUid` despite the array, matching the canonical
-    /// services type string.
-    pub const TYPE_HASH: [u8; 32] =
-        hex!("4c89efb91ae246f78d2fe68b47db2fa1444a121a4f2dc3fda7a5a408c2e3588e");
-
     /// EIP-712 `hashStruct` for the collection-cancellation type.
+    /// Delegates to [`alloy_sol_types::SolStruct`] applied to the
+    /// private [`eip712::OrderCancellations`] declaration.
     pub fn hash_struct(&self) -> [u8; 32] {
-        let mut encoded = Vec::with_capacity(32 * self.order_uids.len());
-        for uid in &self.order_uids {
-            encoded.extend_from_slice(keccak256(uid.0).as_slice());
+        use alloy_sol_types::SolStruct;
+        eip712::OrderCancellations {
+            orderUids: self
+                .order_uids
+                .iter()
+                .map(|u| Bytes::copy_from_slice(&u.0))
+                .collect(),
         }
-        let array_hash = keccak256(&encoded);
-
-        let mut hash_data = [0u8; 64];
-        hash_data[0..32].copy_from_slice(&Self::TYPE_HASH);
-        hash_data[32..64].copy_from_slice(array_hash.as_slice());
-        *keccak256(hash_data)
+        .eip712_hash_struct()
+        .0
     }
 
     /// Sign the collection with an ECDSA signer.
@@ -195,17 +212,41 @@ impl SignedOrderCancellations {
 mod tests {
     use {
         super::*,
-        alloy_primitives::{B256, U256},
+        alloy_primitives::{B256, U256, keccak256},
         alloy_signer_local::PrivateKeySigner,
+        hex_literal::hex,
     };
 
-    /// `OrderCancellation::TYPE_HASH` derives from the canonical EIP-712
-    /// type signature published in services. A drift in either constant
-    /// changes the signed payload for every cancellation.
+    /// Locks the [`eip712::OrderCancellation`] `typeHash` against the
+    /// canonical EIP-712 type signature published in services. A drift
+    /// in the `sol!` declaration would change every outstanding
+    /// signature.
     #[test]
     fn order_cancellation_type_hash_matches_canonical_signature() {
+        use alloy_sol_types::SolStruct;
+
         let signature = b"OrderCancellation(bytes orderUid)";
-        assert_eq!(OrderCancellation::TYPE_HASH, *keccak256(signature));
+        let sol = eip712::OrderCancellation {
+            orderUid: Bytes::copy_from_slice(&[0u8; 56]),
+        };
+        assert_eq!(
+            <eip712::OrderCancellation as SolStruct>::eip712_type_hash(&sol),
+            keccak256(signature),
+        );
+    }
+
+    /// Same lock for the array variant. The contract type string uses
+    /// plural `orderUids`.
+    #[test]
+    fn order_cancellations_type_hash_matches_canonical_signature() {
+        use alloy_sol_types::SolStruct;
+
+        let signature = b"OrderCancellations(bytes[] orderUids)";
+        let sol = eip712::OrderCancellations { orderUids: vec![] };
+        assert_eq!(
+            <eip712::OrderCancellations as SolStruct>::eip712_type_hash(&sol),
+            keccak256(signature),
+        );
     }
 
     /// Locks `OrderCancellations::hash_struct` against the golden vectors
