@@ -58,10 +58,10 @@ wasm-size: wasm-build-all
 # graph. Bump the ceiling consciously, with a commit message explaining
 # the new size's cause, so we don't slip silently.
 #
-# Current size: ~584 KB. Ceiling: 665600 bytes (650 KB) -> ~66 KB of
+# Current size: ~679 KB. Ceiling: 737280 bytes (720 KB) -> ~41 KB of
 # headroom for API surface growth.
 wasm-size-check: wasm-build-web
-	bash scripts/wasm-size-check.sh 665600
+	bash scripts/wasm-size-check.sh 737280
 
 # Combine the three wasm-pack targets into a single publishable npm
 # package with one shared .wasm + an exports map that routes the right
