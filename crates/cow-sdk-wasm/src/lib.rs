@@ -280,7 +280,7 @@ pub fn order_uid(order_data: JsValue, chain: &str, owner: &str) -> Result<String
 /// EIP-712 wrapped hash `keccak256(0x1901 || domain || struct_hash)`.
 /// JS interop helper: callers that already hold the 32-byte domain
 /// separator and struct hash get the typed-data hash without having to
-/// reassemble an [`alloy_sol_types::Eip712Domain`].
+/// reassemble an `alloy_sol_types::Eip712Domain`.
 #[wasm_bindgen]
 pub fn eip712_message_hash(domain_hex: &str, struct_hash_hex: &str) -> Result<String, JsValue> {
     let separator = parse_b256(domain_hex)?;

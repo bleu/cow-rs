@@ -68,7 +68,7 @@ pub struct OrderCancellation {
 impl OrderCancellation {
     /// EIP-712 `hashStruct` for the single-order cancellation type.
     /// Delegates to [`alloy_sol_types::SolStruct`] applied to the
-    /// private [`eip712::OrderCancellation`] declaration.
+    /// private `eip712::OrderCancellation` declaration.
     pub fn hash_struct(uid: &OrderUid) -> [u8; 32] {
         use alloy_sol_types::SolStruct;
         eip712::OrderCancellation {
@@ -150,7 +150,7 @@ impl IntoIterator for OrderCancellations {
 impl OrderCancellations {
     /// EIP-712 `hashStruct` for the collection-cancellation type.
     /// Delegates to [`alloy_sol_types::SolStruct`] applied to the
-    /// private [`eip712::OrderCancellations`] declaration.
+    /// private `eip712::OrderCancellations` declaration.
     pub fn hash_struct(&self) -> [u8; 32] {
         use alloy_sol_types::SolStruct;
         eip712::OrderCancellations {

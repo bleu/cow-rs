@@ -762,7 +762,7 @@ pub struct OrderBookApi {
 impl OrderBookApi {
     /// Client for the production orderbook on `chain`.
     /// [`Chain::orderbook_base_url`] already includes the trailing slash
-    /// [`Url::join`] needs to append, not replace, path segments.
+    /// [`url::Url::join`] needs to append, not replace, path segments.
     pub fn new(chain: Chain) -> Self {
         Self::new_with_base_url(chain.orderbook_base_url())
     }

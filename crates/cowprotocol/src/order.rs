@@ -135,7 +135,7 @@ pub struct OrderData {
 impl OrderData {
     /// EIP-712 `hashStruct` over the order. Delegates to
     /// [`alloy_sol_types::SolStruct`] applied to the private
-    /// [`eip712::Order`] declaration, whose `typeHash` and field encoding
+    /// `eip712::Order` declaration, whose `typeHash` and field encoding
     /// are conformance-locked against the canonical contract type string.
     pub fn hash_struct(&self) -> [u8; 32] {
         use alloy_sol_types::SolStruct;
