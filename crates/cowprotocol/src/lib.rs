@@ -37,7 +37,11 @@
 //! - [`ConditionalOrderParams`], [`Proof`] and [`PollOutcome`] for the
 //!   `ComposableCoW` conditional-order primitives, plus the
 //!   [`COMPOSABLE_COW`], [`EXTENSIBLE_FALLBACK_HANDLER`] and
-//!   [`CURRENT_BLOCK_TIMESTAMP_FACTORY`] address constants.
+//!   [`CURRENT_BLOCK_TIMESTAMP_FACTORY`] address constants. Dispatch
+//!   helpers (`ComposableCoW::createCall`, `setRootCall`, `removeCall`,
+//!   `hashCall`, etc.) are available via the [`ComposableCoW`]
+//!   interface namespace; integrators feed them into
+//!   `alloy_contract::CallBuilder` to assemble transactions.
 //! - [`TwapData`] / [`TwapStaticInput`] for the canonical TWAP handler
 //!   `staticInput`, locked byte-conformant against cow-py's
 //!   `test_twap.py` vector.

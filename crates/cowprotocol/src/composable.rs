@@ -81,15 +81,26 @@ sol! {
         bytes data;
     }
 
-    /// Events emitted by the [`ComposableCoW`] singleton.
+    /// Events and function signatures of the [`ComposableCoW`] singleton.
     ///
     /// Source:
     /// [`ComposableCoW.sol`](https://github.com/nullislabs/composable-cow/blob/main/src/ComposableCoW.sol).
     /// Off-chain indexers and watch-towers match on the three topic
     /// hashes here to track owner registrations, merkle-root updates and
-    /// swap-guard toggles.
+    /// swap-guard toggles; integrators use the `*Call` types generated
+    /// by [`alloy_sol_types::sol`] to assemble transactions against the
+    /// contract.
+    ///
+    /// `getTradeableOrderWithSignature` is deliberately omitted: its
+    /// return type references `GPv2Order.Data` from `GPv2Order.sol`,
+    /// which is already declared in [`crate::contracts`]. Adding it
+    /// here would create a second ABI-equivalent Rust type. The watch
+    /// tower flow will route through a dedicated helper that bridges
+    /// the two `sol!` blocks.
     #[derive(Debug)]
     interface ComposableCoW {
+        // --- events ---
+
         /// Emitted by `setRoot` / `setRootWithContext` whenever an
         /// owner publishes a new merkle root committing to a batch of
         /// conditional orders.
@@ -108,6 +119,81 @@ sol! {
         /// removes, with `address(0)`) a guard contract that may veto
         /// otherwise-valid orders before settlement.
         event SwapGuardSet(address indexed owner, address swapGuard);
+
+        // --- writes ---
+
+        /// Register a single conditional order. When `dispatch` is
+        /// true the contract additionally emits the
+        /// [`ConditionalOrderCreated`] event so off-chain watch towers
+        /// pick the order up immediately; integrators that index the
+        /// event themselves can pass `false` to save the log gas.
+        function create(ConditionalOrderParams params, bool dispatch) external;
+
+        /// Same as [`create`] but additionally writes a per-owner
+        /// cabinet value via `factory`. Handlers that anchor their
+        /// schedule to e.g. the block timestamp at registration time
+        /// (TWAP with [`TwapStart::AtMiningTime`]) need this variant;
+        /// for plain registrations [`create`] is the right entry point.
+        function createWithContext(
+            ConditionalOrderParams params,
+            address factory,
+            bytes data,
+            bool dispatch
+        ) external;
+
+        /// Cancel a previously-registered single conditional order.
+        /// `singleOrderHash` is `keccak256(abi.encode(params))`, equal
+        /// to [`ComposableCoW::hash`].
+        function remove(bytes32 singleOrderHash) external;
+
+        /// Publish a 32-byte merkle root committing to a batch of
+        /// conditional orders. `proof` is the `(location, data)`
+        /// pointer watch towers use to fetch the leaf proofs from
+        /// off-chain storage; the location codes are documented under
+        /// [`Proof`].
+        function setRoot(bytes32 root, Proof proof) external;
+
+        /// Same as [`setRoot`] but additionally writes a per-owner
+        /// cabinet value via `factory`.
+        function setRootWithContext(
+            bytes32 root,
+            Proof proof,
+            address factory,
+            bytes data
+        ) external;
+
+        /// Install (or remove, with `address(0)`) a guard contract
+        /// that may veto otherwise-valid orders before settlement.
+        function setSwapGuard(address swapGuard) external;
+
+        // --- views ---
+
+        /// `true` when the caller has authorised the single
+        /// conditional order keyed by `singleOrderHash`. Mirrors the
+        /// `singleOrders` mapping written by [`create`].
+        function singleOrders(address owner, bytes32 singleOrderHash) external view returns (bool);
+
+        /// Owner's current published merkle root, or `bytes32(0)` when
+        /// none has been set. Mirrors the `roots` mapping.
+        function roots(address owner) external view returns (bytes32);
+
+        /// Owner's installed swap-guard contract, or `address(0)` when
+        /// none. Mirrors the `swapGuards` mapping.
+        function swapGuards(address owner) external view returns (address);
+
+        /// Per-owner key/value storage written by
+        /// [`createWithContext`] / [`setRootWithContext`]. Handlers
+        /// read values back through their `valueFactory` argument; the
+        /// canonical example is the block-timestamp anchor used by
+        /// TWAP orders started [`TwapStart::AtMiningTime`].
+        function cabinet(address owner, bytes32 ctx) external view returns (bytes32);
+
+        /// Contract-derived hash of a `ConditionalOrderParams` triple.
+        /// Equal to `keccak256(abi.encode(params))`; matches the inner
+        /// keccak in [`crate::multiplexer::conditional_order_leaf`], so
+        /// callers can verify their off-chain leaf matches what the
+        /// contract stores.
+        function hash(ConditionalOrderParams params) external pure returns (bytes32);
     }
 }
 
@@ -384,7 +470,7 @@ impl TwapData {
 #[cfg(test)]
 mod tests {
     use alloy_primitives::{B256, Bytes, U256, hex, keccak256};
-    use alloy_sol_types::{SolEvent, SolValue};
+    use alloy_sol_types::{SolCall, SolEvent, SolValue};
 
     use super::*;
 
@@ -435,6 +521,127 @@ mod tests {
         let decoded = Proof::abi_decode(&encoded).unwrap();
         assert_eq!(decoded.location, proof.location);
         assert_eq!(decoded.data, proof.data);
+    }
+
+    /// Function selectors must equal the `keccak256(signature)[..4]` the
+    /// `ComposableCoW` contract decodes against. The signatures hard-coded
+    /// here are the canonical strings cow-py and the
+    /// `nullislabs/composable-cow` test suite use; a typo in any `sol!`
+    /// field name or order would break this lock.
+    #[test]
+    fn composable_cow_selectors_match_keccak() {
+        let cases: &[(&[u8; 4], &[u8])] = &[
+            (
+                &ComposableCoW::createCall::SELECTOR,
+                b"create((address,bytes32,bytes),bool)",
+            ),
+            (
+                &ComposableCoW::createWithContextCall::SELECTOR,
+                b"createWithContext((address,bytes32,bytes),address,bytes,bool)",
+            ),
+            (&ComposableCoW::removeCall::SELECTOR, b"remove(bytes32)"),
+            (
+                &ComposableCoW::setRootCall::SELECTOR,
+                b"setRoot(bytes32,(uint8,bytes))",
+            ),
+            (
+                &ComposableCoW::setRootWithContextCall::SELECTOR,
+                b"setRootWithContext(bytes32,(uint8,bytes),address,bytes)",
+            ),
+            (
+                &ComposableCoW::setSwapGuardCall::SELECTOR,
+                b"setSwapGuard(address)",
+            ),
+            (
+                &ComposableCoW::singleOrdersCall::SELECTOR,
+                b"singleOrders(address,bytes32)",
+            ),
+            (&ComposableCoW::rootsCall::SELECTOR, b"roots(address)"),
+            (
+                &ComposableCoW::swapGuardsCall::SELECTOR,
+                b"swapGuards(address)",
+            ),
+            (
+                &ComposableCoW::cabinetCall::SELECTOR,
+                b"cabinet(address,bytes32)",
+            ),
+            (
+                &ComposableCoW::hashCall::SELECTOR,
+                b"hash((address,bytes32,bytes))",
+            ),
+        ];
+        for (selector, signature) in cases {
+            let expected = &keccak256(signature)[..4];
+            assert_eq!(
+                selector.as_slice(),
+                expected,
+                "selector for {} does not match keccak256(signature)",
+                std::str::from_utf8(signature).unwrap(),
+            );
+        }
+    }
+
+    /// `setRoot(root, (location, data))` must round-trip back to the
+    /// same fields and start with the canonical selector. Locks the
+    /// publish-merkle-root path the multiplexer flow depends on.
+    #[test]
+    fn set_root_call_round_trips() {
+        let root = B256::from(hex!(
+            "abababababababababababababababababababababababababababababababab"
+        ));
+        let proof = Proof {
+            location: 1u8,
+            data: Bytes::from_static(b"ipfs://bafy"),
+        };
+        let call = ComposableCoW::setRootCall {
+            root,
+            proof: proof.clone(),
+        };
+        let encoded = call.abi_encode();
+        assert_eq!(&encoded[..4], &ComposableCoW::setRootCall::SELECTOR);
+        let decoded = ComposableCoW::setRootCall::abi_decode(&encoded).unwrap();
+        assert_eq!(decoded.root, root);
+        assert_eq!(decoded.proof.location, proof.location);
+        assert_eq!(decoded.proof.data, proof.data);
+    }
+
+    /// `create((handler, salt, staticInput), dispatch)` round-trips and
+    /// keeps the selector. Locks the single-order registration call,
+    /// the most common write integrators issue.
+    #[test]
+    fn create_call_round_trips() {
+        let params = ConditionalOrderParams {
+            handler: TWAP_HANDLER,
+            salt: B256::from(hex!(
+                "0202020202020202020202020202020202020202020202020202020202020202"
+            )),
+            staticInput: Bytes::from_static(&hex!("c0ffee")),
+        };
+        let call = ComposableCoW::createCall {
+            params: params.clone(),
+            dispatch: true,
+        };
+        let encoded = call.abi_encode();
+        assert_eq!(&encoded[..4], &ComposableCoW::createCall::SELECTOR);
+        let decoded = ComposableCoW::createCall::abi_decode(&encoded).unwrap();
+        assert_eq!(decoded.params.handler, params.handler);
+        assert_eq!(decoded.params.salt, params.salt);
+        assert_eq!(decoded.params.staticInput, params.staticInput);
+        assert!(decoded.dispatch);
+    }
+
+    /// `hash(params)` is a view: its selector must match
+    /// `crate::multiplexer::conditional_order_leaf` only after the
+    /// outer keccak. Locks that the function signature the contract
+    /// dispatches against agrees with the inner half of the leaf
+    /// derivation.
+    #[test]
+    fn hash_call_selector_matches_inner_leaf_derivation() {
+        let inner_signature = b"hash((address,bytes32,bytes))";
+        assert_eq!(
+            &ComposableCoW::hashCall::SELECTOR,
+            &keccak256(inner_signature)[..4]
+        );
     }
 
     /// Pin the `ComposableCoW` deployment hex literals so a copy-paste
