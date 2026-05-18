@@ -12,8 +12,7 @@
 
 #[cfg(test)]
 use alloy_primitives::keccak256;
-use alloy_primitives::{Address, B256, FixedBytes, U256};
-use hex_literal::hex;
+use alloy_primitives::{Address, B256, FixedBytes, U256, b256};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::fmt::{self, Display};
@@ -137,9 +136,9 @@ impl OrderData {
     /// [`alloy_sol_types::SolStruct`] applied to the private
     /// `eip712::Order` declaration, whose `typeHash` and field encoding
     /// are conformance-locked against the canonical contract type string.
-    pub fn hash_struct(&self) -> [u8; 32] {
+    pub fn hash_struct(&self) -> B256 {
         use alloy_sol_types::SolStruct;
-        eip712::Order::from(self).eip712_hash_struct().0
+        eip712::Order::from(self).eip712_hash_struct()
     }
 
     /// 56-byte order UID on `domain` for `owner`.
@@ -410,11 +409,10 @@ pub enum OrderKind {
 
 impl OrderKind {
     /// `keccak256("buy")`: EIP-712 encoding + on-chain `bytes32` marker.
-    pub const BUY: [u8; 32] =
-        hex!("6ed88e868af0a1983e3886d5f3e95a2fafbd6c3450bc229e27342283dc429ccc");
+    pub const BUY: B256 = b256!("6ed88e868af0a1983e3886d5f3e95a2fafbd6c3450bc229e27342283dc429ccc");
     /// `keccak256("sell")`: EIP-712 encoding + on-chain `bytes32` marker.
-    pub const SELL: [u8; 32] =
-        hex!("f3b277728b3fee749481eb3e0b3b48980dbbab78658fc419025cb16eee346775");
+    pub const SELL: B256 =
+        b256!("f3b277728b3fee749481eb3e0b3b48980dbbab78658fc419025cb16eee346775");
 
     /// Lower-case wire form (`"buy"` / `"sell"`).
     pub const fn as_str(self) -> &'static str {
@@ -427,26 +425,15 @@ impl OrderKind {
     /// Parse the 32-byte on-chain marker (as returned by `GPv2Order.Data.kind`)
     /// into a Rust enum. Returns `None` for unknown markers; the contract
     /// itself only ever writes `BUY` or `SELL`.
-    pub const fn from_contract_bytes(bytes: [u8; 32]) -> Option<Self> {
-        if matches_bytes(&bytes, &Self::BUY) {
+    pub fn from_contract_bytes(bytes: B256) -> Option<Self> {
+        if bytes == Self::BUY {
             Some(Self::Buy)
-        } else if matches_bytes(&bytes, &Self::SELL) {
+        } else if bytes == Self::SELL {
             Some(Self::Sell)
         } else {
             None
         }
     }
-}
-
-const fn matches_bytes(a: &[u8; 32], b: &[u8; 32]) -> bool {
-    let mut i = 0;
-    while i < 32 {
-        if a[i] != b[i] {
-            return false;
-        }
-        i += 1;
-    }
-    true
 }
 
 impl Display for OrderKind {
@@ -470,23 +457,23 @@ pub enum SellTokenSource {
 
 impl SellTokenSource {
     /// `keccak256("erc20")`.
-    pub const ERC20: [u8; 32] =
-        hex!("5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9");
+    pub const ERC20: B256 =
+        b256!("5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9");
     /// `keccak256("external")`.
-    pub const EXTERNAL: [u8; 32] =
-        hex!("abee3b73373acd583a130924aad6dc38cfdc44ba0555ba94ce2ff63980ea0632");
+    pub const EXTERNAL: B256 =
+        b256!("abee3b73373acd583a130924aad6dc38cfdc44ba0555ba94ce2ff63980ea0632");
     /// `keccak256("internal")`.
-    pub const INTERNAL: [u8; 32] =
-        hex!("4ac99ace14ee0a5ef932dc609df0943ab7ac16b7583634612f8dc35a4289a6ce");
+    pub const INTERNAL: B256 =
+        b256!("4ac99ace14ee0a5ef932dc609df0943ab7ac16b7583634612f8dc35a4289a6ce");
 
     /// Parse the on-chain `GPv2Order.Data.sellTokenBalance` marker.
     /// Returns `None` for unknown values.
-    pub const fn from_contract_bytes(bytes: [u8; 32]) -> Option<Self> {
-        if matches_bytes(&bytes, &Self::ERC20) {
+    pub fn from_contract_bytes(bytes: B256) -> Option<Self> {
+        if bytes == Self::ERC20 {
             Some(Self::Erc20)
-        } else if matches_bytes(&bytes, &Self::EXTERNAL) {
+        } else if bytes == Self::EXTERNAL {
             Some(Self::External)
-        } else if matches_bytes(&bytes, &Self::INTERNAL) {
+        } else if bytes == Self::INTERNAL {
             Some(Self::Internal)
         } else {
             None
@@ -507,18 +494,18 @@ pub enum BuyTokenDestination {
 
 impl BuyTokenDestination {
     /// `keccak256("erc20")`.
-    pub const ERC20: [u8; 32] =
-        hex!("5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9");
+    pub const ERC20: B256 =
+        b256!("5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9");
     /// `keccak256("internal")`.
-    pub const INTERNAL: [u8; 32] =
-        hex!("4ac99ace14ee0a5ef932dc609df0943ab7ac16b7583634612f8dc35a4289a6ce");
+    pub const INTERNAL: B256 =
+        b256!("4ac99ace14ee0a5ef932dc609df0943ab7ac16b7583634612f8dc35a4289a6ce");
 
     /// Parse the on-chain `GPv2Order.Data.buyTokenBalance` marker.
     /// Returns `None` for unknown values.
-    pub const fn from_contract_bytes(bytes: [u8; 32]) -> Option<Self> {
-        if matches_bytes(&bytes, &Self::ERC20) {
+    pub fn from_contract_bytes(bytes: B256) -> Option<Self> {
+        if bytes == Self::ERC20 {
             Some(Self::Erc20)
-        } else if matches_bytes(&bytes, &Self::INTERNAL) {
+        } else if bytes == Self::INTERNAL {
             Some(Self::Internal)
         } else {
             None
@@ -651,7 +638,7 @@ mod tests {
     fn sample_order_struct_hash_matches_ethers() {
         assert_eq!(
             sample_order().hash_struct(),
-            hex!("7d9bf070168f9950003bdad00194ef63a5389dd0b594a1288407d551abf147d5")
+            b256!("7d9bf070168f9950003bdad00194ef63a5389dd0b594a1288407d551abf147d5")
         );
     }
 
@@ -845,35 +832,35 @@ mod tests {
         buy.kind = OrderKind::Buy;
         assert_eq!(
             buy.hash_struct(),
-            hex!("7f6ff8bfee1c5f54ca8ac13dabf84e6646592775700fce0e5ead7049620f9ea5")
+            b256!("7f6ff8bfee1c5f54ca8ac13dabf84e6646592775700fce0e5ead7049620f9ea5")
         );
 
         let mut partial = sample_order();
         partial.partially_fillable = true;
         assert_eq!(
             partial.hash_struct(),
-            hex!("4a7892b4e3cc787cc8dbb22afb249a52b144ae7aec066d2f41f521aa05c7388c")
+            b256!("4a7892b4e3cc787cc8dbb22afb249a52b144ae7aec066d2f41f521aa05c7388c")
         );
 
         let mut external = sample_order();
         external.sell_token_balance = SellTokenSource::External;
         assert_eq!(
             external.hash_struct(),
-            hex!("250972eafa5a01e4103f50f3987422339582583b36d2a47e3c6920b4acca3509")
+            b256!("250972eafa5a01e4103f50f3987422339582583b36d2a47e3c6920b4acca3509")
         );
 
         let mut internal_sell = sample_order();
         internal_sell.sell_token_balance = SellTokenSource::Internal;
         assert_eq!(
             internal_sell.hash_struct(),
-            hex!("c94d0a2b1c1b41042d41e0d9f2d05bc91fbe1cb053b716176850029cdb88f679")
+            b256!("c94d0a2b1c1b41042d41e0d9f2d05bc91fbe1cb053b716176850029cdb88f679")
         );
 
         let mut internal_buy = sample_order();
         internal_buy.buy_token_balance = BuyTokenDestination::Internal;
         assert_eq!(
             internal_buy.hash_struct(),
-            hex!("4d19213af5ed0adb5ec3d67b00cdcd360ea0f9378a9392f599de132106a558d9")
+            b256!("4d19213af5ed0adb5ec3d67b00cdcd360ea0f9378a9392f599de132106a558d9")
         );
 
         // None-receiver should encode the same 20 zero bytes that an
@@ -885,7 +872,7 @@ mod tests {
         assert_eq!(no_receiver.hash_struct(), zero_receiver.hash_struct());
         assert_eq!(
             no_receiver.hash_struct(),
-            hex!("5388e8a0f9cf9129fd0fd54d3192e502cf5519ee4316f0c77860bfc0c3f42994")
+            b256!("5388e8a0f9cf9129fd0fd54d3192e502cf5519ee4316f0c77860bfc0c3f42994")
         );
     }
 
@@ -931,21 +918,21 @@ mod tests {
 
     #[test]
     fn order_kind_keccak_constants() {
-        assert_eq!(OrderKind::BUY, *keccak256(b"buy"));
-        assert_eq!(OrderKind::SELL, *keccak256(b"sell"));
+        assert_eq!(OrderKind::BUY, keccak256(b"buy"));
+        assert_eq!(OrderKind::SELL, keccak256(b"sell"));
     }
 
     #[test]
     fn sell_token_source_keccak_constants() {
-        assert_eq!(SellTokenSource::ERC20, *keccak256(b"erc20"));
-        assert_eq!(SellTokenSource::EXTERNAL, *keccak256(b"external"));
-        assert_eq!(SellTokenSource::INTERNAL, *keccak256(b"internal"));
+        assert_eq!(SellTokenSource::ERC20, keccak256(b"erc20"));
+        assert_eq!(SellTokenSource::EXTERNAL, keccak256(b"external"));
+        assert_eq!(SellTokenSource::INTERNAL, keccak256(b"internal"));
     }
 
     #[test]
     fn buy_token_destination_keccak_constants() {
-        assert_eq!(BuyTokenDestination::ERC20, *keccak256(b"erc20"));
-        assert_eq!(BuyTokenDestination::INTERNAL, *keccak256(b"internal"));
+        assert_eq!(BuyTokenDestination::ERC20, keccak256(b"erc20"));
+        assert_eq!(BuyTokenDestination::INTERNAL, keccak256(b"internal"));
     }
 
     #[test]

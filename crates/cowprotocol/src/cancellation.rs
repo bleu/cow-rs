@@ -25,7 +25,7 @@ use {
         signature::{EcdsaSignature, SignatureError},
         signing_scheme::EcdsaSigningScheme,
     },
-    alloy_primitives::Bytes,
+    alloy_primitives::{B256, Bytes},
     serde::{Deserialize, Serialize},
 };
 
@@ -69,13 +69,12 @@ impl OrderCancellation {
     /// EIP-712 `hashStruct` for the single-order cancellation type.
     /// Delegates to [`alloy_sol_types::SolStruct`] applied to the
     /// private `eip712::OrderCancellation` declaration.
-    pub fn hash_struct(uid: &OrderUid) -> [u8; 32] {
+    pub fn hash_struct(uid: &OrderUid) -> B256 {
         use alloy_sol_types::SolStruct;
         eip712::OrderCancellation {
             orderUid: Bytes::copy_from_slice(uid.0.as_slice()),
         }
         .eip712_hash_struct()
-        .0
     }
 
     /// Sign a single-order cancellation. The caller chooses the ECDSA
@@ -151,7 +150,7 @@ impl OrderCancellations {
     /// EIP-712 `hashStruct` for the collection-cancellation type.
     /// Delegates to [`alloy_sol_types::SolStruct`] applied to the
     /// private `eip712::OrderCancellations` declaration.
-    pub fn hash_struct(&self) -> [u8; 32] {
+    pub fn hash_struct(&self) -> B256 {
         use alloy_sol_types::SolStruct;
         eip712::OrderCancellations {
             orderUids: self
@@ -161,7 +160,6 @@ impl OrderCancellations {
                 .collect(),
         }
         .eip712_hash_struct()
-        .0
     }
 
     /// Sign the collection with an ECDSA signer.
@@ -225,9 +223,8 @@ impl SignedOrderCancellations {
 mod tests {
     use {
         super::*,
-        alloy_primitives::{U256, keccak256},
+        alloy_primitives::{U256, b256, keccak256},
         alloy_signer_local::PrivateKeySigner,
-        hex_literal::hex,
     };
 
     /// Locks the [`eip712::OrderCancellation`] `typeHash` against the
@@ -270,7 +267,7 @@ mod tests {
         let empty = OrderCancellations::default();
         assert_eq!(
             empty.hash_struct(),
-            hex!("56acdb3034898c6c23971cb3f92c32a4739e89a13c85282547025583a93911bd")
+            b256!("56acdb3034898c6c23971cb3f92c32a4739e89a13c85282547025583a93911bd")
         );
 
         let two = OrderCancellations {
@@ -278,7 +275,7 @@ mod tests {
         };
         assert_eq!(
             two.hash_struct(),
-            hex!("405f6cb53d87901a5385a824a99c94b43146547f5ea3623f8d2f50b925e97a8b")
+            b256!("405f6cb53d87901a5385a824a99c94b43146547f5ea3623f8d2f50b925e97a8b")
         );
     }
 

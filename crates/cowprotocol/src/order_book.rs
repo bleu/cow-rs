@@ -201,13 +201,6 @@ struct CancellationPayload<'a> {
     signing_scheme: EcdsaSigningScheme,
 }
 
-fn hex_string(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(2 + bytes.len() * 2);
-    out.push_str("0x");
-    out.push_str(&const_hex::encode(bytes));
-    out
-}
-
 /// Auction lifecycle stage returned by `GET /api/v1/orders/{uid}/status`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -959,9 +952,7 @@ impl OrderBookApi {
     /// the digest, so this closes the loop between what was signed
     /// and what downstream code displays.
     pub async fn get_app_data(&self, hash: &AppDataHash) -> Result<AppDataDocument> {
-        let document: AppDataDocument = self
-            .get_json(&format!("api/v1/app_data/{}", hex_string(hash.as_ref())))
-            .await?;
+        let document: AppDataDocument = self.get_json(&format!("api/v1/app_data/{hash}")).await?;
         let computed = document.computed_hash();
         if computed != *hash {
             return Err(Error::AppDataHashMismatch {
@@ -983,9 +974,7 @@ impl OrderBookApi {
                 computed: computed.to_string(),
             });
         }
-        let url = self
-            .base_url
-            .join(&format!("api/v1/app_data/{}", hex_string(hash.as_ref())))?;
+        let url = self.base_url.join(&format!("api/v1/app_data/{hash}"))?;
         let response = self.client.put(url).json(document).send().await?;
         let status = response.status();
         if status.is_success() {
@@ -1151,18 +1140,13 @@ mod tests {
     use crate::app_data::{EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON};
 
     use super::*;
+    use alloy_primitives::address;
 
     /// Token addresses used by [`fixture_quote_request`]: USDC and DAI on
     /// Ethereum mainnet.
-    const USDC: Address = Address::new(hex_literal::hex!(
-        "A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
-    ));
-    const DAI: Address = Address::new(hex_literal::hex!(
-        "6B175474E89094C44Da98b954EedeAC495271d0F"
-    ));
-    const OWNER: Address = Address::new(hex_literal::hex!(
-        "70997970C51812dc3A010C7d01b50e0d17dc79C8"
-    ));
+    const USDC: Address = address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
+    const DAI: Address = address!("6B175474E89094C44Da98b954EedeAC495271d0F");
+    const OWNER: Address = address!("70997970C51812dc3A010C7d01b50e0d17dc79C8");
 
     fn fixture_quote_request() -> QuoteRequest {
         QuoteRequest::sell_amount_before_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64))
@@ -1270,12 +1254,6 @@ mod tests {
         assert!(api.base_url().path().ends_with('/'));
         let endpoint = api.base_url().join("api/v1/quote").unwrap();
         assert_eq!(endpoint.path(), "/orderbook/api/v1/quote");
-    }
-
-    #[test]
-    fn hex_string_lowercases_with_prefix() {
-        assert_eq!(hex_string(&[0xab, 0xcd]), "0xabcd");
-        assert_eq!(hex_string(&[]), "0x");
     }
 
     #[test]

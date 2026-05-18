@@ -67,47 +67,34 @@ fn from_js<T: for<'de> Deserialize<'de>>(value: JsValue) -> Result<T, JsValue> {
         .map_err(|err| JsValue::from_str(&format!("deserialise failed: {err}")))
 }
 
-fn parse_address(value: &str) -> Result<Address, JsValue> {
+fn parse_typed<T>(value: &str, kind: &str) -> Result<T, JsValue>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
     value
-        .parse::<Address>()
-        .map_err(|err| JsValue::from_str(&format!("invalid address {value}: {err}")))
+        .parse::<T>()
+        .map_err(|err| JsValue::from_str(&format!("invalid {kind} {value}: {err}")))
+}
+
+fn parse_address(value: &str) -> Result<Address, JsValue> {
+    parse_typed(value, "address")
 }
 
 fn parse_u256(value: &str) -> Result<U256, JsValue> {
-    value
-        .parse::<U256>()
-        .map_err(|err| JsValue::from_str(&format!("invalid u256 {value}: {err}")))
+    parse_typed(value, "u256")
 }
 
 fn parse_uid(value: &str) -> Result<OrderUid, JsValue> {
-    value
-        .parse::<OrderUid>()
-        .map_err(|err| JsValue::from_str(&format!("invalid order uid {value}: {err}")))
+    parse_typed(value, "order uid")
 }
 
 fn parse_b256(value: &str) -> Result<B256, JsValue> {
-    value
-        .parse::<B256>()
-        .map_err(|err| JsValue::from_str(&format!("invalid 32-byte hex {value}: {err}")))
+    parse_typed(value, "32-byte hex")
 }
 
-fn parse_chain(chain: &str) -> Result<Chain, JsValue> {
-    let normalised = chain.to_ascii_lowercase().replace('-', "");
-    let chain = match normalised.as_str() {
-        "mainnet" | "1" => Chain::Mainnet,
-        "bnb" | "56" => Chain::Bnb,
-        "gnosis" | "100" => Chain::Gnosis,
-        "polygon" | "137" => Chain::Polygon,
-        "base" | "8453" => Chain::Base,
-        "plasma" | "9745" => Chain::Plasma,
-        "arbitrum" | "arbitrumone" | "42161" => Chain::ArbitrumOne,
-        "avalanche" | "43114" => Chain::Avalanche,
-        "ink" | "57073" => Chain::Ink,
-        "linea" | "59144" => Chain::Linea,
-        "sepolia" | "11155111" => Chain::Sepolia,
-        _ => return Err(JsValue::from_str(&format!("unknown chain {chain}"))),
-    };
-    Ok(chain)
+fn parse_chain(value: &str) -> Result<Chain, JsValue> {
+    parse_typed(value, "chain")
 }
 
 #[cfg(feature = "in_shim_signing")]
@@ -264,7 +251,7 @@ pub fn eip712_payload(order_data: JsValue, chain: &str) -> Result<JsValue, JsVal
 #[wasm_bindgen]
 pub fn order_struct_hash(order_data: JsValue) -> Result<String, JsValue> {
     let order: OrderData = from_js(order_data)?;
-    Ok(format!("0x{}", const_hex::encode(order.hash_struct())))
+    Ok(order.hash_struct().to_string())
 }
 
 /// 56-byte `OrderUid` for the order against the given chain's domain.

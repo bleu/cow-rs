@@ -189,9 +189,37 @@ impl TryFrom<u64> for Chain {
 impl FromStr for Chain {
     type Err = UnsupportedChain;
 
+    /// Accepts numeric chain ids, the canonical orderbook slugs returned by
+    /// [`Chain::orderbook_slug`], and a small set of aliases the JS shim
+    /// historically accepted (e.g. `"arbitrum"`, `"arbitrum-one"`). The
+    /// input is matched case-insensitively after stripping dashes and
+    /// underscores so `"arbitrum-one"`, `"arbitrum_one"` and `"ArbitrumOne"`
+    /// all resolve to [`Chain::ArbitrumOne`]. Slug failure returns
+    /// `UnsupportedChain(0)`: `0` is not a valid chain id, so it doubles
+    /// as a sentinel for "input was not a recognised slug".
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let id: u64 = s.parse().map_err(|_| UnsupportedChain(0))?;
-        Self::try_from(id)
+        if let Ok(id) = s.parse::<u64>() {
+            return Self::try_from(id);
+        }
+        let normalised: String = s
+            .chars()
+            .filter(|c| !matches!(c, '-' | '_'))
+            .flat_map(char::to_lowercase)
+            .collect();
+        match normalised.as_str() {
+            "mainnet" | "ethereum" => Ok(Self::Mainnet),
+            "bnb" | "bsc" => Ok(Self::Bnb),
+            "gnosis" | "xdai" => Ok(Self::Gnosis),
+            "polygon" => Ok(Self::Polygon),
+            "base" => Ok(Self::Base),
+            "plasma" => Ok(Self::Plasma),
+            "arbitrum" | "arbitrumone" => Ok(Self::ArbitrumOne),
+            "avalanche" => Ok(Self::Avalanche),
+            "ink" => Ok(Self::Ink),
+            "linea" => Ok(Self::Linea),
+            "sepolia" => Ok(Self::Sepolia),
+            _ => Err(UnsupportedChain(0)),
+        }
     }
 }
 

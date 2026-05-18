@@ -34,7 +34,6 @@ in_shim_signing = ["dep:alloy-signer-local"]
 cowprotocol = { path = "../cowprotocol", version = "1.0.0-alpha.2", default-features = false }
 alloy-primitives.workspace = true
 alloy-signer-local = { workspace = true, optional = true }
-const-hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 wasm-bindgen = "0.2"
