@@ -249,15 +249,25 @@ impl EcdsaSignature {
         if bytes.len() != 65 {
             return Err(SignatureError::Length(bytes.len()));
         }
-        let v = bytes[64];
+        Self::from_components(
+            B256::from_slice(&bytes[..32]),
+            B256::from_slice(&bytes[32..64]),
+            bytes[64],
+        )
+    }
+
+    /// Assemble a signature from its three scalar components, normalising
+    /// `v` to `27` or `28` (Solidity's `ecrecover` rejects `v = 0` and
+    /// `v = 1`). Returns [`SignatureError::InvalidV`] for any other value.
+    pub const fn from_components(r: B256, s: B256, v: u8) -> Result<Self, SignatureError> {
         let normalised_v = match v {
             0 | 27 => 27,
             1 | 28 => 28,
             invalid => return Err(SignatureError::InvalidV(invalid)),
         };
         Ok(Self {
-            r: B256::from_slice(&bytes[..32]),
-            s: B256::from_slice(&bytes[32..64]),
+            r,
+            s,
             v: normalised_v,
         })
     }

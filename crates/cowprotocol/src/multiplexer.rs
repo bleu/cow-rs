@@ -71,24 +71,15 @@ pub struct Multiplexer {
 }
 
 /// Failure modes for [`Multiplexer::new`] and [`Multiplexer::proof`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, thiserror::Error, Eq, PartialEq)]
 pub enum MultiplexerError {
     /// `new` was called with an empty slice.
+    #[error("Multiplexer needs at least one leaf")]
     Empty,
     /// `proof` was called with an out-of-range index.
+    #[error("leaf index out of range")]
     IndexOutOfRange,
 }
-
-impl std::fmt::Display for MultiplexerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Empty => "Multiplexer needs at least one leaf",
-            Self::IndexOutOfRange => "leaf index out of range",
-        })
-    }
-}
-
-impl std::error::Error for MultiplexerError {}
 
 impl Multiplexer {
     /// Construct a tree from leaves derived via [`conditional_order_leaf`].

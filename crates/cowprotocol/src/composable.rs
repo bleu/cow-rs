@@ -26,7 +26,6 @@
 
 use alloy_primitives::{Address, B256, Bytes, U256, address, keccak256};
 use alloy_sol_types::{SolValue, sol};
-use std::fmt::{self, Display};
 
 use crate::chain::Chain;
 
@@ -269,45 +268,32 @@ pub struct TwapData {
 /// Mirrors the `OrderNotValid(string)` reverts raised by `TWAPOrder.validate`
 /// in composable-cow; client-side validation lets callers reject malformed
 /// TWAPs without paying the on-chain revert cost.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, thiserror::Error, Eq, PartialEq)]
 pub enum TwapError {
     /// `sell_token == buy_token`.
+    #[error("TWAP sell_token equals buy_token")]
     SameToken,
     /// One of the tokens is the zero address.
+    #[error("TWAP token is the zero address")]
     InvalidToken,
     /// `sell_amount == 0` or doesn't divide cleanly into a non-zero
     /// per-part amount.
+    #[error("TWAP sell amount is zero or does not divide cleanly across number_of_parts")]
     InvalidSellAmount,
     /// `buy_amount == 0` or doesn't divide cleanly into a non-zero
     /// per-part amount.
+    #[error("TWAP buy amount is zero or does not divide cleanly across number_of_parts")]
     InvalidBuyAmount,
     /// `number_of_parts <= 1`.
+    #[error("TWAP number_of_parts must be > 1")]
     InvalidNumParts,
     /// `time_between_parts == 0` or `> 365 days`.
+    #[error("TWAP time_between_parts must be > 0 and <= 365 days")]
     InvalidFrequency,
     /// `LimitDuration(span)` with `span > time_between_parts`.
+    #[error("TWAP LimitDuration span must be <= time_between_parts")]
     InvalidSpan,
 }
-
-impl Display for TwapError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::SameToken => "TWAP sell_token equals buy_token",
-            Self::InvalidToken => "TWAP token is the zero address",
-            Self::InvalidSellAmount => {
-                "TWAP sell amount is zero or does not divide cleanly across number_of_parts"
-            }
-            Self::InvalidBuyAmount => {
-                "TWAP buy amount is zero or does not divide cleanly across number_of_parts"
-            }
-            Self::InvalidNumParts => "TWAP number_of_parts must be > 1",
-            Self::InvalidFrequency => "TWAP time_between_parts must be > 0 and <= 365 days",
-            Self::InvalidSpan => "TWAP LimitDuration span must be <= time_between_parts",
-        })
-    }
-}
-
-impl std::error::Error for TwapError {}
 
 const TWAP_MAX_FREQUENCY_SECONDS: u32 = 365 * 24 * 60 * 60;
 

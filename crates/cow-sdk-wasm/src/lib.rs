@@ -383,11 +383,7 @@ pub fn build_order_creation(
     let scheme = parse_scheme(&sig.signing_scheme)?;
     let r = parse_b256(&sig.r)?;
     let s = parse_b256(&sig.s)?;
-    let mut raw = [0u8; 65];
-    raw[..32].copy_from_slice(r.as_slice());
-    raw[32..64].copy_from_slice(s.as_slice());
-    raw[64] = sig.v;
-    let ecdsa = EcdsaSignature::from_bytes(&raw)
+    let ecdsa = EcdsaSignature::from_components(r, s, sig.v)
         .map_err(|err| JsValue::from_str(&format!("invalid signature: {err}")))?;
     let signature = ecdsa.into_signature(scheme);
     let owner = parse_address(owner)?;

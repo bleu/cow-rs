@@ -72,7 +72,7 @@ impl OrderCancellation {
     pub fn hash_struct(uid: &OrderUid) -> B256 {
         use alloy_sol_types::SolStruct;
         eip712::OrderCancellation {
-            orderUid: Bytes::copy_from_slice(uid.0.as_slice()),
+            orderUid: Bytes::from(uid.0),
         }
         .eip712_hash_struct()
     }
@@ -86,7 +86,7 @@ impl OrderCancellation {
         signer: &S,
     ) -> Result<Self, SignatureError> {
         let payload = eip712::OrderCancellation {
-            orderUid: Bytes::copy_from_slice(order_uid.0.as_slice()),
+            orderUid: Bytes::from(order_uid.0),
         };
         let signature = EcdsaSignature::sign(scheme, domain, &payload, signer)?;
         Ok(Self {
@@ -103,7 +103,7 @@ impl OrderCancellation {
         domain: &DomainSeparator,
     ) -> Result<alloy_primitives::Address, SignatureError> {
         let payload = eip712::OrderCancellation {
-            orderUid: Bytes::copy_from_slice(self.order_uid.0.as_slice()),
+            orderUid: Bytes::from(self.order_uid.0),
         };
         Ok(self
             .signature
@@ -153,11 +153,7 @@ impl OrderCancellations {
     pub fn hash_struct(&self) -> B256 {
         use alloy_sol_types::SolStruct;
         eip712::OrderCancellations {
-            orderUids: self
-                .order_uids
-                .iter()
-                .map(|u| Bytes::copy_from_slice(u.0.as_slice()))
-                .collect(),
+            orderUids: self.order_uids.iter().map(|u| Bytes::from(u.0)).collect(),
         }
         .eip712_hash_struct()
     }
@@ -180,11 +176,7 @@ impl OrderCancellations {
 
     fn eip712_payload(&self) -> eip712::OrderCancellations {
         eip712::OrderCancellations {
-            orderUids: self
-                .order_uids
-                .iter()
-                .map(|u| Bytes::copy_from_slice(u.0.as_slice()))
-                .collect(),
+            orderUids: self.order_uids.iter().map(|u| Bytes::from(u.0)).collect(),
         }
     }
 }
