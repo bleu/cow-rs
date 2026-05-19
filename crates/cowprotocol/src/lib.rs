@@ -140,8 +140,8 @@ pub use crate::{
     eth_flow::{ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowOrder},
     multiplexer::{Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof},
     order::{
-        BUY_ETH_ADDRESS, BuyTokenDestination, Order, OrderBuilder, OrderClass, OrderData,
-        OrderKind, OrderStatus, OrderUid, SellTokenSource,
+        BUY_ETH_ADDRESS, BuyTokenDestination, Order, OrderClass, OrderData, OrderKind, OrderStatus,
+        OrderUid, SellTokenSource,
     },
     order_book::{
         AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderBookApi,

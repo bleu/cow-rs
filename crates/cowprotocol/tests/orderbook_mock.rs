@@ -694,9 +694,9 @@ async fn unused_optional_quote_fields_are_omitted_from_request_body() {
         .mount(&server)
         .await;
 
-    let request =
-        QuoteRequest::sell_amount_before_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64))
-            .with_receiver(OWNER);
+    let mut request =
+        QuoteRequest::sell_amount_before_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64));
+    request.receiver = Some(OWNER);
     api(&server).get_quote(&request).await.unwrap();
 
     // We exercised the request shape via QuoteRequest's own tests; here we

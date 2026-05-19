@@ -368,87 +368,6 @@ impl QuoteRequest {
         self.buy_amount_after_fee = Some(a);
         self
     }
-
-    /// Set a custom recipient for the buy token.
-    pub const fn with_receiver(mut self, receiver: Address) -> Self {
-        self.receiver = Some(receiver);
-        self
-    }
-
-    /// Set the order's app-data digest, wrapping it as
-    /// [`QuoteAppData::Hash`]. Not `const fn` because the sibling
-    /// `Full` variant holds a `String`.
-    pub fn with_app_data(mut self, app_data: AppDataHash) -> Self {
-        self.app_data = Some(QuoteAppData::Hash(app_data));
-        self
-    }
-
-    /// Hand the orderbook the canonical JSON document; it computes and
-    /// pins the digest.
-    pub fn with_app_data_full(mut self, full_app_data: impl Into<String>) -> Self {
-        self.app_data = Some(QuoteAppData::Full(full_app_data.into()));
-        self
-    }
-
-    /// Pin the order's absolute expiry timestamp.
-    pub const fn with_valid_to(mut self, valid_to: u32) -> Self {
-        self.valid_to = Some(valid_to);
-        self
-    }
-
-    /// Pin the expiry as seconds from the orderbook's clock. Mutually
-    /// exclusive with [`Self::with_valid_to`]; 30-min default when
-    /// both are absent.
-    pub const fn with_valid_for(mut self, valid_for: u32) -> Self {
-        self.valid_for = Some(valid_for);
-        self
-    }
-
-    /// Gas budget for the on-chain `isValidSignature` callback on
-    /// [`SigningScheme::Eip1271`] quotes.
-    pub const fn with_verification_gas_limit(mut self, gas: u64) -> Self {
-        self.verification_gas_limit = Some(gas);
-        self
-    }
-
-    /// Mark the resulting order as on-chain-placed (EIP-1271 / PreSign
-    /// flows). Lets the orderbook reserve the right simulation budget.
-    pub const fn with_onchain_order(mut self, onchain: bool) -> Self {
-        self.onchain_order = Some(onchain);
-        self
-    }
-
-    /// Pin the price-quality regime; defaults to
-    /// [`PriceQuality::Optimal`] when absent.
-    pub const fn with_price_quality(mut self, quality: PriceQuality) -> Self {
-        self.price_quality = Some(quality);
-        self
-    }
-
-    /// Pin the signing scheme so the orderbook rejects incompatible
-    /// quote / order combinations before signing.
-    pub const fn with_signing_scheme(mut self, scheme: SigningScheme) -> Self {
-        self.signing_scheme = Some(scheme);
-        self
-    }
-
-    /// Mark the resulting order as partially fillable.
-    pub const fn with_partially_fillable(mut self, partially_fillable: bool) -> Self {
-        self.partially_fillable = Some(partially_fillable);
-        self
-    }
-
-    /// Source the sell-side token balance is drawn from.
-    pub const fn with_sell_token_balance(mut self, balance: SellTokenSource) -> Self {
-        self.sell_token_balance = Some(balance);
-        self
-    }
-
-    /// Destination the buy-side token balance is paid to.
-    pub const fn with_buy_token_balance(mut self, balance: BuyTokenDestination) -> Self {
-        self.buy_token_balance = Some(balance);
-        self
-    }
 }
 
 /// Quote response payload. The 12-field signed shape plus the
@@ -832,33 +751,6 @@ impl OrderBookApi {
         }
     }
 
-    /// `tokio::time::sleep`-backed [`Self::poll_until`] that stops on
-    /// a terminal status or when `deadline` elapses. Non-wasm only;
-    /// wasm callers compose `poll_until` with their own sleep.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub async fn wait_for_order_fulfilled(
-        &self,
-        uid: &OrderUid,
-        poll_interval: std::time::Duration,
-        deadline: Option<std::time::Duration>,
-    ) -> Result<Order> {
-        let start = std::time::Instant::now();
-        let interval = poll_interval;
-        self.poll_until(
-            uid,
-            |order| {
-                matches!(
-                    order.status,
-                    crate::OrderStatus::Fulfilled
-                        | crate::OrderStatus::Cancelled
-                        | crate::OrderStatus::Expired
-                ) || deadline.is_some_and(|d| start.elapsed() >= d)
-            },
-            move || tokio::time::sleep(interval),
-        )
-        .await
-    }
-
     /// `GET /api/v1/account/{owner}/orders`. Most recent first. Pass
     /// `None` for both pagers to use the server defaults.
     pub async fn account_orders(
@@ -1154,7 +1046,8 @@ mod tests {
 
     #[test]
     fn quote_request_emits_app_data_hash_form() {
-        let request = fixture_quote_request().with_app_data(crate::EMPTY_APP_DATA_HASH);
+        let mut request = fixture_quote_request();
+        request.app_data = Some(QuoteAppData::Hash(crate::EMPTY_APP_DATA_HASH));
         let body = serde_json::to_value(request).unwrap();
         assert_eq!(
             body["appData"],
@@ -1169,7 +1062,8 @@ mod tests {
 
     #[test]
     fn quote_request_emits_app_data_full_form() {
-        let request = fixture_quote_request().with_app_data_full(crate::EMPTY_APP_DATA_JSON);
+        let mut request = fixture_quote_request();
+        request.app_data = Some(QuoteAppData::Full(crate::EMPTY_APP_DATA_JSON.to_owned()));
         let body = serde_json::to_value(request).unwrap();
         assert_eq!(body["appData"], serde_json::Value::String("{}".to_owned()));
         assert!(body.get("appDataHash").is_none());
@@ -1177,8 +1071,8 @@ mod tests {
 
     #[test]
     fn quote_request_round_trips_price_quality_field() {
-        let request = QuoteRequest::sell_amount_before_fee(USDC, DAI, OWNER, U256::from(1_u64))
-            .with_price_quality(PriceQuality::Verified);
+        let mut request = QuoteRequest::sell_amount_before_fee(USDC, DAI, OWNER, U256::from(1_u64));
+        request.price_quality = Some(PriceQuality::Verified);
         let body = serde_json::to_value(&request).unwrap();
         assert_eq!(body["priceQuality"], "verified");
     }
@@ -1226,11 +1120,11 @@ mod tests {
 
     #[test]
     fn quote_request_emits_valid_for_and_eip1271_extras() {
-        let request = fixture_quote_request()
-            .with_valid_for(1_800)
-            .with_signing_scheme(SigningScheme::Eip1271)
-            .with_verification_gas_limit(50_000)
-            .with_onchain_order(true);
+        let mut request = fixture_quote_request();
+        request.valid_for = Some(1_800);
+        request.signing_scheme = Some(SigningScheme::Eip1271);
+        request.verification_gas_limit = Some(50_000);
+        request.onchain_order = Some(true);
         let body = serde_json::to_value(request).unwrap();
         assert_eq!(body["validFor"], serde_json::Value::from(1_800));
         assert_eq!(
@@ -1703,13 +1597,13 @@ mod tests {
     fn to_signed_order_data_rejects_swapped_app_data() {
         let quote = load_mainnet_quote();
         let pinned = AppDataHash::from([0x42; 32]);
-        let request = QuoteRequest::sell_amount_before_fee(
+        let mut request = QuoteRequest::sell_amount_before_fee(
             quote.quote.sell_token,
             quote.quote.buy_token,
             quote.from,
             U256::from(1u64),
-        )
-        .with_app_data(pinned);
+        );
+        request.app_data = Some(QuoteAppData::Hash(pinned));
         // The response's digest is `EMPTY_APP_DATA_HASH`, not `pinned`.
         let err = quote
             .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
@@ -1771,7 +1665,8 @@ mod tests {
     #[test]
     fn to_signed_order_data_rejects_swapped_valid_to_when_request_pins_it() {
         let quote = load_mainnet_quote();
-        let request = fixture_quote_request().with_valid_to(quote.quote.valid_to.wrapping_add(1));
+        let mut request = fixture_quote_request();
+        request.valid_to = Some(quote.quote.valid_to.wrapping_add(1));
         let err = quote
             .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
             .unwrap_err();
@@ -1795,7 +1690,8 @@ mod tests {
     fn to_signed_order_data_rejects_swapped_partially_fillable_when_request_pins_it() {
         let mut quote = load_mainnet_quote();
         quote.quote.partially_fillable = true;
-        let request = fixture_quote_request().with_partially_fillable(false);
+        let mut request = fixture_quote_request();
+        request.partially_fillable = Some(false);
         let err = quote
             .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
             .unwrap_err();
@@ -1818,7 +1714,8 @@ mod tests {
     fn to_signed_order_data_rejects_swapped_sell_token_balance_when_request_pins_it() {
         let mut quote = load_mainnet_quote();
         quote.quote.sell_token_balance = SellTokenSource::Internal;
-        let request = fixture_quote_request().with_sell_token_balance(SellTokenSource::Erc20);
+        let mut request = fixture_quote_request();
+        request.sell_token_balance = Some(SellTokenSource::Erc20);
         let err = quote
             .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
             .unwrap_err();
@@ -1840,7 +1737,8 @@ mod tests {
     fn to_signed_order_data_rejects_swapped_buy_token_balance_when_request_pins_it() {
         let mut quote = load_mainnet_quote();
         quote.quote.buy_token_balance = BuyTokenDestination::Internal;
-        let request = fixture_quote_request().with_buy_token_balance(BuyTokenDestination::Erc20);
+        let mut request = fixture_quote_request();
+        request.buy_token_balance = Some(BuyTokenDestination::Erc20);
         let err = quote
             .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
             .unwrap_err();
@@ -1866,7 +1764,8 @@ mod tests {
     fn to_signed_order_data_rejects_swapped_signing_scheme_when_request_pins_it() {
         let mut quote = load_mainnet_quote();
         quote.quote.signing_scheme = SigningScheme::PreSign;
-        let request = fixture_quote_request().with_signing_scheme(SigningScheme::Eip712);
+        let mut request = fixture_quote_request();
+        request.signing_scheme = Some(SigningScheme::Eip712);
         let err = quote
             .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
             .unwrap_err();
