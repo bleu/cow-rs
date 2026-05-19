@@ -84,7 +84,7 @@ fn serialise_signature_bytes<S>(
 where
     S: serde::Serializer,
 {
-    serializer.serialize_str(&const_hex::encode_prefixed(signature.to_bytes()))
+    Bytes::from(signature.to_bytes()).serialize(serializer)
 }
 
 /// Deserialisation helper for [`OrderCreation`].

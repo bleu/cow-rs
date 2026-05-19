@@ -6,12 +6,19 @@
 //! one purely on-chain scheme (`PreSign`). The orderbook serialises the
 //! choice as a `signingScheme` field alongside the signature bytes.
 //!
+//! [`EcdsaSignature`] is a type alias for
+//! [`alloy_primitives::Signature`]; the 65-byte `r || s || v` packing,
+//! `v` normalisation (0/1/27/28 → parity), recovery and signer-error
+//! plumbing all come from alloy. Helpers in this module produce the
+//! domain-scoped EIP-712 / EthSign message hash and lift the resulting
+//! signature into the [`Signature`] enum.
+//!
 //! Adapted from [`cowprotocol/services`] (MIT OR Apache-2.0).
 //!
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/model/src/signature.rs
 
 use alloy_primitives::{
-    Address, B256, Bytes, FixedBytes, Signature as PrimSignature, eip191_hash_message,
+    Address, B256, Bytes, Signature as PrimSignature, eip191_hash_message,
 };
 use alloy_signer::{SignerSync, k256::ecdsa::Error as K256Error};
 use alloy_sol_types::SolStruct;
@@ -25,6 +32,15 @@ use crate::signing_scheme::{EcdsaSigningScheme, SigningScheme};
 /// `cowprotocol/services` cap (32 KiB); a hostile orderbook could
 /// otherwise return a multi-MB payload that buffers as a `Vec<u8>`.
 pub const EIP1271_MAX_LEN: usize = 32 * 1024;
+
+/// Raw ECDSA signature (`r || s || v`, 65 bytes). Type-aliased onto
+/// alloy's [`alloy_primitives::Signature`] so the parsing, byte
+/// packing, `v` normalisation (0/1/27/28 → parity) and recovery
+/// primitives come from there for free. Use [`sign_ecdsa`],
+/// [`parse_ecdsa`] and [`ecdsa_from_components`] to construct one, and
+/// [`Signature::from_ecdsa`] to lift it into the scheme-tagged
+/// [`Signature`] enum.
+pub type EcdsaSignature = PrimSignature;
 
 /// Errors specific to signature parsing or verification.
 #[derive(Debug, thiserror::Error)]
@@ -94,13 +110,24 @@ impl Debug for Signature {
 }
 
 impl Signature {
-    /// Build the default signature payload for `scheme`.
+    /// Build the default signature payload for `scheme`. ECDSA variants
+    /// get an all-zero (r, s, parity=false) sentinel; mirrors what the
+    /// orderbook accepts when a real signature is filled in later.
     pub fn default_with(scheme: SigningScheme) -> Self {
         match scheme {
-            SigningScheme::Eip712 => Self::Eip712(EcdsaSignature::default()),
-            SigningScheme::EthSign => Self::EthSign(EcdsaSignature::default()),
+            SigningScheme::Eip712 => Self::Eip712(zero_ecdsa()),
+            SigningScheme::EthSign => Self::EthSign(zero_ecdsa()),
             SigningScheme::Eip1271 => Self::Eip1271(Vec::new()),
             SigningScheme::PreSign => Self::PreSign,
+        }
+    }
+
+    /// Lift an ECDSA signature into the scheme-tagged [`Signature`]
+    /// enum. Pairs with [`sign_ecdsa`] / [`ecdsa_from_components`].
+    pub const fn from_ecdsa(sig: EcdsaSignature, scheme: EcdsaSigningScheme) -> Self {
+        match scheme {
+            EcdsaSigningScheme::Eip712 => Self::Eip712(sig),
+            EcdsaSigningScheme::EthSign => Self::EthSign(sig),
         }
     }
 
@@ -118,7 +145,7 @@ impl Signature {
     /// `signature` field of `POST /api/v1/orders` / `DELETE /api/v1/orders`.
     pub fn to_bytes(&self) -> Vec<u8> {
         match self {
-            Self::Eip712(s) | Self::EthSign(s) => s.to_bytes().to_vec(),
+            Self::Eip712(s) | Self::EthSign(s) => s.as_bytes().to_vec(),
             Self::Eip1271(bytes) => bytes.clone(),
             Self::PreSign => Vec::new(),
         }
@@ -130,12 +157,14 @@ impl Signature {
     /// owner address (legacy 20-byte encoding accepted by services).
     pub fn from_bytes(scheme: SigningScheme, bytes: &[u8]) -> Result<Self, SignatureError> {
         match scheme {
-            SigningScheme::Eip712 => {
-                Ok(EcdsaSignature::from_bytes(bytes)?.into_signature(EcdsaSigningScheme::Eip712))
-            }
-            SigningScheme::EthSign => {
-                Ok(EcdsaSignature::from_bytes(bytes)?.into_signature(EcdsaSigningScheme::EthSign))
-            }
+            SigningScheme::Eip712 => Ok(Self::from_ecdsa(
+                parse_ecdsa(bytes)?,
+                EcdsaSigningScheme::Eip712,
+            )),
+            SigningScheme::EthSign => Ok(Self::from_ecdsa(
+                parse_ecdsa(bytes)?,
+                EcdsaSigningScheme::EthSign,
+            )),
             SigningScheme::Eip1271 => {
                 if bytes.len() > EIP1271_MAX_LEN {
                     return Err(SignatureError::Eip1271TooLong {
@@ -165,12 +194,14 @@ impl Signature {
         payload: &T,
     ) -> Result<Option<Recovered>, SignatureError> {
         match self {
-            Self::Eip712(s) => Ok(Some(s.recover(
+            Self::Eip712(s) => Ok(Some(ecdsa_recover(
+                s,
                 EcdsaSigningScheme::Eip712,
                 domain,
                 payload,
             )?)),
-            Self::EthSign(s) => Ok(Some(s.recover(
+            Self::EthSign(s) => Ok(Some(ecdsa_recover(
+                s,
                 EcdsaSigningScheme::EthSign,
                 domain,
                 payload,
@@ -190,120 +221,69 @@ pub struct Recovered {
     pub signer: Address,
 }
 
-/// Raw ECDSA signature: `r || s || v` (65 bytes).
-///
-/// `v` is normalised to `27` or `28` at construction time for compatibility
-/// with Solidity's `ecrecover`.
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
-pub struct EcdsaSignature {
-    /// `r` component, 32 bytes big-endian.
-    pub r: B256,
-    /// `s` component, 32 bytes big-endian.
-    pub s: B256,
-    /// Recovery byte, normalised to `27` or `28`.
-    pub v: u8,
+/// Sign an EIP-712 [`SolStruct`] payload with a
+/// `SignerSync`-implementing signer (e.g.
+/// `alloy_signer_local::PrivateKeySigner`).
+pub fn sign_ecdsa<T: SolStruct, S: SignerSync>(
+    scheme: EcdsaSigningScheme,
+    domain: &DomainSeparator,
+    payload: &T,
+    signer: &S,
+) -> Result<EcdsaSignature, SignatureError> {
+    let message = signing_message(scheme, domain, payload);
+    let raw = signer.sign_hash_sync(&message).map_err(|e| match e {
+        alloy_signer::Error::Ecdsa(k) => SignatureError::Signer(k),
+        other => SignatureError::SignerOther(other.to_string()),
+    })?;
+    parse_ecdsa(&raw.as_bytes())
 }
 
-impl Default for EcdsaSignature {
-    fn default() -> Self {
-        // `v = 27` is the normalised form of `v = 0`. Solidity's `ecrecover`
-        // rejects `v = 0` outright.
-        Self {
-            r: B256::ZERO,
-            s: B256::ZERO,
-            v: 27,
-        }
+/// Decode an `r || s || v` (65-byte) payload through alloy's `v`
+/// normalisation; legacy `v ∈ {0, 1}` and Electrum `v ∈ {27, 28}` are
+/// both accepted. Length is validated explicitly so callers get a
+/// dedicated [`SignatureError::Length`] before alloy's generic
+/// `FromBytes` error.
+pub fn parse_ecdsa(bytes: &[u8]) -> Result<EcdsaSignature, SignatureError> {
+    if bytes.len() != 65 {
+        return Err(SignatureError::Length(bytes.len()));
     }
+    if !matches!(bytes[64], 0 | 1 | 27 | 28) {
+        return Err(SignatureError::InvalidV(bytes[64]));
+    }
+    Ok(PrimSignature::from_raw(bytes)?)
 }
 
-impl Debug for EcdsaSignature {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EcdsaSignature")
-            .field("bytes", &FixedBytes::from(self.to_bytes()).to_string())
-            .finish()
-    }
+/// Assemble a signature from its three scalar components. `v` is
+/// rejected for any value outside `{0, 1, 27, 28}` and normalised to
+/// the canonical Electrum form alloy stores internally.
+pub fn ecdsa_from_components(
+    r: B256,
+    s: B256,
+    v: u8,
+) -> Result<EcdsaSignature, SignatureError> {
+    let mut bytes = [0u8; 65];
+    bytes[..32].copy_from_slice(r.as_slice());
+    bytes[32..64].copy_from_slice(s.as_slice());
+    bytes[64] = v;
+    parse_ecdsa(&bytes)
 }
 
-impl EcdsaSignature {
-    /// Promote this ECDSA signature into a typed [`Signature`]. Consumes
-    /// `self`, hence the `into_` prefix per Rust API conventions.
-    pub const fn into_signature(self, scheme: EcdsaSigningScheme) -> Signature {
-        match scheme {
-            EcdsaSigningScheme::Eip712 => Signature::Eip712(self),
-            EcdsaSigningScheme::EthSign => Signature::EthSign(self),
-        }
-    }
+/// Recover the signer address from an ECDSA signature against the
+/// given domain and payload.
+pub fn ecdsa_recover<T: SolStruct>(
+    sig: &EcdsaSignature,
+    scheme: EcdsaSigningScheme,
+    domain: &DomainSeparator,
+    payload: &T,
+) -> Result<Recovered, SignatureError> {
+    let message = signing_message(scheme, domain, payload);
+    let signer = sig.recover_address_from_prehash(&message)?;
+    Ok(Recovered { message, signer })
+}
 
-    /// Encode as `r || s || v` (65 bytes).
-    pub fn to_bytes(&self) -> [u8; 65] {
-        let mut out = [0u8; 65];
-        out[..32].copy_from_slice(self.r.as_slice());
-        out[32..64].copy_from_slice(self.s.as_slice());
-        out[64] = self.v;
-        out
-    }
-
-    /// Decode an `r || s || v` (65-byte) payload, normalising `v` to `27`
-    /// or `28`.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, SignatureError> {
-        if bytes.len() != 65 {
-            return Err(SignatureError::Length(bytes.len()));
-        }
-        Self::from_components(
-            B256::from_slice(&bytes[..32]),
-            B256::from_slice(&bytes[32..64]),
-            bytes[64],
-        )
-    }
-
-    /// Assemble a signature from its three scalar components, normalising
-    /// `v` to `27` or `28` (Solidity's `ecrecover` rejects `v = 0` and
-    /// `v = 1`). Returns [`SignatureError::InvalidV`] for any other value.
-    pub const fn from_components(r: B256, s: B256, v: u8) -> Result<Self, SignatureError> {
-        let normalised_v = match v {
-            0 | 27 => 27,
-            1 | 28 => 28,
-            invalid => return Err(SignatureError::InvalidV(invalid)),
-        };
-        Ok(Self {
-            r,
-            s,
-            v: normalised_v,
-        })
-    }
-
-    /// Recover the signer address from this signature.
-    ///
-    /// `signing_scheme` determines whether the EIP-712 typed-data hash or
-    /// the EthSign-wrapped variant is used as the recovery message.
-    pub fn recover<T: SolStruct>(
-        &self,
-        signing_scheme: EcdsaSigningScheme,
-        domain: &DomainSeparator,
-        payload: &T,
-    ) -> Result<Recovered, SignatureError> {
-        let message = signing_message(signing_scheme, domain, payload);
-        let signature = PrimSignature::from_raw(&self.to_bytes())?;
-        let signer = signature.recover_address_from_prehash(&message)?;
-        Ok(Recovered { message, signer })
-    }
-
-    /// Sign an EIP-712 [`SolStruct`] payload with a
-    /// `SignerSync`-implementing signer (e.g.
-    /// `alloy_signer_local::PrivateKeySigner`).
-    pub fn sign<T: SolStruct, S: SignerSync>(
-        signing_scheme: EcdsaSigningScheme,
-        domain: &DomainSeparator,
-        payload: &T,
-        signer: &S,
-    ) -> Result<Self, SignatureError> {
-        let message = signing_message(signing_scheme, domain, payload);
-        let raw = signer.sign_hash_sync(&message).map_err(|e| match e {
-            alloy_signer::Error::Ecdsa(k) => SignatureError::Signer(k),
-            other => SignatureError::SignerOther(other.to_string()),
-        })?;
-        Self::from_bytes(&raw.as_bytes())
-    }
+/// All-zero (r, s, parity=false) sentinel used by [`Signature::default_with`].
+fn zero_ecdsa() -> EcdsaSignature {
+    PrimSignature::from_bytes_and_parity(&[0u8; 64], false)
 }
 
 /// Compute the message bytes the owner actually signs for the given
@@ -323,7 +303,35 @@ fn signing_message<T: SolStruct>(
     }
 }
 
-// --- serde --------------------------------------------------------------
+/// Serde adapter for [`EcdsaSignature`] fields that must travel as a
+/// 65-byte `0x`-prefixed hex string (the cow orderbook wire form), not
+/// the `{r, s, yParity, v}` map alloy emits by default. Apply with
+/// `#[serde(with = "cowprotocol::signature::ecdsa_wire")]` on the field.
+pub mod ecdsa_wire {
+    use super::{EcdsaSignature, parse_ecdsa};
+    use alloy_primitives::FixedBytes;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+
+    /// Serialise as a 65-byte `0x`-prefixed hex string.
+    pub fn serialize<S>(sig: &EcdsaSignature, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        FixedBytes::from(sig.as_bytes()).serialize(serializer)
+    }
+
+    /// Deserialise from a 65-byte `0x`-prefixed hex string, running
+    /// [`parse_ecdsa`] for length / `v` normalisation.
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<EcdsaSignature, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let bytes = FixedBytes::<65>::deserialize(deserializer)?;
+        parse_ecdsa(bytes.as_slice()).map_err(de::Error::custom)
+    }
+}
+
+// --- serde for the scheme-tagged Signature enum ------------------------
 
 /// Serde-only wire shape: `{ signingScheme, signature: "0x..." }`. The
 /// `signature` payload reuses `alloy_primitives::Bytes`, whose serde
@@ -356,25 +364,6 @@ impl<'de> Deserialize<'de> for Signature {
     {
         let json = JsonSignature::deserialize(deserializer)?;
         Self::from_bytes(json.signing_scheme, &json.signature).map_err(de::Error::custom)
-    }
-}
-
-impl Serialize for EcdsaSignature {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        FixedBytes::from(self.to_bytes()).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for EcdsaSignature {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let bytes = FixedBytes::<65>::deserialize(deserializer)?;
-        Self::from_bytes(bytes.as_slice()).map_err(de::Error::custom)
     }
 }
 
@@ -464,9 +453,8 @@ mod tests {
         for (raw, expected) in [(0u8, 27u8), (1, 28), (27, 27), (28, 28)] {
             let mut bytes = [0u8; 65];
             bytes[64] = raw;
-            let sig = EcdsaSignature::from_bytes(&bytes).unwrap();
-            assert_eq!(sig.v, expected);
-            assert_eq!(sig.to_bytes()[64], expected);
+            let sig = parse_ecdsa(&bytes).unwrap();
+            assert_eq!(sig.as_bytes()[64], expected);
         }
     }
 
@@ -476,7 +464,7 @@ mod tests {
             let mut bytes = [0u8; 65];
             bytes[64] = invalid_v;
             assert!(matches!(
-                EcdsaSignature::from_bytes(&bytes),
+                parse_ecdsa(&bytes),
                 Err(SignatureError::InvalidV(v)) if v == invalid_v
             ));
         }
@@ -538,8 +526,8 @@ mod tests {
         ));
 
         for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
-            let ecdsa = EcdsaSignature::sign(scheme, &domain, &payload, &signer).unwrap();
-            let typed = ecdsa.into_signature(scheme);
+            let ecdsa = sign_ecdsa(scheme, &domain, &payload, &signer).unwrap();
+            let typed = Signature::from_ecdsa(ecdsa, scheme);
             let recovered = typed.recover(&domain, &payload).unwrap().unwrap();
             assert_eq!(recovered.signer, address);
         }

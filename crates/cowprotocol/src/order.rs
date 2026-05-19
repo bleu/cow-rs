@@ -145,21 +145,20 @@ impl OrderData {
     pub fn uid(&self, domain: &DomainSeparator, owner: Address) -> OrderUid {
         use alloy_sol_types::SolStruct;
         let signing_hash = eip712::Order::from(self).eip712_signing_hash(domain);
-        OrderUid::from_parts(signing_hash, owner, self.valid_to)
+        pack_order_uid(signing_hash, owner, self.valid_to)
     }
 
     /// Sign with an ECDSA signer; equivalent to
-    /// [`crate::signature::EcdsaSignature::sign`] applied to the
-    /// EIP-712 view of this order.
+    /// [`crate::signature::sign_ecdsa`] applied to the EIP-712 view of
+    /// this order.
     pub fn sign<S: alloy_signer::SignerSync>(
         &self,
         scheme: crate::signing_scheme::EcdsaSigningScheme,
         domain: &DomainSeparator,
         signer: &S,
     ) -> Result<crate::signature::Signature, crate::signature::SignatureError> {
-        Ok(self
-            .sign_ecdsa(scheme, domain, signer)?
-            .into_signature(scheme))
+        let ecdsa = self.sign_ecdsa(scheme, domain, signer)?;
+        Ok(crate::signature::Signature::from_ecdsa(ecdsa, scheme))
     }
 
     /// Sign with an ECDSA signer and return the raw
@@ -173,7 +172,7 @@ impl OrderData {
         signer: &S,
     ) -> Result<crate::signature::EcdsaSignature, crate::signature::SignatureError> {
         let payload = eip712::Order::from(self);
-        crate::signature::EcdsaSignature::sign(scheme, domain, &payload, signer)
+        crate::signature::sign_ecdsa(scheme, domain, &payload, signer)
     }
 }
 
@@ -393,75 +392,32 @@ impl BuyTokenDestination {
 /// `32-byte digest || 20-byte owner || 4-byte validTo`. The digest is
 /// `keccak256(0x19 0x01 || domain_separator || order_struct_hash)`.
 ///
-/// Newtype over [`FixedBytes<56>`]: inherits its `Debug` / `Display` /
-/// serde behaviour (`0x`-prefixed lower-case hex on the wire) and its
-/// `From<[u8; 56]>` / `AsRef<[u8]>` impls.
-#[derive(
-    Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
-)]
-#[serde(transparent)]
-pub struct OrderUid(pub FixedBytes<56>);
+/// Type-aliased onto alloy's [`FixedBytes<56>`] so `Debug` / `Display` /
+/// serde (`0x`-prefixed lower-case hex), `FromStr`, `From<[u8; 56]>`,
+/// `AsRef<[u8]>` and `Index` all come from there for free; use
+/// [`pack_order_uid`] / [`unpack_order_uid`] to split or rebuild the
+/// 56-byte layout.
+pub type OrderUid = FixedBytes<56>;
 
-impl OrderUid {
-    /// Assemble a UID from its three parts.
-    pub fn from_parts(hash: B256, owner: Address, valid_to: u32) -> Self {
-        let mut uid = [0u8; 56];
-        uid[0..32].copy_from_slice(hash.as_slice());
-        uid[32..52].copy_from_slice(owner.as_slice());
-        uid[52..56].copy_from_slice(&valid_to.to_be_bytes());
-        Self(FixedBytes::new(uid))
-    }
-
-    /// UID with the first four bytes set to `i` (big-endian) and the
-    /// rest zeroed. Test-only ergonomics; mirrors
-    /// `cowprotocol/services::OrderUid::from_integer`.
-    pub const fn from_integer(i: u32) -> Self {
-        let mut uid = [0u8; 56];
-        let bytes = i.to_be_bytes();
-        uid[0] = bytes[0];
-        uid[1] = bytes[1];
-        uid[2] = bytes[2];
-        uid[3] = bytes[3];
-        Self(FixedBytes(uid))
-    }
-
-    /// Split a UID into its three parts.
-    pub fn parts(&self) -> (B256, Address, u32) {
-        let bytes = self.0.as_slice();
-        let mut valid_to = [0u8; 4];
-        valid_to.copy_from_slice(&bytes[52..56]);
-        (
-            B256::from_slice(&bytes[0..32]),
-            Address::from_slice(&bytes[32..52]),
-            u32::from_be_bytes(valid_to),
-        )
-    }
+/// Assemble an [`OrderUid`] from its three parts.
+pub fn pack_order_uid(hash: B256, owner: Address, valid_to: u32) -> OrderUid {
+    let mut uid = [0u8; 56];
+    uid[0..32].copy_from_slice(hash.as_slice());
+    uid[32..52].copy_from_slice(owner.as_slice());
+    uid[52..56].copy_from_slice(&valid_to.to_be_bytes());
+    FixedBytes::new(uid)
 }
 
-impl From<[u8; 56]> for OrderUid {
-    fn from(bytes: [u8; 56]) -> Self {
-        Self(FixedBytes::new(bytes))
-    }
-}
-
-impl AsRef<[u8]> for OrderUid {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_slice()
-    }
-}
-
-impl fmt::Display for OrderUid {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl std::str::FromStr for OrderUid {
-    type Err = <FixedBytes<56> as std::str::FromStr>::Err;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        s.parse::<FixedBytes<56>>().map(Self)
-    }
+/// Split an [`OrderUid`] into its three parts.
+pub fn unpack_order_uid(uid: &OrderUid) -> (B256, Address, u32) {
+    let bytes = uid.as_slice();
+    let mut valid_to = [0u8; 4];
+    valid_to.copy_from_slice(&bytes[52..56]);
+    (
+        B256::from_slice(&bytes[0..32]),
+        Address::from_slice(&bytes[32..52]),
+        u32::from_be_bytes(valid_to),
+    )
 }
 
 #[cfg(test)]
@@ -518,15 +474,15 @@ mod tests {
         );
     }
 
-    /// Locks `EcdsaSignature::sign` against the golden vector produced
-    /// by ethers `Wallet.signTypedData` for the mainnet `sample_order` +
+    /// Locks `sign_ecdsa` against the golden vector produced by
+    /// ethers `Wallet.signTypedData` for the mainnet `sample_order` +
     /// the Hardhat #0 account. Regenerate via `tools/vector-gen`.
     /// Catches drift between alloy's signer and ethers' signer (which
     /// a round-trip-only test cannot, since both sides would drift
     /// together).
     #[test]
     fn eip712_signature_matches_ethers_golden() {
-        use crate::signature::EcdsaSignature;
+        use crate::signature::sign_ecdsa;
         use crate::signing_scheme::EcdsaSigningScheme;
         use alloy_signer_local::PrivateKeySigner;
 
@@ -539,19 +495,17 @@ mod tests {
         let payload = eip712::Order::from(&sample_order());
 
         let ecdsa =
-            EcdsaSignature::sign(EcdsaSigningScheme::Eip712, &domain, &payload, &signer).unwrap();
+            sign_ecdsa(EcdsaSigningScheme::Eip712, &domain, &payload, &signer).unwrap();
 
         // Expected (r, s, v) from ethers Wallet.signTypedData on the same
-        // inputs. v=28 (the high-order normalised form).
-        let expected_r = B256::from(hex!(
-            "78bd3f7f240eb91bf94264f1bab99a5efaf97e8c76b9f76eeb4520f46861ed13"
-        ));
-        let expected_s = B256::from(hex!(
-            "70c2f3362f17d4668a02ad82f61bff52bd33a785afeff727ddab43210dfebea2"
-        ));
-        assert_eq!(ecdsa.r, expected_r, "r component");
-        assert_eq!(ecdsa.s, expected_s, "s component");
-        assert_eq!(ecdsa.v, 28, "v component");
+        // inputs. v=28 (the high-order normalised form). Bytes layout
+        // is `r || s || v` per alloy's `Signature::as_bytes`.
+        let expected_r = hex!("78bd3f7f240eb91bf94264f1bab99a5efaf97e8c76b9f76eeb4520f46861ed13");
+        let expected_s = hex!("70c2f3362f17d4668a02ad82f61bff52bd33a785afeff727ddab43210dfebea2");
+        let bytes = ecdsa.as_bytes();
+        assert_eq!(&bytes[..32], &expected_r, "r component");
+        assert_eq!(&bytes[32..64], &expected_s, "s component");
+        assert_eq!(bytes[64], 28, "v component");
     }
 
     /// Locks the [`eip712::Order`] `SolStruct::eip712_type_hash` derivation
@@ -689,11 +643,11 @@ mod tests {
         let owner = sample_owner();
         for (chain_id, expected_digest) in cases {
             let domain = crate::domain::settlement_domain(chain_id, SETTLEMENT);
-            let uid = order.uid(&domain, owner).0;
+            let uid = order.uid(&domain, owner);
             let mut expected = [0u8; 56];
             expected[0..32].copy_from_slice(&expected_digest);
             expected[32..56].copy_from_slice(&TAIL);
-            assert_eq!(uid, expected, "uid for chain {chain_id}");
+            assert_eq!(uid.0, expected, "uid for chain {chain_id}");
         }
     }
 
@@ -817,7 +771,7 @@ mod tests {
             "0x5668997bd3fb981d1b3ec44e8483e7c369756df47d10241c1c7a26fde4d1090e89984d17af2f18f8c54873c0de68a56cc5a23e0f695ba915",
         )
         .unwrap();
-        let (hash, owner, valid_to) = original.parts();
+        let (hash, owner, valid_to) = unpack_order_uid(&original);
         assert_eq!(
             hash,
             B256::from(hex!(
@@ -830,7 +784,7 @@ mod tests {
         );
         assert_eq!(valid_to, 0x695ba915);
 
-        let rebuilt = OrderUid::from_parts(hash, owner, valid_to);
+        let rebuilt = pack_order_uid(hash, owner, valid_to);
         assert_eq!(rebuilt, original);
     }
 
@@ -855,7 +809,7 @@ mod tests {
         let valid_to_seed = keccak256(b"valid to");
         let valid_to = u32::from_be_bytes(valid_to_seed[28..32].try_into().unwrap());
 
-        let uid = OrderUid::from_parts(digest, owner, valid_to);
+        let uid = pack_order_uid(digest, owner, valid_to);
 
         let mut expected = [0u8; 56];
         expected[0..32].copy_from_slice(digest.as_slice());
@@ -863,7 +817,7 @@ mod tests {
         expected[52..56].copy_from_slice(&valid_to.to_be_bytes());
         assert_eq!(uid.0, expected);
 
-        let (round_digest, round_owner, round_valid_to) = uid.parts();
+        let (round_digest, round_owner, round_valid_to) = unpack_order_uid(&uid);
         assert_eq!(round_digest, digest);
         assert_eq!(round_owner, owner);
         assert_eq!(round_valid_to, valid_to);

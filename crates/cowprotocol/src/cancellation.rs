@@ -22,7 +22,7 @@ use {
     crate::{
         domain::DomainSeparator,
         order::OrderUid,
-        signature::{EcdsaSignature, SignatureError},
+        signature::{EcdsaSignature, SignatureError, ecdsa_recover, ecdsa_wire, sign_ecdsa},
         signing_scheme::EcdsaSigningScheme,
     },
     alloy_primitives::{B256, Bytes},
@@ -59,7 +59,10 @@ mod eip712 {
 pub struct OrderCancellation {
     /// UID of the order being cancelled.
     pub order_uid: OrderUid,
-    /// ECDSA signature over the EIP-712 struct hash.
+    /// ECDSA signature over the EIP-712 struct hash. Wire form is the
+    /// 65-byte `0x`-hex `r || s || v` blob, not alloy's default
+    /// `{r, s, yParity, v}` map.
+    #[serde(with = "ecdsa_wire")]
     pub signature: EcdsaSignature,
     /// Off-chain ECDSA scheme used to produce the signature.
     pub signing_scheme: EcdsaSigningScheme,
@@ -88,7 +91,7 @@ impl OrderCancellation {
         let payload = eip712::OrderCancellation {
             orderUid: Bytes::from(order_uid.0),
         };
-        let signature = EcdsaSignature::sign(scheme, domain, &payload, signer)?;
+        let signature = sign_ecdsa(scheme, domain, &payload, signer)?;
         Ok(Self {
             order_uid,
             signature,
@@ -105,10 +108,7 @@ impl OrderCancellation {
         let payload = eip712::OrderCancellation {
             orderUid: Bytes::from(self.order_uid.0),
         };
-        Ok(self
-            .signature
-            .recover(self.signing_scheme, domain, &payload)?
-            .signer)
+        Ok(ecdsa_recover(&self.signature, self.signing_scheme, domain, &payload)?.signer)
     }
 }
 
@@ -166,7 +166,7 @@ impl OrderCancellations {
         signer: &S,
     ) -> Result<SignedOrderCancellations, SignatureError> {
         let payload = self.eip712_payload();
-        let signature = EcdsaSignature::sign(scheme, domain, &payload, signer)?;
+        let signature = sign_ecdsa(scheme, domain, &payload, signer)?;
         Ok(SignedOrderCancellations {
             order_uids: self.order_uids,
             signature,
@@ -189,6 +189,8 @@ pub struct SignedOrderCancellations {
     /// UIDs of the orders being cancelled.
     pub order_uids: Vec<OrderUid>,
     /// ECDSA signature over the EIP-712 hash of the cancellation struct.
+    /// Wire form is the 65-byte `0x`-hex `r || s || v` blob.
+    #[serde(with = "ecdsa_wire")]
     pub signature: EcdsaSignature,
     /// Off-chain ECDSA scheme used to produce the signature.
     pub signing_scheme: EcdsaSigningScheme,
@@ -204,10 +206,7 @@ impl SignedOrderCancellations {
             order_uids: self.order_uids.clone(),
         }
         .eip712_payload();
-        Ok(self
-            .signature
-            .recover(self.signing_scheme, domain, &payload)?
-            .signer)
+        Ok(ecdsa_recover(&self.signature, self.signing_scheme, domain, &payload)?.signer)
     }
 }
 
@@ -322,7 +321,7 @@ mod tests {
     fn signed_cancellations_wire_format() {
         let signed = SignedOrderCancellations {
             order_uids: vec![OrderUid::from([0x11; 56])],
-            signature: EcdsaSignature::default(),
+            signature: EcdsaSignature::from_bytes_and_parity(&[0u8; 64], false),
             signing_scheme: EcdsaSigningScheme::Eip712,
         };
         let body = serde_json::to_value(&signed).unwrap();

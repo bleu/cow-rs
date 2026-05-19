@@ -16,7 +16,7 @@ use crate::cancellation::{OrderCancellation, SignedOrderCancellations};
 use crate::chain::Chain;
 use crate::error::{ApiError, Error, Result};
 use crate::order::{BuyTokenDestination, Order, OrderData, OrderKind, OrderUid, SellTokenSource};
-use crate::signature::EcdsaSignature;
+use crate::signature::{EcdsaSignature, ecdsa_wire};
 #[cfg(test)]
 use crate::signature::Signature;
 use crate::signing_scheme::{EcdsaSigningScheme, SigningScheme};
@@ -196,8 +196,9 @@ struct OrdersByUidsRequest<'a> {
 /// src/order.rs`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CancellationPayload<'a> {
-    signature: &'a EcdsaSignature,
+struct CancellationPayload {
+    #[serde(with = "ecdsa_wire")]
+    signature: EcdsaSignature,
     signing_scheme: EcdsaSigningScheme,
 }
 
@@ -932,7 +933,7 @@ impl OrderBookApi {
             .base_url
             .join(&format!("api/v1/orders/{}", cancellation.order_uid))?;
         let body = CancellationPayload {
-            signature: &cancellation.signature,
+            signature: cancellation.signature,
             signing_scheme: cancellation.signing_scheme,
         };
         let response = self.client.delete(url).json(&body).send().await?;
@@ -1335,8 +1336,8 @@ mod tests {
     }
 
     /// EthSign round-trip exercises the 65-byte EcdsaSignature path with a
-    /// non-zero v; `Signature::from_bytes` normalises 0 / 27 to 27 and
-    /// 1 / 28 to 28, so we use 27 here to keep the wire shape stable.
+    /// non-zero v; `parse_ecdsa` normalises 0 / 27 to 27 and 1 / 28 to
+    /// 28, so we use 27 here to keep the wire shape stable.
     #[test]
     fn order_creation_json_round_trip_ethsign() {
         let bytes = {
@@ -1344,12 +1345,13 @@ mod tests {
             buf[64] = 27;
             buf
         };
-        let signature = EcdsaSignature::from_bytes(&bytes)
-            .unwrap()
-            .into_signature(EcdsaSigningScheme::EthSign);
+        let signature = Signature::from_ecdsa(
+            crate::signature::parse_ecdsa(&bytes).unwrap(),
+            EcdsaSigningScheme::EthSign,
+        );
         let parsed = round_trip_with_signature(signature);
         match &parsed.signature {
-            Signature::EthSign(sig) => assert_eq!(sig.to_bytes(), bytes),
+            Signature::EthSign(sig) => assert_eq!(sig.as_bytes(), bytes),
             other => panic!("expected EthSign, got {other:?}"),
         }
     }

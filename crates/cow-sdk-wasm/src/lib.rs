@@ -36,9 +36,9 @@ mod transport;
 use {
     alloy_primitives::{Address, B256, U256},
     cowprotocol::{
-        AppDataDoc, AppDataHash, Chain, EMPTY_APP_DATA_HASH, EcdsaSignature, EcdsaSigningScheme,
+        AppDataDoc, AppDataHash, Chain, EMPTY_APP_DATA_HASH, EcdsaSigningScheme,
         OrderCancellation, OrderData, OrderUid, QuoteRequest, Signature, SigningScheme,
-        app_data_cid, settlement_domain,
+        app_data_cid, ecdsa_from_components, settlement_domain,
     },
     serde::{Deserialize, Serialize},
     wasm_bindgen::prelude::*,
@@ -328,11 +328,14 @@ fn sign_with_scheme(
     let ecdsa = order
         .sign_ecdsa(scheme, &domain, &signer)
         .map_err(|err| JsValue::from_str(&format!("sign failed: {err}")))?;
+    let bytes = ecdsa.as_bytes();
+    let r = B256::from_slice(&bytes[..32]);
+    let s = B256::from_slice(&bytes[32..64]);
     let payload = serde_json::json!({
         "signingScheme": scheme_to_str(scheme),
-        "r": ecdsa.r.to_string(),
-        "s": ecdsa.s.to_string(),
-        "v": ecdsa.v,
+        "r": r.to_string(),
+        "s": s.to_string(),
+        "v": bytes[64],
         "owner": signer.address().to_string(),
     });
     to_js(&payload)
@@ -358,9 +361,9 @@ const fn scheme_to_str(scheme: EcdsaSigningScheme) -> &'static str {
 /// typo-and-wallet-switch family of bugs that would otherwise only
 /// surface as a 4xx from the orderbook.
 ///
-/// The `{ r, s, v }` bag is funnelled through
-/// [`EcdsaSignature::from_bytes`] so `v` is normalised to `27` / `28`
-/// even when the originating wallet returns the raw `0` / `1` form.
+/// The `{ r, s, v }` bag is funnelled through `ecdsa_from_components`
+/// so `v` is normalised to `27` / `28` even when the originating
+/// wallet returns the raw `0` / `1` form.
 #[wasm_bindgen]
 pub fn build_order_creation(
     order_data: JsValue,
@@ -383,9 +386,9 @@ pub fn build_order_creation(
     let scheme = parse_scheme(&sig.signing_scheme)?;
     let r = parse_b256(&sig.r)?;
     let s = parse_b256(&sig.s)?;
-    let ecdsa = EcdsaSignature::from_components(r, s, sig.v)
+    let ecdsa = ecdsa_from_components(r, s, sig.v)
         .map_err(|err| JsValue::from_str(&format!("invalid signature: {err}")))?;
-    let signature = ecdsa.into_signature(scheme);
+    let signature = Signature::from_ecdsa(ecdsa, scheme);
     let owner = parse_address(owner)?;
     let c = parse_chain(chain)?;
     let domain = settlement_domain(c.id(), c.settlement());

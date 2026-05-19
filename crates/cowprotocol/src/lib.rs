@@ -141,7 +141,7 @@ pub use crate::{
     multiplexer::{Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof},
     order::{
         BUY_ETH_ADDRESS, BuyTokenDestination, Order, OrderClass, OrderData, OrderKind, OrderStatus,
-        OrderUid, SellTokenSource,
+        OrderUid, SellTokenSource, pack_order_uid, unpack_order_uid,
     },
     order_book::{
         AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderBookApi,
@@ -151,7 +151,10 @@ pub use crate::{
     quote_amounts::{
         Amounts as QuoteAmounts, QuoteAmountsAndCosts, QuoteAmountsParams, QuoteCosts,
     },
-    signature::{EcdsaSignature, Recovered, Signature, SignatureError},
+    signature::{
+        EcdsaSignature, Recovered, Signature, SignatureError, ecdsa_from_components,
+        ecdsa_recover, parse_ecdsa, sign_ecdsa,
+    },
     signing_scheme::{EcdsaSigningScheme, SigningScheme},
     trading::{PostedSwapOrder, SwapOrder, TradingClient},
 };
