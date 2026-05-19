@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cowprotocol", "crates/cow-sdk-wasm"]
+members = ["crates/cowprotocol", "crates/cow-sdk-wasm", "tools/chain-probe"]
 
 [workspace.package]
 edition = "2024"

@@ -55,9 +55,9 @@ jobs:
 
       - name: Run chain_deployment tests
         # `--ignored` flips the inverse of the default so only the
-        # gated probes run. `-p` is needed because the workspace has
-        # multiple test targets named at the workspace root and cargo
-        # will not disambiguate without it.
+        # gated probes run. The probe lives in its own workspace crate
+        # (`tools/chain-probe`) so the published `cowprotocol` tarball
+        # does not carry probe code no consumer ever runs.
         env:
           COW_RPC_MAINNET: ${{ secrets.COW_RPC_MAINNET }}
           COW_RPC_BNB: ${{ secrets.COW_RPC_BNB }}
@@ -70,4 +70,4 @@ jobs:
           COW_RPC_INK: ${{ secrets.COW_RPC_INK }}
           COW_RPC_LINEA: ${{ secrets.COW_RPC_LINEA }}
           COW_RPC_SEPOLIA: ${{ secrets.COW_RPC_SEPOLIA }}
-        run: cargo test -p cowprotocol --test chain_deployment -- --ignored --nocapture
+        run: cargo test -p chain-probe --test chain_deployment -- --ignored --nocapture

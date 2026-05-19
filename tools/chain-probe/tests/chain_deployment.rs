@@ -13,7 +13,9 @@
 //! Marked `#[ignore]` so it does not run under default `cargo test`:
 //! a dedicated workflow (see `.github/workflows/chain-deployment.yml`)
 //! invokes it explicitly with
-//! `cargo test --test chain_deployment -- --ignored`.
+//! `cargo test -p chain-probe --test chain_deployment -- --ignored`.
+//! Lives in its own workspace crate so the published `cowprotocol`
+//! tarball does not carry probe code that no SDK consumer ever runs.
 //!
 //! RPC endpoints are read from per-chain env vars; chains whose env
 //! var is unset are skipped with a logged note rather than failing
