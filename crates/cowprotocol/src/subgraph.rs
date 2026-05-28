@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::{
     chain::Chain,
     error::{Error, Result},
+    order_book::{DEFAULT_HTTP_TIMEOUT, MAX_RESPONSE_BYTES},
 };
 
 /// Returned by [`SubgraphClient::for_chain_studio`] when the chain has no
@@ -210,22 +211,24 @@ impl std::fmt::Debug for SubgraphClient {
 impl SubgraphClient {
     /// Build a client against an explicit subgraph URL. No authorisation
     /// header is attached: use [`SubgraphClient::with_bearer_token`] for
-    /// the production gateway.
+    /// the production gateway. The default reqwest client enforces
+    /// [`DEFAULT_HTTP_TIMEOUT`].
     pub fn new(url: url::Url) -> Self {
         Self {
             url,
-            client: reqwest::Client::new(),
+            client: build_client(),
             bearer: None,
         }
     }
 
     /// Build a client that sends `Authorization: Bearer <token>` with
     /// every request. The Graph's production gateway
-    /// (`gateway.thegraph.com`) requires this.
+    /// (`gateway.thegraph.com`) requires this. The default reqwest
+    /// client enforces [`DEFAULT_HTTP_TIMEOUT`].
     pub fn with_bearer_token(url: url::Url, token: impl Into<String>) -> Self {
         Self {
             url,
-            client: reqwest::Client::new(),
+            client: build_client(),
             bearer: Some(token.into()),
         }
     }
@@ -327,7 +330,7 @@ impl SubgraphClient {
         }
         let response = req.send().await?;
         let status = response.status();
-        let text = response.text().await?;
+        let text = read_capped_text(response).await?;
         if !status.is_success() {
             return Err(Error::UnexpectedStatus { status, body: text });
         }
@@ -352,6 +355,38 @@ impl SubgraphClient {
     {
         self.execute::<(), TData>(query, None).await
     }
+}
+
+/// Build the default reqwest client. Mirrors the orderbook builder so
+/// both clients agree on [`DEFAULT_HTTP_TIMEOUT`]. `ClientBuilder::timeout`
+/// is non-wasm32 only; the wasm backend defers to the browser's fetch
+/// timeout.
+fn build_client() -> reqwest::Client {
+    let builder = reqwest::Client::builder();
+    #[cfg(not(target_arch = "wasm32"))]
+    let builder = builder.timeout(DEFAULT_HTTP_TIMEOUT);
+    builder.build().expect("reqwest defaults cannot fail")
+}
+
+/// Read a response body as UTF-8 text, rejecting payloads above
+/// [`MAX_RESPONSE_BYTES`]. Early-rejects on `Content-Length` and
+/// re-checks the materialised body as a backstop. Kept local to avoid
+/// widening the orderbook module's API surface.
+async fn read_capped_text(response: reqwest::Response) -> Result<String> {
+    if let Some(declared_len) = response.content_length()
+        && declared_len > MAX_RESPONSE_BYTES as u64
+    {
+        return Err(Error::ResponseTooLarge {
+            max: MAX_RESPONSE_BYTES,
+        });
+    }
+    let text = response.text().await?;
+    if text.len() > MAX_RESPONSE_BYTES {
+        return Err(Error::ResponseTooLarge {
+            max: MAX_RESPONSE_BYTES,
+        });
+    }
+    Ok(text)
 }
 
 #[cfg(test)]
@@ -523,5 +558,68 @@ mod tests {
             let err = SubgraphClient::for_chain_studio(chain).unwrap_err();
             assert_eq!(err, ChainSubgraphUnavailable(chain));
         }
+    }
+
+    /// A response one byte over [`MAX_RESPONSE_BYTES`] must surface
+    /// [`Error::ResponseTooLarge`] instead of being allocated and
+    /// parsed. wiremock auto-derives `Content-Length`, so this also
+    /// exercises the header-driven early reject.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn execute_rejects_response_above_size_cap() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path},
+        };
+
+        let server = MockServer::start().await;
+        let oversize_body = "a".repeat(MAX_RESPONSE_BYTES + 1);
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(oversize_body))
+            .mount(&server)
+            .await;
+
+        let client = SubgraphClient::new(server.uri().parse().unwrap());
+        let err = client
+            .execute::<(), serde_json::Value>("query { totals { orders } }", None)
+            .await
+            .unwrap_err();
+        match err {
+            Error::ResponseTooLarge { max } => assert_eq!(max, MAX_RESPONSE_BYTES),
+            other => panic!("expected ResponseTooLarge, got {other:?}"),
+        }
+    }
+
+    /// A response exactly at the cap must be accepted by the reader.
+    /// The body here is not a valid GraphQL envelope, so the call
+    /// still fails: we only assert the failure is downstream of the
+    /// size check (i.e. a parse error, not `ResponseTooLarge`). This
+    /// locks in that the cap fires at `+1` and not `=`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn execute_accepts_response_at_size_cap() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path},
+        };
+
+        let server = MockServer::start().await;
+        let at_cap_body = "a".repeat(MAX_RESPONSE_BYTES);
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(at_cap_body))
+            .mount(&server)
+            .await;
+
+        let client = SubgraphClient::new(server.uri().parse().unwrap());
+        let err = client
+            .execute::<(), serde_json::Value>("query { totals { orders } }", None)
+            .await
+            .unwrap_err();
+        assert!(
+            !matches!(err, Error::ResponseTooLarge { .. }),
+            "body at the cap must not trip ResponseTooLarge: {err:?}"
+        );
     }
 }
