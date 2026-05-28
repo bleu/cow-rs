@@ -60,14 +60,14 @@ pub const ETH_FLOW_STAGING: Address = address!("04501b9b1D52e67f6862d157E00D1341
 ///
 /// The sell-token slot is not part of this struct because EthFlow always
 /// sells the chain's wrapped-native token; the caller passes that address
-/// in to [`EthFlowOrder::to_order_data`].
+/// in to [`EthFlowOrder::try_into_order_data`].
 ///
 /// `receiver` is a mandatory non-zero address: the EthFlow contract is the
 /// EIP-1271 order owner, so the GPv2 "receiver = address(0) means the owner
 /// receives the buy token" sentinel would route proceeds to the contract
 /// rather than the original native-token seller. `CoWSwapEthFlow.createOrder`
 /// mirrors this invariant on-chain by reverting with `ReceiverMustBeSet()`;
-/// [`EthFlowOrder::to_order_data`] enforces it before any hash is produced.
+/// [`EthFlowOrder::try_into_order_data`] enforces it before any hash is produced.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct EthFlowOrder {
     /// Token the user wishes to buy with their native ETH.
@@ -86,7 +86,7 @@ pub struct EthFlowOrder {
     /// Protocol fee, paid in the wrapped-native sell token.
     pub fee_amount: U256,
     /// Order expiry as a unix timestamp in seconds. Note that the
-    /// CoW-side order produced by [`EthFlowOrder::to_order_data`] always
+    /// CoW-side order produced by [`EthFlowOrder::try_into_order_data`] always
     /// uses `validTo = u32::MAX`; this field stores the *user-facing*
     /// expiry recorded on the EthFlow contract.
     pub valid_to: u32,
@@ -121,7 +121,7 @@ impl EthFlowOrder {
     /// seller. We check before producing any `OrderData` so a hostile or
     /// careless caller cannot circulate a hash, UID or wire-form order
     /// derived from the unsafe shape.
-    pub fn to_order_data(&self, wrapped_native_token: Address) -> Result<OrderData> {
+    pub fn try_into_order_data(&self, wrapped_native_token: Address) -> Result<OrderData> {
         if self.receiver == Address::ZERO {
             return Err(Error::OrderCreationInvalid {
                 field: "receiver",
@@ -174,11 +174,11 @@ mod tests {
         assert_ne!(ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING);
     }
 
-    /// `to_order_data` should pin `sell_token` to the supplied wrapped-native
+    /// `try_into_order_data` should pin `sell_token` to the supplied wrapped-native
     /// token, lift the receiver into `Some(...)`, force `valid_to = u32::MAX`
     /// and `kind = Sell`, and leave the user-supplied amounts untouched.
     #[test]
-    fn to_order_data_projects_canonical_sell_order() {
+    fn try_into_order_data_projects_canonical_sell_order() {
         let eth_flow = EthFlowOrder {
             buy_token: address!("6B175474E89094C44Da98b954EedeAC495271d0F"), // DAI
             receiver: SAMPLE_RECEIVER,
@@ -193,7 +193,7 @@ mod tests {
             quote_id: 42,
         };
 
-        let order = eth_flow.to_order_data(WETH_MAINNET).unwrap();
+        let order = eth_flow.try_into_order_data(WETH_MAINNET).unwrap();
 
         assert_eq!(order.sell_token, WETH_MAINNET);
         assert_eq!(order.buy_token, eth_flow.buy_token);
@@ -216,7 +216,7 @@ mod tests {
     /// EIP-1271 owner, GPv2's owner-fallback semantics would silently route
     /// proceeds to the contract rather than the original native-token seller.
     #[test]
-    fn to_order_data_rejects_zero_receiver() {
+    fn try_into_order_data_rejects_zero_receiver() {
         let eth_flow = EthFlowOrder {
             buy_token: address!("6B175474E89094C44Da98b954EedeAC495271d0F"),
             receiver: Address::ZERO,
@@ -229,7 +229,7 @@ mod tests {
             quote_id: 0,
         };
 
-        let err = eth_flow.to_order_data(WETH_MAINNET).unwrap_err();
+        let err = eth_flow.try_into_order_data(WETH_MAINNET).unwrap_err();
         match err {
             crate::Error::OrderCreationInvalid { field, .. } => assert_eq!(field, "receiver"),
             other => panic!("expected OrderCreationInvalid, got {other:?}"),
@@ -242,7 +242,7 @@ mod tests {
     /// `None` would produce. The zero-address fallback is exactly what the
     /// audit finding flagged; failing this test means we have regressed.
     #[test]
-    fn to_order_data_hash_binds_concrete_receiver() {
+    fn try_into_order_data_hash_binds_concrete_receiver() {
         let eth_flow = EthFlowOrder {
             buy_token: address!("6B175474E89094C44Da98b954EedeAC495271d0F"),
             receiver: SAMPLE_RECEIVER,
@@ -255,7 +255,7 @@ mod tests {
             quote_id: 0,
         };
 
-        let order = eth_flow.to_order_data(WETH_MAINNET).unwrap();
+        let order = eth_flow.try_into_order_data(WETH_MAINNET).unwrap();
         assert_eq!(order.receiver, Some(SAMPLE_RECEIVER));
 
         let mut owner_fallback = order;
