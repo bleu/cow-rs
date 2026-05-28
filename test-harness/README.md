@@ -24,7 +24,9 @@ them manually:
 # 1. Build the wasm package (output is git-ignored).
 (cd crates/cow-sdk-wasm && wasm-pack build --target web --dev)
 # 2. Serve the workspace over HTTP so ES-module imports resolve.
-python3 -m http.server 8765
+#    Bind to loopback: the default binds all interfaces and would expose
+#    the whole workspace (including .git) to others on the network.
+python3 -m http.server 8765 --bind 127.0.0.1
 ```
 
 ## What it verifies

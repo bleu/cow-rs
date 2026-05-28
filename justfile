@@ -25,7 +25,9 @@ wasm-build:
 # can resolve the wasm package via relative ES-module imports.
 wasm-harness: wasm-build
 	@echo "Open http://localhost:8765/test-harness/"
-	python3 -m http.server 8765
+	# Bind to loopback only: the default binds all interfaces, exposing
+	# the whole workspace (including .git) to anyone on the network.
+	python3 -m http.server 8765 --bind 127.0.0.1
 
 # Release builds for each wasm-pack target. Each lands in its own
 # pkg-* directory so they can coexist; gitignored under pkg*.

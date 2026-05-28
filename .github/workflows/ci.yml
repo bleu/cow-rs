@@ -213,9 +213,9 @@ jobs:
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
         with:
           key: semver-checks
-      # TODO: pin to a full SHA once we settle on a version; the action's
-      # author keeps the `@v2` tag stable across minor bumps.
-      - uses: obi1kenobi/cargo-semver-checks-action@v2
+      # Pinned to a full commit SHA (resolves the `v2` tag) so a retargeted
+      # tag or a compromised maintainer account cannot inject code into CI.
+      - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2
         with:
           package: cowprotocol
 
