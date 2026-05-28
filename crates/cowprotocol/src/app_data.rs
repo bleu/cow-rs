@@ -632,6 +632,26 @@ pub type AppDataCid = cid::Cid;
 const CID_CODEC_RAW: u64 = 0x55;
 /// Keccak-256 multihash code (`0x1b`).
 const MULTIHASH_KECCAK_256: u64 = 0x1b;
+/// Upper bound on an app-data CID string. A CIDv1 wrapping a 32-byte
+/// keccak-256 digest is ~59 chars in canonical base32 and ~75 in
+/// base16; anything far longer is malformed or hostile. Capping before
+/// [`cid::Cid::from_str`] stops an attacker from forcing proportional
+/// allocation in the upstream multibase decoder.
+const MAX_CID_STR_LEN: usize = 128;
+
+/// Parse an [`AppDataCid`] from its string form, rejecting input above
+/// [`MAX_CID_STR_LEN`] before the upstream multibase decoder allocates.
+/// Prefer this over `s.parse::<AppDataCid>()` whenever the string comes
+/// from untrusted input (a hostile orderbook, user-supplied metadata).
+pub fn parse_app_data_cid(s: &str) -> Result<AppDataCid, AppDataCidError> {
+    if s.len() > MAX_CID_STR_LEN {
+        return Err(AppDataCidError::CidTooLong {
+            len: s.len(),
+            max: MAX_CID_STR_LEN,
+        });
+    }
+    Ok(s.parse::<AppDataCid>()?)
+}
 
 /// Build the IPFS CID the orderbook pins for an app-data digest. Pure
 /// offline derivation: wraps `hash` in a keccak-256 multihash and folds
@@ -673,6 +693,15 @@ pub enum AppDataCidError {
     /// prefix, invalid varint, truncated body, etc).
     #[error("invalid CID: {0}")]
     InvalidCid(#[from] cid::Error),
+    /// The CID string was longer than [`MAX_CID_STR_LEN`], so it was
+    /// rejected before the multibase decoder allocated for it.
+    #[error("CID string exceeds {max}-char cap (got {len})")]
+    CidTooLong {
+        /// Length of the offending input, in chars.
+        len: usize,
+        /// Configured cap ([`MAX_CID_STR_LEN`]).
+        max: usize,
+    },
     /// The CID codec was not the raw codec (`0x55`).
     #[error("expected raw codec (0x55), got 0x{0:02x}")]
     UnexpectedCodec(u64),
@@ -1244,6 +1273,29 @@ mod tests {
     fn cid_parse_rejects_invalid_base16_body() {
         let err = "f01551b20zzzz".parse::<AppDataCid>().unwrap_err();
         assert!(matches!(err, cid::Error::ParsingError), "got: {err:?}");
+    }
+
+    /// `parse_app_data_cid` rejects an oversized string before the
+    /// upstream multibase decoder allocates for it, capping the work a
+    /// hostile CID can force.
+    #[test]
+    fn parse_app_data_cid_rejects_oversize_string() {
+        let oversize = format!("b{}", "a".repeat(MAX_CID_STR_LEN));
+        let err = parse_app_data_cid(&oversize).unwrap_err();
+        assert!(
+            matches!(err, AppDataCidError::CidTooLong { max, .. } if max == MAX_CID_STR_LEN),
+            "got: {err:?}"
+        );
+    }
+
+    /// A well-formed CID under the cap still parses through the bounded
+    /// helper, so the guard does not reject legitimate input.
+    #[test]
+    fn parse_app_data_cid_accepts_canonical_string() {
+        let cid = app_data_cid(EMPTY_APP_DATA_HASH).to_string();
+        assert!(cid.len() <= MAX_CID_STR_LEN);
+        let parsed = parse_app_data_cid(&cid).unwrap();
+        assert_eq!(app_data_hash_from_cid(&parsed).unwrap(), EMPTY_APP_DATA_HASH);
     }
 
     #[test]

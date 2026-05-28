@@ -128,7 +128,7 @@ pub use crate::{
         AppDataOrderClass, AppDataPartnerFee, AppDataQuote, AppDataReferrer, AppDataReplacedOrder,
         AppDataUtm, AppDataWrapperCall, COW_RS_APP_CODE, COW_RS_WASM_APP_CODE, EMPTY_APP_DATA_HASH,
         EMPTY_APP_DATA_JSON, FeePolicy, LATEST_APP_DATA_VERSION, app_data_cid,
-        app_data_hash_from_cid,
+        app_data_hash_from_cid, parse_app_data_cid,
     },
     cancellation::{OrderCancellations, SignedOrderCancellation, SignedOrderCancellations},
     chain::{Chain, UnsupportedChain},
@@ -147,7 +147,7 @@ pub use crate::{
     multiplexer::{Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof},
     order::{
         BUY_ETH_ADDRESS, BuyTokenDestination, Order, OrderClass, OrderData, OrderKind, OrderStatus,
-        OrderUid, OrderUidParts, SellTokenSource,
+        OrderUid, OrderUidParseError, OrderUidParts, SellTokenSource, parse_order_uid,
     },
     order_book::{
         AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderCreation,

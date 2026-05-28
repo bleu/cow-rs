@@ -409,6 +409,30 @@ pub trait OrderUidParts {
     fn to_parts(&self) -> (B256, Address, u32);
 }
 
+/// Errors from [`parse_order_uid`].
+#[derive(Debug, thiserror::Error)]
+pub enum OrderUidParseError {
+    /// The string did not start with the canonical `0x` prefix.
+    #[error("order UID must be 0x-prefixed")]
+    MissingPrefix,
+    /// The body was not valid 56-byte hex.
+    #[error("invalid order UID hex: {0}")]
+    Hex(#[from] alloy_primitives::hex::FromHexError),
+}
+
+/// Parse an [`OrderUid`] from its canonical `0x`-prefixed lower-case hex
+/// form. alloy's blanket `FromStr` for [`FixedBytes`] also accepts the
+/// unprefixed body, which can cause canonicalisation confusion in code
+/// that validates, caches, authorises, or compares UID strings before
+/// converting them. Use this helper for untrusted input to reject the
+/// non-canonical encoding up front.
+pub fn parse_order_uid(s: &str) -> Result<OrderUid, OrderUidParseError> {
+    if !s.starts_with("0x") {
+        return Err(OrderUidParseError::MissingPrefix);
+    }
+    Ok(s.parse::<OrderUid>()?)
+}
+
 impl OrderUidParts for OrderUid {
     fn from_parts(hash: B256, owner: Address, valid_to: u32) -> Self {
         let mut uid = [0u8; 56];
@@ -796,6 +820,26 @@ mod tests {
 
         let rebuilt = OrderUid::from_parts(hash, owner, valid_to);
         assert_eq!(rebuilt, original);
+    }
+
+    #[test]
+    fn parse_order_uid_requires_0x_prefix() {
+        let body = "11".repeat(56);
+        let prefixed = format!("0x{body}");
+        // The strict helper accepts the canonical prefixed form.
+        assert!(parse_order_uid(&prefixed).is_ok());
+        // It rejects the unprefixed body, even though alloy's blanket
+        // `FromStr` would accept it (documented divergence).
+        assert!(matches!(
+            parse_order_uid(&body),
+            Err(OrderUidParseError::MissingPrefix)
+        ));
+        assert!(OrderUid::from_str(&body).is_ok());
+        // A prefixed-but-malformed body still fails through the hex arm.
+        assert!(matches!(
+            parse_order_uid("0xnothex"),
+            Err(OrderUidParseError::Hex(_))
+        ));
     }
 
     #[test]
