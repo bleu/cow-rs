@@ -305,7 +305,10 @@ pub enum TwapStart {
     /// watch tower reads the timestamp through the
     /// [`CURRENT_BLOCK_TIMESTAMP_FACTORY`].
     AtMiningTime,
-    /// Start at a specific Unix timestamp (seconds). Must fit in `u32`.
+    /// Start at a specific Unix timestamp (seconds). Must fit in `u32`
+    /// and must be non-zero: `t0 = 0` is the on-chain sentinel for
+    /// [`TwapStart::AtMiningTime`], so [`TwapData::static_input`]
+    /// rejects `AtEpoch(0)` with [`TwapError::InvalidEpoch`].
     AtEpoch(u32),
 }
 
@@ -379,6 +382,11 @@ pub enum TwapError {
     /// `LimitDuration(span)` with `span > time_between_parts`.
     #[error("TWAP LimitDuration span must be <= time_between_parts")]
     InvalidSpan,
+    /// `TwapStart::AtEpoch(0)`: collides with the `t0 = 0` sentinel the
+    /// handler uses for `AtMiningTime`. Use a non-zero Unix timestamp or
+    /// switch to `TwapStart::AtMiningTime`.
+    #[error("TWAP AtEpoch(0) collides with the AtMiningTime sentinel")]
+    InvalidEpoch,
 }
 
 const TWAP_MAX_FREQUENCY_SECONDS: u32 = 365 * 24 * 60 * 60;
@@ -411,6 +419,7 @@ impl TwapData {
         };
         let t0 = match self.start {
             TwapStart::AtMiningTime => 0,
+            TwapStart::AtEpoch(0) => return Err(TwapError::InvalidEpoch),
             TwapStart::AtEpoch(s) => s,
         };
         let n = U256::from(self.number_of_parts);
@@ -848,5 +857,64 @@ mod tests {
         // The non-indexed field is just `params`; abi_decode_data returns
         // a 1-tuple for a single non-indexed argument.
         assert_eq!(decoded.0, params);
+    }
+
+    /// `TwapStart::AtEpoch(0)` collides with the `t0 = 0` sentinel the
+    /// on-chain handler reserves for `AtMiningTime`. Reject it so the
+    /// leaf id and registered order match caller intent.
+    #[test]
+    fn twap_at_epoch_zero_rejected() {
+        let twap = TwapData {
+            sell_token: address!("6810e776880C02933D47DB1b9fc05908e5386b96"),
+            buy_token: address!("DAE5F1590db13E3B40423B5b5c5fbf175515910b"),
+            receiver: address!("DeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF"),
+            sell_amount: U256::from(1_000_000_000_000_000_000_u128),
+            buy_amount: U256::from(1_000_000_000_000_000_000_u128),
+            time_between_parts: 3600,
+            number_of_parts: 10,
+            start: TwapStart::AtEpoch(0),
+            duration: TwapDuration::Auto,
+            app_data: B256::ZERO,
+        };
+        assert_eq!(twap.static_input().unwrap_err(), TwapError::InvalidEpoch);
+    }
+
+    /// `AtMiningTime` legitimately encodes to `t0 = 0`: this lock-in
+    /// guards against anyone "fixing" the sentinel branch to also
+    /// reject zero, which would break the cabinet-anchored flow.
+    #[test]
+    fn twap_at_mining_time_still_encodes_t0_zero() {
+        let twap = TwapData {
+            sell_token: address!("6810e776880C02933D47DB1b9fc05908e5386b96"),
+            buy_token: address!("DAE5F1590db13E3B40423B5b5c5fbf175515910b"),
+            receiver: address!("DeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF"),
+            sell_amount: U256::from(1_000_000_000_000_000_000_u128),
+            buy_amount: U256::from(1_000_000_000_000_000_000_u128),
+            time_between_parts: 3600,
+            number_of_parts: 10,
+            start: TwapStart::AtMiningTime,
+            duration: TwapDuration::Auto,
+            app_data: B256::ZERO,
+        };
+        assert_eq!(twap.static_input().unwrap().t0, U256::ZERO);
+    }
+
+    /// The rejection is exact to the zero sentinel: any non-zero
+    /// `AtEpoch(s)` round-trips into `t0 = s`.
+    #[test]
+    fn twap_at_epoch_one_round_trips() {
+        let twap = TwapData {
+            sell_token: address!("6810e776880C02933D47DB1b9fc05908e5386b96"),
+            buy_token: address!("DAE5F1590db13E3B40423B5b5c5fbf175515910b"),
+            receiver: address!("DeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF"),
+            sell_amount: U256::from(1_000_000_000_000_000_000_u128),
+            buy_amount: U256::from(1_000_000_000_000_000_000_u128),
+            time_between_parts: 3600,
+            number_of_parts: 10,
+            start: TwapStart::AtEpoch(1),
+            duration: TwapDuration::Auto,
+            app_data: B256::ZERO,
+        };
+        assert_eq!(twap.static_input().unwrap().t0, U256::from(1u32));
     }
 }
