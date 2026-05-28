@@ -23,13 +23,13 @@ const OWNER: Address = address!("70997970C51812dc3A010C7d01b50e0d17dc79C8");
 #[tokio::main]
 async fn main() -> cowprotocol::Result<()> {
     let api = OrderBookApi::new(Chain::Mainnet);
-    let request = QuoteRequest::sell_amount_before_fee(
+    let request = QuoteRequest::sell_before_fee(
         USDC,
         DAI,
         OWNER,
         U256::from(100_000_000_u64), // 100 USDC, 6 decimals.
     );
-    let response = api.get_quote(&request).await?;
+    let response = api.quote(&request).await?;
 
     println!("buy amount:   {}", response.quote.buy_amount);
     println!("fee amount:   {}", response.quote.fee_amount);
@@ -42,7 +42,7 @@ async fn main() -> cowprotocol::Result<()> {
     // configured chain: this is what we would sign in the next step.
     // Binding the response to `request` here makes the SDK reject a
     // hostile orderbook that tries to swap tokens / receiver / kind.
-    let order_data = response.to_signed_order_data(&request, EMPTY_APP_DATA_HASH)?;
+    let order_data = response.try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)?;
     let domain = cowprotocol::settlement_domain(
         Chain::Mainnet.id(),
         address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),

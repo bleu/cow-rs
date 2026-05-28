@@ -37,7 +37,7 @@ use {
     alloy_primitives::{Address, B256, U256},
     cowprotocol::{
         AppDataDoc, AppDataHash, Chain, EMPTY_APP_DATA_HASH, EcdsaSigningScheme,
-        OrderCancellation, OrderData, OrderUid, QuoteRequest, Signature, SigningScheme,
+        SignedOrderCancellation, OrderData, OrderUid, QuoteRequest, Signature, SigningScheme,
         app_data_cid, ecdsa_from_components, settlement_domain,
     },
     serde::{Deserialize, Serialize},
@@ -364,6 +364,10 @@ const fn scheme_to_str(scheme: EcdsaSigningScheme) -> &'static str {
 /// The `{ r, s, v }` bag is funnelled through `ecdsa_from_components`
 /// so `v` is normalised to `27` / `28` even when the originating
 /// wallet returns the raw `0` / `1` form.
+///
+/// `quote_id` is forwarded as the orderbook's `i64` quote id; a JS
+/// BigInt that exceeds `i64::MAX` is rejected rather than silently
+/// wrapping to a negative value.
 #[wasm_bindgen]
 pub fn build_order_creation(
     order_data: JsValue,
@@ -392,12 +396,15 @@ pub fn build_order_creation(
     let owner = parse_address(owner)?;
     let c = parse_chain(chain)?;
     let domain = settlement_domain(c.id(), c.settlement());
+    let quote_id = quote_id
+        .map(|id| i64::try_from(id).map_err(|_| JsValue::from_str("quote_id exceeds i64::MAX")))
+        .transpose()?;
     let creation = cowprotocol::OrderCreation::from_signed_order_data(
         &order,
         signature,
         owner,
         app_data_json.to_owned(),
-        quote_id.map(|id| id as i64),
+        quote_id,
     )
     .map_err(|err| JsValue::from_str(&format!("build creation failed: {err}")))?;
     creation
@@ -420,6 +427,10 @@ pub fn build_order_creation(
 /// verification is on-chain via `isValidSignature`, not via signer
 /// recovery) but it lets us reject a malformed bag of arguments
 /// uniformly.
+///
+/// `quote_id` is forwarded as the orderbook's `i64` quote id; a JS
+/// BigInt that exceeds `i64::MAX` is rejected rather than silently
+/// wrapping to a negative value.
 #[wasm_bindgen]
 pub fn build_order_creation_eip1271(
     order_data: JsValue,
@@ -438,12 +449,15 @@ pub fn build_order_creation_eip1271(
     let owner = parse_address(owner)?;
     let c = parse_chain(chain)?;
     let domain = settlement_domain(c.id(), c.settlement());
+    let quote_id = quote_id
+        .map(|id| i64::try_from(id).map_err(|_| JsValue::from_str("quote_id exceeds i64::MAX")))
+        .transpose()?;
     let creation = cowprotocol::OrderCreation::from_signed_order_data(
         &order,
         signature,
         owner,
         app_data_json.to_owned(),
-        quote_id.map(|id| id as i64),
+        quote_id,
     )
     .map_err(|err| JsValue::from_str(&format!("build creation failed: {err}")))?;
     creation
@@ -458,7 +472,8 @@ pub fn build_order_creation_eip1271(
 /// reformatting after this call changes the hash).
 #[wasm_bindgen]
 pub fn app_data_hash_from_json(canonical_json: &str) -> Result<String, JsValue> {
-    let doc = AppDataDoc::try_from_str(canonical_json)
+    let doc = canonical_json
+        .parse::<AppDataDoc>()
         .map_err(|err| JsValue::from_str(&format!("parse failed: {err}")))?;
     let hash = doc
         .try_hash()
@@ -506,7 +521,7 @@ pub fn sdk_app_data_hash() -> String {
 ///
 /// The single chokepoint for assembling signable bytes from a quote
 /// in JS-land. Mirrors the native
-/// [`cowprotocol::OrderQuoteResponse::to_signed_order_data`]: rejects
+/// [`cowprotocol::OrderQuoteResponse::try_into_signed_order_data`]: rejects
 /// any response whose `sellToken`, `buyToken`, normalised `receiver`,
 /// `from`, `kind`, or pinned `appData` disagrees with the request,
 /// plus `validTo` / `partiallyFillable` / `sellTokenBalance` /
@@ -528,7 +543,7 @@ pub fn to_signed_order_data(
     let response: cowprotocol::OrderQuoteResponse = from_js(response)?;
     let app_data: AppDataHash = parse_b256(app_data_hash_hex)?;
     let order_data = response
-        .to_signed_order_data(&request, app_data)
+        .try_into_signed_order_data(&request, app_data)
         .map_err(|err| JsValue::from_str(&format!("to_signed_order_data failed: {err}")))?;
     to_js(&order_data)
 }
@@ -544,7 +559,7 @@ pub fn to_signed_order_data(
 /// `POST /api/v1/quote`. Accepts a `QuoteRequest` JSON object.
 ///
 /// Cross-checks the response against the request via
-/// [`cowprotocol::OrderQuoteResponse::to_signed_order_data`] before
+/// [`cowprotocol::OrderQuoteResponse::try_into_signed_order_data`] before
 /// returning, so a hostile orderbook cannot hand JS callers a swapped
 /// `sellToken` / `buyToken` / `receiver` / `from` / `kind` they would
 /// then pass into [`to_signed_order_data`] / [`build_order_creation`].
@@ -557,7 +572,7 @@ pub async fn get_quote(chain: &str, request: JsValue) -> Result<JsValue, JsValue
     let url = endpoint(parse_chain(chain)?, "api/v1/quote");
     let response: cowprotocol::OrderQuoteResponse = transport::post_json(&url, &request).await?;
     response
-        .to_signed_order_data(&request, EMPTY_APP_DATA_HASH)
+        .try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)
         .map_err(|err| JsValue::from_str(&format!("quote response binding failed: {err}")))?;
     to_js(&response)
 }
@@ -574,7 +589,7 @@ pub async fn get_quote_simple(
     from: &str,
     sell_amount_before_fee: &str,
 ) -> Result<JsValue, JsValue> {
-    let request = QuoteRequest::sell_amount_before_fee(
+    let request = QuoteRequest::sell_before_fee(
         parse_address(sell_token)?,
         parse_address(buy_token)?,
         parse_address(from)?,
@@ -584,7 +599,7 @@ pub async fn get_quote_simple(
     let url = endpoint(c, "api/v1/quote");
     let response: cowprotocol::OrderQuoteResponse = transport::post_json(&url, &request).await?;
     let order_data = response
-        .to_signed_order_data(&request, cowprotocol::EMPTY_APP_DATA_HASH)
+        .try_into_signed_order_data(&request, cowprotocol::EMPTY_APP_DATA_HASH)
         .map_err(|err| JsValue::from_str(&format!("to_signed_order_data failed: {err}")))?;
     let domain = settlement_domain(c.id(), c.settlement());
     let uid = order_data.uid(&domain, response.from);
@@ -596,10 +611,21 @@ pub async fn get_quote_simple(
 }
 
 /// `POST /api/v1/orders`. Returns the assigned 56-byte UID.
+///
+/// The assembled `OrderCreation` is verified locally via
+/// [`cowprotocol::OrderCreation::verify_owner`] before any network
+/// call, mirroring the guard [`build_order_creation`] performs, so a
+/// hand-assembled body with a typo'd `from` is rejected client-side
+/// rather than as a 4xx from the orderbook.
 #[wasm_bindgen]
 pub async fn post_order(chain: &str, creation: JsValue) -> Result<String, JsValue> {
     let creation: cowprotocol::OrderCreation = from_js(creation)?;
-    let url = endpoint(parse_chain(chain)?, "api/v1/orders");
+    let c = parse_chain(chain)?;
+    let domain = settlement_domain(c.id(), c.settlement());
+    creation
+        .verify_owner(&domain)
+        .map_err(|err| JsValue::from_str(&format!("verify_owner: {err}")))?;
+    let url = endpoint(c, "api/v1/orders");
     transport::post_json_string(&url, &creation).await
 }
 
@@ -691,10 +717,10 @@ pub async fn version(chain: &str) -> Result<String, JsValue> {
 }
 
 /// `DELETE /api/v1/orders/{uid}`. Caller must construct the signed
-/// `OrderCancellation` (see `cancel_order_signed`) and pass it here.
+/// `SignedOrderCancellation` (see `cancel_order_signed`) and pass it here.
 #[wasm_bindgen]
 pub async fn cancel_order(chain: &str, cancellation: JsValue) -> Result<(), JsValue> {
-    let cancellation: OrderCancellation = from_js(cancellation)?;
+    let cancellation: SignedOrderCancellation = from_js(cancellation)?;
     let url = endpoint(
         parse_chain(chain)?,
         &format!("api/v1/orders/{}", cancellation.order_uid),
@@ -717,7 +743,7 @@ pub fn cancel_order_signed(
     let domain = settlement_domain(c.id(), c.settlement());
     let signer = parse_signer(private_key_hex)?;
     let cancellation =
-        OrderCancellation::sign(uid, EcdsaSigningScheme::Eip712, &domain, &signer)
+        SignedOrderCancellation::sign(uid, EcdsaSigningScheme::Eip712, &domain, &signer)
             .map_err(|err| JsValue::from_str(&format!("sign cancellation failed: {err}")))?;
     to_js(&cancellation)
 }

@@ -9,7 +9,7 @@
 //!
 //! ## Why this exists
 //!
-//! [`crate::OrderQuoteResponse::to_signed_order_data`] applies only the
+//! [`crate::OrderQuoteResponse::try_into_signed_order_data`] applies only the
 //! basic `sellAmount + feeAmount` adjustment documented at [api §"Step 3"].
 //! When the caller layers a partner fee on top of a quote that also
 //! carries a protocol fee, the partner-fee base must be computed against
@@ -44,7 +44,7 @@
 //! orderbook inputs (e.g. `sellAmount = U256::MAX`, `slippageBps >
 //! 10_000`, `protocolFeeBps >= 100%`) instead of folding a saturated
 //! amount into the signed [`crate::OrderData`]. The same fail-closed
-//! contract already governs [`crate::OrderQuoteResponse::to_signed_order_data`]
+//! contract already governs [`crate::OrderQuoteResponse::try_into_signed_order_data`]
 //! via [`Error::QuoteAmountOverflow`].
 //!
 //! [api §"Step 3"]: https://docs.cow.fi/cow-protocol/howto/integrate/api#step-3-compute-the-amounts-to-sign
@@ -647,7 +647,7 @@ mod tests {
     /// [`Error::QuoteFeeMathOverflow`] at the `before_all_fees.sell`
     /// stage rather than saturating to `U256::MAX` and being copied
     /// into the signed `OrderData`. Mirrors the contract that
-    /// [`crate::OrderQuoteResponse::to_signed_order_data`] enforces via
+    /// [`crate::OrderQuoteResponse::try_into_signed_order_data`] enforces via
     /// `Error::QuoteAmountOverflow`.
     #[test]
     fn rejects_sell_plus_fee_overflow() {

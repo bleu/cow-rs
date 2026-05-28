@@ -28,7 +28,7 @@ use crate::{
 ///   along with the order.
 ///
 /// Use [`OrderCreation::from_signed_order_data`] to assemble the body once
-/// the owner has signed [`crate::OrderQuoteResponse::to_signed_order_data`].
+/// the owner has signed [`crate::OrderQuoteResponse::try_into_signed_order_data`].
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", try_from = "OrderCreationWire")]

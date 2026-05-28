@@ -6,7 +6,7 @@
 //! cow-sdk #867 fixed upstream) and that the assembled
 //! `OrderCreation` carries a recoverable EIP-712 signature.
 
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(all(not(target_arch = "wasm32"), feature = "http-client"))]
 
 use alloy_primitives::{Address, U256, address};
 use alloy_signer_local::PrivateKeySigner;
@@ -116,7 +116,7 @@ async fn post_swap_order_lowers_buy_amount_when_protocol_fee_compounds_with_part
     let client = TradingClient::from_orderbook(Chain::Mainnet, api);
     let app_data = AppDataDoc::sdk_attribution("cow-rs");
 
-    let mut request = QuoteRequest::sell_amount_after_fee(USDC, DAI, signer_addr, U256::from(1u64));
+    let mut request = QuoteRequest::sell_after_fee(USDC, DAI, signer_addr, U256::from(1u64));
     // The fixture already pins amounts; the request only needs to
     // carry from + tokens for cross-checking.
     request.kind = OrderKind::Sell;

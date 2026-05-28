@@ -29,9 +29,9 @@ use {
 };
 
 use cow_sdk_wasm::{
-    app_data_cid_from_hash, app_data_hash_from_json, chain_info, domain_separator,
-    empty_app_data_hash, get_quote, get_quote_simple, order_uid, sdk_app_data_hash,
-    sdk_app_data_json, to_signed_order_data, version,
+    app_data_cid_from_hash, app_data_hash_from_json, build_order_creation, chain_info,
+    domain_separator, empty_app_data_hash, get_quote, get_quote_simple, order_uid, post_order,
+    sdk_app_data_hash, sdk_app_data_json, to_signed_order_data, version,
 };
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -300,7 +300,7 @@ async fn get_quote_simple_parses_response_via_mock_fetch() {
 #[wasm_bindgen_test]
 async fn get_quote_rejects_swapped_sell_token_in_response() {
     // Request asks for USDC -> DAI, but the mocked response returns
-    // WETH as `sellToken`. The native `OrderQuoteResponse::to_signed_order_data`
+    // WETH as `sellToken`. The native `OrderQuoteResponse::try_into_signed_order_data`
     // guard fires through the wasm boundary as a `JsValue` error.
     let body = r#"{
         "quote": {
@@ -491,4 +491,137 @@ fn sdk_app_data_json_and_hash_are_consistent() {
         "sdk_app_data_hash() should equal app_data_hash_from_json(sdk_app_data_json())"
     );
     assert!(direct.starts_with("0x") && direct.len() == 2 + 64);
+}
+
+// ===== Boundary-check regression tests =================================
+//
+// Pin the client-side guards `build_order_creation` and `post_order`
+// perform before they hand control to the orderbook: `quote_id` is
+// range-checked into `i64` rather than silently wrapping, and
+// `post_order` runs `verify_owner` so a hand-assembled body with the
+// wrong `from` is rejected before any network call.
+
+/// `quote_id` greater than `i64::MAX` would silently wrap to a negative
+/// integer under the previous `as i64` cast. The checked conversion
+/// must reject it with an explicit error string callers can match on.
+#[wasm_bindgen_test]
+fn build_order_creation_rejects_overflowing_quote_id() {
+    // App-data hash matching the canonical empty document `"{}"`, so
+    // `from_signed_order_data` cannot reject the body on the
+    // hash-mismatch path before the `quote_id` check fires. Use the
+    // app-data hash sentinel from the SDK for the same reason.
+    let empty_hash = empty_app_data_hash();
+    let order = serde_json::json!({
+        "sellToken": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "buyToken":  "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+        "receiver": null,
+        "sellAmount": "100000000",
+        "buyAmount":  "99000000000000000000",
+        "validTo": 4_294_967_295u32,
+        "appData": empty_hash,
+        "feeAmount": "0",
+        "kind": "sell",
+        "partiallyFillable": false,
+        "sellTokenBalance": "erc20",
+        "buyTokenBalance":  "erc20",
+    });
+    let order_json = serde_json::to_string(&order).expect("order to json");
+    let order_js = JSON::parse(&order_json).expect("JSON.parse order");
+
+    // Syntactically valid (r, s, v): 32-byte zero blobs and v = 27. The
+    // `quote_id` range check fires before signer recovery, so the
+    // signature does not need to verify against `owner`.
+    let signature = JSON::parse(
+        r#"{
+            "signingScheme": "eip712",
+            "r": "0x0000000000000000000000000000000000000000000000000000000000000001",
+            "s": "0x0000000000000000000000000000000000000000000000000000000000000001",
+            "v": 27
+        }"#,
+    )
+    .expect("JSON.parse signature");
+
+    let err = build_order_creation(
+        order_js,
+        signature,
+        "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+        "mainnet",
+        "{}",
+        Some(u64::MAX),
+    )
+    .expect_err("expected quote_id overflow error");
+    let msg = err.as_string().unwrap_or_default();
+    assert!(
+        msg.contains("quote_id exceeds i64::MAX"),
+        "expected quote_id overflow error, got: {msg}",
+    );
+}
+
+/// `post_order` must run [`OrderCreation::verify_owner`] before any
+/// network call: a hand-assembled body with a `from` that does not
+/// match the recovered signer is rejected locally with a
+/// `verify_owner:`-prefixed error rather than reaching `fetch`.
+///
+/// Build a wire-shape `OrderCreation` JSON whose ECDSA signature
+/// recovers to one address but whose `from` is a different non-zero
+/// address. Deserialisation succeeds (the wire `try_from` only rejects
+/// `from = ZERO`); the wasm shim's `verify_owner` must then reject the
+/// mismatch.
+#[wasm_bindgen_test]
+async fn post_order_rejects_wrong_from_locally() {
+    // Install a fetch shim that panics if hit; the local guard must
+    // short-circuit before the transport runs.
+    let panic_fetch = Closure::wrap(Box::new(|_url: JsValue, _init: JsValue| -> Promise {
+        panic!("post_order reached fetch despite verify_owner mismatch");
+    }) as Box<dyn FnMut(JsValue, JsValue) -> Promise>);
+    Reflect::set(
+        &global(),
+        &JsValue::from_str("fetch"),
+        panic_fetch.as_ref().unchecked_ref(),
+    )
+    .unwrap();
+
+    // Wire-shape body. `signingScheme = eip712`, a syntactically valid
+    // 65-byte signature, the empty-app-data sentinel and a non-zero
+    // `from` that will not match any signer recovery on this payload.
+    // The wire `try_from` enforces `from != ZERO` and
+    // `keccak256(app_data) == app_data_hash`, both of which hold here.
+    let empty_hash = empty_app_data_hash();
+    let creation = serde_json::json!({
+        "sellToken": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "buyToken":  "0x6b175474e89094c44da98b954eedeac495271d0f",
+        "receiver": null,
+        "sellAmount": "100000000",
+        "buyAmount":  "99000000000000000000",
+        "validTo": 4_294_967_295u32,
+        "appData": "{}",
+        "appDataHash": empty_hash,
+        "feeAmount": "0",
+        "kind": "sell",
+        "partiallyFillable": false,
+        "sellTokenBalance": "erc20",
+        "buyTokenBalance":  "erc20",
+        "signingScheme": "eip712",
+        // 65-byte ECDSA blob: r = 1, s = 1, v = 27. Recovers to some
+        // address that is overwhelmingly unlikely to equal `from`
+        // below, so verify_owner fires the SignerMismatch arm.
+        "signature": "0x0000000000000000000000000000000000000000000000000000000000000001\
+                       0000000000000000000000000000000000000000000000000000000000000001\
+                       1b",
+        "from": "0x000000000000000000000000000000000000dEaD",
+    });
+    let creation_json = serde_json::to_string(&creation).expect("creation to json");
+    let creation_js = JSON::parse(&creation_json).expect("JSON.parse creation");
+
+    let err = post_order("mainnet", creation_js)
+        .await
+        .expect_err("expected verify_owner mismatch before fetch");
+    let msg = err.as_string().unwrap_or_default();
+    assert!(
+        msg.starts_with("verify_owner:"),
+        "expected verify_owner-prefixed error, got: {msg}",
+    );
+
+    restore_real_fetch();
+    drop(panic_fetch);
 }

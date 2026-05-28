@@ -157,9 +157,9 @@ impl TradingClient {
         let app_data_hash = params.app_data.hash();
         let app_data_json = params.app_data.canonical_json();
 
-        let quote = self.api.get_quote(&params.request).await?;
+        let quote = self.api.quote(&params.request).await?;
 
-        let order_data = quote.to_signed_order_data_with_costs(
+        let order_data = quote.try_into_signed_order_data_with_costs(
             &params.request,
             params.partner_fee_bps,
             params.slippage_bps,
@@ -189,6 +189,11 @@ impl TradingClient {
             Some(quote.id),
         )?;
 
+        // Fail closed if `request.from` does not match the signer:
+        // matches the wasm `build_order_creation` shim and avoids a
+        // round-trip to the orderbook just to surface a 4xx.
+        body.verify_owner(&domain).map_err(Error::Signature)?;
+
         // Pin the canonical JSON document before posting. The
         // orderbook accepts either order — but posting first risks a
         // window where the index has the hash but not the body.
@@ -207,5 +212,118 @@ impl TradingClient {
             order_data,
             quote,
         })
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    //! Native-only tests for [`TradingClient::post_swap_order`]. The
+    //! wiremock fixture is gated off wasm because `wiremock` (and the
+    //! `tokio::net` stack it relies on) does not build for that target.
+    use super::*;
+    use crate::{AppDataDoc, OrderBookApi, SwapOrder};
+    use alloy_primitives::{U256, address};
+    use alloy_signer_local::PrivateKeySigner;
+    use serde_json::{Value, json};
+    use std::sync::{Arc, Mutex};
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+
+    const USDC: Address = address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
+    const DAI: Address = address!("6B175474E89094C44Da98b954EedeAC495271d0F");
+
+    /// Same shape as `tests/trading_mock.rs::quote_body`: a minimal,
+    /// deserialisable `OrderQuoteResponse` echoing the caller's `from`.
+    fn quote_body(from: Address) -> Value {
+        json!({
+            "quote": {
+                "sellToken": format!("{:#x}", USDC),
+                "buyToken": format!("{:#x}", DAI),
+                "receiver": null,
+                "sellAmount": "1000000000000000000",
+                "buyAmount": "2000000000000000000",
+                "validTo": 1_900_000_000_u32,
+                "appData": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "feeAmount": "0",
+                "kind": "sell",
+                "partiallyFillable": false,
+                "sellTokenBalance": "erc20",
+                "buyTokenBalance": "erc20",
+                "signingScheme": "eip712",
+            },
+            "from": format!("{from:#x}"),
+            "expiration": "2099-12-31T23:59:59Z",
+            "id": 42,
+            "verified": true,
+        })
+    }
+
+    /// R24: `post_swap_order` must fail closed before any
+    /// `POST /api/v1/orders` hits the orderbook when `request.from`
+    /// disagrees with the signer's address. Mirrors the WASM
+    /// `build_order_creation` guard so native callers get the same
+    /// fail-fast on a typo or a wallet switch.
+    #[tokio::test]
+    async fn post_swap_order_rejects_signer_mismatch_before_posting() {
+        let signer = PrivateKeySigner::random();
+        let signer_addr = signer.address();
+        // `request.from` is a wallet the caller doesn't control; the
+        // orderbook would 4xx this, but the client must catch it first.
+        let declared_from = address!("dead0000dead0000dead0000dead0000dead0000");
+        assert_ne!(signer_addr, declared_from);
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/quote"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(quote_body(declared_from)))
+            .mount(&server)
+            .await;
+
+        // Track POST /api/v1/orders calls. The assertion below pins
+        // that the guard fires before this endpoint is reached: zero
+        // calls is the load-bearing observation, not the response.
+        let post_calls = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let post_calls_handle = post_calls.clone();
+        Mock::given(method("POST"))
+            .and(path("/api/v1/orders"))
+            .respond_with(move |req: &wiremock::Request| {
+                let body: Value =
+                    serde_json::from_slice(&req.body).expect("orderbook body is JSON");
+                post_calls_handle.lock().unwrap().push(body);
+                ResponseTemplate::new(201).set_body_json(Value::String("0x".repeat(56)))
+            })
+            .mount(&server)
+            .await;
+
+        let api = OrderBookApi::new_with_base_url(server.uri().parse().unwrap());
+        let client = TradingClient::from_orderbook(Chain::Mainnet, api);
+        let app_data = AppDataDoc::sdk_attribution("cow-rs");
+        let request = QuoteRequest::sell_before_fee(
+            USDC,
+            DAI,
+            declared_from,
+            U256::from(1_000_000_u64),
+        );
+        let params = SwapOrder::eip712(request, &app_data);
+
+        let err = client
+            .post_swap_order(params, &signer)
+            .await
+            .expect_err("client must reject signer/from mismatch before posting");
+
+        assert!(
+            matches!(
+                err,
+                Error::Signature(crate::signature::SignatureError::SignerMismatch { .. })
+            ),
+            "expected SignerMismatch, got: {err:?}",
+        );
+
+        assert!(
+            post_calls.lock().unwrap().is_empty(),
+            "POST /api/v1/orders must not be reached when verify_owner fails",
+        );
     }
 }

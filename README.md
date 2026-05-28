@@ -69,19 +69,19 @@ use alloy_signer_local::PrivateKeySigner;
 let api = OrderBookApi::new(Chain::Mainnet);
 
 // 1. Quote.
-let request = QuoteRequest::sell_amount_before_fee(
+let request = QuoteRequest::sell_before_fee(
     address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"), // USDC
     address!("6B175474E89094C44Da98b954EedeAC495271d0F"), // DAI
     signer.address(),
     U256::from(100_000_000_u64),
 );
-let quote = api.get_quote(&request).await?;
+let quote = api.quote(&request).await?;
 
 // 2. Build the order, sign it under the chain's GPv2Settlement domain.
 //    The SDK cross-checks the response against `request` (sellToken,
 //    buyToken, receiver, from, kind, plus any field the caller pinned)
 //    and refuses to project mismatched fields into signable bytes.
-let order_data = quote.to_signed_order_data(&request, EMPTY_APP_DATA_HASH)?;
+let order_data = quote.try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)?;
 let domain = DomainSeparator::new(Chain::Mainnet.id(), Chain::Mainnet.settlement());
 let signature = order_data.sign(EcdsaSigningScheme::Eip712, &domain, &signer)?;
 
@@ -110,7 +110,10 @@ Every protocol-critical primitive is synchronous and runtime-free:
 contract bindings. You can use cow-rs in a Postgres extension
 ([`pgrx`](https://github.com/pgcentralfoundation/pgrx)), an FFI shim,
 an embedded context, or anywhere else a tokio reactor is hostile,
-without pulling in `reqwest` or `tokio`.
+without pulling in `reqwest` or `tokio`. This is enforced via the
+`http-client` cargo feature (on by default); build with
+`--no-default-features` to drop the orderbook / trading clients and
+their `reqwest` transitive graph from the build.
 
 ```rust
 use cowprotocol::{OrderBuilder, OrderKind, DomainSeparator, Chain};
@@ -143,7 +146,7 @@ assert_eq!(uid.0.len(), 56);
 | `signature` | `Signature` (all four schemes), `EcdsaSignature`, `Recovered`, `SignatureError` |
 | `domain` | `DomainSeparator`, `hashed_eip712_message`, `hashed_ethsign_message` |
 | `chain` | `Chain` (eleven networks) with `orderbook_base_url`, `orderbook_barn_url`, `settlement`, `vault_relayer`, `subgraph_studio_url` |
-| `cancellation` | `OrderCancellation` (single), `OrderCancellations` (collection), `SignedOrderCancellations` |
+| `cancellation` | `SignedOrderCancellation` (single), `OrderCancellations` (collection), `SignedOrderCancellations` |
 | `app_data` | `AppDataHash`, `AppDataDoc` (canonical JSON + keccak digest), `AppDataCid` (IPFS CIDv1 derivation), `AppDataDoc::sdk_attribution` for the SDK's `appCode` tag |
 | `eth_flow` | `EthFlowOrder` (non-zero `receiver` enforced at construction), `ETH_FLOW_PRODUCTION`, `ETH_FLOW_STAGING` |
 | `composable` | `ConditionalOrderParams`, `Proof`, `PollOutcome`, `ComposableCoW` events, `TwapData` + `TwapStaticInput`, plus deployment addresses |

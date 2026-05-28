@@ -17,12 +17,15 @@ categories = ["cryptography::cryptocurrencies", "api-bindings", "wasm"]
 workspace = true
 
 [features]
-default = ["subgraph"]
-# The CoW subgraph GraphQL client lives on its own URL and is only
-# useful for indexer / analytics integrations; size-sensitive consumers
-# (notably the wasm shim) build with `--no-default-features` to drop
-# the module entirely.
-subgraph = []
+default = ["http-client", "subgraph"]
+# `http-client` enables the orderbook + trading HTTP client. Hashing
+# and signing-only consumers (PG extension via pgrx, FFI shim,
+# embedded context, etc.) disable it to drop `reqwest` and its
+# transitive graph from the build.
+http-client = ["dep:reqwest"]
+# `subgraph` enables the GraphQL client. It depends on `http-client`
+# because the subgraph executor uses `reqwest` internally.
+subgraph = ["http-client"]
 
 [dependencies]
 alloy-primitives.workspace = true
@@ -36,10 +39,13 @@ thiserror.workspace = true
 url.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-reqwest = { workspace = true, features = ["rustls-tls"] }
+reqwest = { workspace = true, features = ["rustls-tls"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-reqwest = { workspace = true }
+reqwest = { workspace = true, optional = true }
+# Wires alloy's PRNG into the browser's `crypto.getRandomValues`; this
+# is signing-only, not HTTP-only, so it stays outside the `http-client`
+# gate.
 getrandom = { workspace = true, features = ["js"] }
 
 [dev-dependencies]
@@ -50,3 +56,13 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 wiremock.workspace = true
+
+# Both examples drive the async orderbook client, so they only build
+# when `http-client` is on (it is, by default).
+[[example]]
+name = "get_quote"
+required-features = ["http-client"]
+
+[[example]]
+name = "post_order"
+required-features = ["http-client"]

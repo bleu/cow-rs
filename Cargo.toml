@@ -35,10 +35,22 @@ serde_with = "3"
 cid = { version = "0.11", default-features = false, features = ["std"] }
 const-hex = "1"
 hex-literal = "1"
+# `cowprotocol` decodes responses via
+# `serde_json::from_str(response.text().await?)` rather than reqwest's
+# `Response::json::<T>()`. The `json` feature is still required here
+# because `RequestBuilder::json(&body)` (used by the orderbook +
+# subgraph POST paths) is gated behind the same feature on the request
+# side; dropping it would force every caller to hand-assemble the
+# `content-type: application/json` body.
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 thiserror = "2"
 tokio = { version = "1", default-features = false }
 url = "2"
+# Pinned at 0.2 deliberately: alloy's k256 / elliptic-curve crypto path
+# pulls `rand_core 0.6`, which depends on `getrandom 0.2`. Bumping our
+# direct dep to 0.3 would not drop 0.2 from the wasm tree (rand_core
+# keeps it); it would only add a second copy. Revisit once alloy moves
+# its crypto stack to rand_core 0.9 / getrandom 0.3.
 getrandom = { version = "0.2", default-features = false }
 wiremock = "0.6"
 

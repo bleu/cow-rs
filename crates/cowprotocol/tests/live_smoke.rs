@@ -13,7 +13,7 @@
 //! semantics. If api.cow.fi is down or rate-limits us, we want a
 //! readable failure, not a wall of red.
 
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(all(not(target_arch = "wasm32"), feature = "http-client"))]
 
 use alloy_primitives::{U256, address};
 
@@ -43,14 +43,14 @@ async fn live_mainnet_get_quote_decodes_response_shape() {
     // USDC -> DAI, 100 USDC. The owner address is the well-known
     // zero-balance "burner" so the orderbook will return a quote
     // without a balance check rejecting us.
-    let request = QuoteRequest::sell_amount_before_fee(
+    let request = QuoteRequest::sell_before_fee(
         address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
         address!("6B175474E89094C44Da98b954EedeAC495271d0F"),
         address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
         U256::from(100_000_000u64),
     );
     let response = OrderBookApi::new(Chain::Mainnet)
-        .get_quote(&request)
+        .quote(&request)
         .await
         .expect("api.cow.fi /quote should respond");
     assert!(

@@ -4,7 +4,7 @@
 //!
 //! 1. Ask the Sepolia orderbook for a quote on a small WETH -> COW swap.
 //! 2. Apply the documented submission adjustments via
-//!    [`cowprotocol::OrderQuoteResponse::to_signed_order_data`].
+//!    [`cowprotocol::OrderQuoteResponse::try_into_signed_order_data`].
 //! 3. Sign the resulting [`cowprotocol::OrderData`] under the GPv2Settlement
 //!    domain with an EIP-712 ECDSA signature.
 //! 4. POST the signed body to `/api/v1/orders` and print the assigned UID
@@ -76,13 +76,13 @@ async fn main() -> cowprotocol::Result<()> {
     let api = OrderBookApi::new(Chain::Sepolia);
 
     // Step 1: quote.
-    let request = QuoteRequest::sell_amount_before_fee(
+    let request = QuoteRequest::sell_before_fee(
         WETH_SEPOLIA,
         COW_SEPOLIA,
         owner,
         U256::from(SELL_AMOUNT_WEI),
     );
-    let quote = api.get_quote(&request).await?;
+    let quote = api.quote(&request).await?;
     println!("quote id:     {}", quote.id);
     println!("buy amount:   {}", quote.quote.buy_amount);
     println!("fee amount:   {}", quote.quote.fee_amount);
@@ -91,7 +91,7 @@ async fn main() -> cowprotocol::Result<()> {
     // Step 2: project into the signed payload, binding the response
     // to the original request so a hostile orderbook cannot trick us
     // into signing a swapped token / receiver.
-    let order_data = quote.to_signed_order_data(&request, EMPTY_APP_DATA_HASH)?;
+    let order_data = quote.try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)?;
 
     // Step 3: sign under the Sepolia GPv2Settlement domain.
     let domain = settlement_domain(Chain::Sepolia.id(), GPV2_SETTLEMENT);

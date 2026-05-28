@@ -24,7 +24,7 @@
 //! - [`OrderBookApi`]: async client for the orderbook HTTP API, with
 //!   methods for quoting, posting, lookup, cancellation, trade and account
 //!   queries, native-price lookups and app-data pinning.
-//! - [`OrderCreation`], [`OrderCancellation`] and [`OrderCancellations`]
+//! - [`OrderCreation`], [`SignedOrderCancellation`] and [`OrderCancellations`]
 //!   for the submission and cancellation flows.
 //! - [`AppDataHash`] and [`AppDataDoc`] for the canonical metadata
 //!   document and its keccak digest.
@@ -52,21 +52,26 @@
 //!
 //! ## Quote example
 //!
+//! Requires the `http-client` feature (on by default).
+//!
 //! ```no_run
+//! # #[cfg(feature = "http-client")]
+//! # mod example {
 //! use cowprotocol::{Chain, OrderBookApi, QuoteRequest};
 //! use alloy_primitives::{Address, U256, address};
 //!
-//! # async fn run() -> cowprotocol::Result<()> {
+//! # pub async fn run() -> cowprotocol::Result<()> {
 //! let api = OrderBookApi::new(Chain::Mainnet);
-//! let request = QuoteRequest::sell_amount_before_fee(
+//! let request = QuoteRequest::sell_before_fee(
 //!     address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"), // USDC
 //!     address!("6B175474E89094C44Da98b954EedeAC495271d0F"), // DAI
 //!     address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
 //!     U256::from(100_000_000_u64),
 //! );
-//! let response = api.get_quote(&request).await?;
+//! let response = api.quote(&request).await?;
 //! println!("buy amount: {}", response.quote.buy_amount);
 //! # Ok(()) }
+//! # }
 //! ```
 //!
 //! See `examples/post_order.rs` for the full sign-and-submit flow on
@@ -114,6 +119,7 @@ pub mod signature;
 pub mod signing_scheme;
 #[cfg(feature = "subgraph")]
 pub mod subgraph;
+#[cfg(feature = "http-client")]
 pub mod trading;
 
 pub use crate::{
@@ -124,7 +130,7 @@ pub use crate::{
         EMPTY_APP_DATA_JSON, FeePolicy, LATEST_APP_DATA_VERSION, app_data_cid,
         app_data_hash_from_cid,
     },
-    cancellation::{OrderCancellation, OrderCancellations, SignedOrderCancellations},
+    cancellation::{OrderCancellations, SignedOrderCancellation, SignedOrderCancellations},
     chain::{Chain, UnsupportedChain},
     composable::{
         COMPOSABLE_COW, CURRENT_BLOCK_TIMESTAMP_FACTORY, ComposableCoW, ConditionalOrderParams,
@@ -141,12 +147,12 @@ pub use crate::{
     multiplexer::{Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof},
     order::{
         BUY_ETH_ADDRESS, BuyTokenDestination, Order, OrderClass, OrderData, OrderKind, OrderStatus,
-        OrderUid, SellTokenSource, pack_order_uid, unpack_order_uid,
+        OrderUid, OrderUidParts, SellTokenSource,
     },
     order_book::{
-        AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderBookApi,
-        OrderCreation, OrderQuote, OrderQuoteResponse, PriceQuality, QuoteRequest, TokenMetadata,
-        TotalSurplus, Trade,
+        AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderCreation,
+        OrderQuote, OrderQuoteResponse, PriceQuality, QuoteRequest, TokenMetadata, TotalSurplus,
+        Trade,
     },
     quote_amounts::{
         Amounts as QuoteAmounts, QuoteAmountsAndCosts, QuoteAmountsParams, QuoteCosts,
@@ -156,8 +162,13 @@ pub use crate::{
         ecdsa_recover, parse_ecdsa, sign_ecdsa,
     },
     signing_scheme::{EcdsaSigningScheme, SigningScheme},
-    trading::{PostedSwapOrder, SwapOrder, TradingClient},
 };
+
+#[cfg(feature = "http-client")]
+pub use crate::order_book::OrderBookApi;
+
+#[cfg(feature = "http-client")]
+pub use crate::trading::{PostedSwapOrder, SwapOrder, TradingClient};
 
 #[cfg(feature = "subgraph")]
 pub use crate::subgraph::{

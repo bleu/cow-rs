@@ -5,12 +5,12 @@
 //! responses. The goal is to lock the wire shapes our client encodes and
 //! decodes without hitting the production orderbook.
 
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(all(not(target_arch = "wasm32"), feature = "http-client"))]
 
 use alloy_primitives::{Address, B256, U256, address};
 use cowprotocol::{
-    AppDataHash, BuyTokenDestination, Chain, OrderBookApi, OrderCancellation, OrderCancellations,
-    OrderCreation, OrderData, OrderKind, OrderUid, QuoteRequest, SellTokenSource, Signature,
+    AppDataHash, BuyTokenDestination, Chain, OrderBookApi, OrderCancellations, OrderCreation,
+    OrderData, OrderKind, OrderUid, QuoteRequest, SellTokenSource, Signature, SignedOrderCancellation,
     SigningScheme, order_book::AppDataDocument,
 };
 use serde_json::json;
@@ -45,8 +45,8 @@ async fn get_quote_decodes_recorded_mainnet_response() {
         .await;
 
     let request =
-        QuoteRequest::sell_amount_before_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64));
-    let response = api(&server).get_quote(&request).await.unwrap();
+        QuoteRequest::sell_before_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64));
+    let response = api(&server).quote(&request).await.unwrap();
 
     assert_eq!(response.quote.kind, OrderKind::Sell);
     assert_eq!(response.from, OWNER);
@@ -81,7 +81,7 @@ async fn post_order_returns_assigned_uid() {
     };
     let creation = OrderCreation::from_signed_order_data(
         &order,
-        Signature::default_with(SigningScheme::Eip712),
+        Signature::empty_for(SigningScheme::Eip712),
         OWNER,
         cowprotocol::EMPTY_APP_DATA_JSON.to_owned(),
         Some(123),
@@ -109,7 +109,7 @@ async fn post_order_surfaces_orderbook_api_error() {
             app_data: cowprotocol::EMPTY_APP_DATA_HASH,
             ..OrderData::default()
         },
-        Signature::default_with(SigningScheme::Eip712),
+        Signature::empty_for(SigningScheme::Eip712),
         OWNER,
         cowprotocol::EMPTY_APP_DATA_JSON.to_owned(),
         None,
@@ -158,7 +158,7 @@ async fn get_order_decodes_full_order_record() {
         .await;
 
     let uid: OrderUid = uid_hex.parse().unwrap();
-    let order = api(&server).get_order(&uid).await.unwrap();
+    let order = api(&server).order(&uid).await.unwrap();
 
     assert_eq!(order.uid, uid);
     assert_eq!(order.owner, OWNER);
@@ -181,7 +181,7 @@ async fn get_order_status_decodes_lifecycle_payload() {
         .await;
 
     let uid: OrderUid = uid_hex.parse().unwrap();
-    let status = api(&server).get_order_status(&uid).await.unwrap();
+    let status = api(&server).order_status(&uid).await.unwrap();
     assert_eq!(status.status_type, cowprotocol::AuctionStatusType::Active);
     assert_eq!(status.value.len(), 1);
 }
@@ -237,7 +237,7 @@ async fn cancel_order_puts_uid_in_path_and_omits_it_from_body() {
         Chain::Mainnet.id(),
         address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
     );
-    let cancellation = OrderCancellation::sign(
+    let cancellation = SignedOrderCancellation::sign(
         uid,
         cowprotocol::EcdsaSigningScheme::Eip712,
         &domain,
@@ -291,7 +291,7 @@ async fn get_orders_by_uids_posts_camel_case_uid_array() {
         .await;
 
     let uid: OrderUid = uid_hex.parse().unwrap();
-    let orders = api(&server).get_orders_by_uids(&[uid]).await.unwrap();
+    let orders = api(&server).orders_by_uids(&[uid]).await.unwrap();
     assert!(orders.is_empty());
 }
 
@@ -307,6 +307,51 @@ async fn trades_by_owner_filters_with_query_param() {
 
     let trades = api(&server).trades_by_owner(OWNER).await.unwrap();
     assert!(trades.is_empty());
+}
+
+#[tokio::test]
+async fn trades_by_order_uid_queries_by_uid() {
+    let server = MockServer::start().await;
+    let uid = OrderUid::from([0x11; 56]);
+    let uid_hex = uid.to_string();
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/trades"))
+        .and(query_param("orderUid", uid_hex.as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+            "blockNumber": 17_456_789_u64,
+            "logIndex": 3_u32,
+            "orderUid": uid_hex,
+            "owner": format!("{OWNER:?}"),
+            "sellToken": format!("{USDC:?}"),
+            "buyToken": format!("{DAI:?}"),
+            "sellAmount": "1000000",
+            "buyAmount": "999000",
+        }])))
+        .mount(&server)
+        .await;
+
+    let trades = api(&server).trades_by_order_uid(&uid).await.unwrap();
+    assert_eq!(trades.len(), 1);
+    assert_eq!(trades[0].order_uid, uid);
+    assert_eq!(trades[0].sell_amount, U256::from(1_000_000_u64));
+}
+
+#[tokio::test]
+async fn auction_returns_current_auction() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/auction"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 42,
+            "block": 17_456_789_u64,
+        })))
+        .mount(&server)
+        .await;
+
+    let auction = api(&server).auction().await.unwrap();
+    assert_eq!(auction.id, Some(42));
+    assert_eq!(auction.block, Some(17_456_789));
 }
 
 #[tokio::test]
@@ -359,7 +404,12 @@ async fn orders_by_tx_fetches_settlement_orders() {
 #[tokio::test]
 async fn upload_app_data_returns_server_computed_hash() {
     let server = MockServer::start().await;
-    let computed_hash = AppDataHash::from([0xcd; 32]);
+    let document = AppDataDocument {
+        full_app_data: "{\"appCode\":\"cow-rs\"}".into(),
+    };
+    // Server must echo the document's own keccak256; the SDK refuses a
+    // divergent server hash now that `upload_app_data` re-hashes locally.
+    let computed_hash = document.computed_hash();
     let expected_hex = format!("0x{}", const_hex::encode(computed_hash.0));
 
     Mock::given(method("PUT"))
@@ -375,9 +425,6 @@ async fn upload_app_data_returns_server_computed_hash() {
         .mount(&server)
         .await;
 
-    let document = AppDataDocument {
-        full_app_data: "{\"appCode\":\"cow-rs\"}".into(),
-    };
     let hash = api(&server).upload_app_data(&document).await.unwrap();
     assert_eq!(hash, computed_hash);
 }
@@ -443,7 +490,7 @@ async fn get_app_data_decodes_full_app_data_envelope() {
         .mount(&server)
         .await;
 
-    let doc = api(&server).get_app_data(&hash).await.unwrap();
+    let doc = api(&server).app_data(&hash).await.unwrap();
     assert_eq!(doc.full_app_data, "{}");
 }
 
@@ -467,7 +514,7 @@ async fn get_app_data_rejects_response_with_wrong_hash() {
         .mount(&server)
         .await;
 
-    let err = api(&server).get_app_data(&requested).await.unwrap_err();
+    let err = api(&server).app_data(&requested).await.unwrap_err();
     assert!(
         matches!(err, Error::AppDataHashMismatch { .. }),
         "expected AppDataHashMismatch, got {err:?}"
@@ -534,8 +581,8 @@ async fn unexpected_5xx_with_non_json_body_surfaces_unexpected_status() {
         .mount(&server)
         .await;
 
-    let request = QuoteRequest::sell_amount_before_fee(USDC, DAI, OWNER, U256::from(1_000_u64));
-    let err = api(&server).get_quote(&request).await.unwrap_err();
+    let request = QuoteRequest::sell_before_fee(USDC, DAI, OWNER, U256::from(1_000_u64));
+    let err = api(&server).quote(&request).await.unwrap_err();
     let message = err.to_string();
     assert!(message.contains("503"), "got: {message}");
     assert!(message.contains("<html>down</html>"), "got: {message}");
@@ -695,9 +742,9 @@ async fn unused_optional_quote_fields_are_omitted_from_request_body() {
         .await;
 
     let mut request =
-        QuoteRequest::sell_amount_before_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64));
+        QuoteRequest::sell_before_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64));
     request.receiver = Some(OWNER);
-    api(&server).get_quote(&request).await.unwrap();
+    api(&server).quote(&request).await.unwrap();
 
     // We exercised the request shape via QuoteRequest's own tests; here we
     // just confirm round-tripping the mock works with optional fields set.

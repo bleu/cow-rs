@@ -2,7 +2,7 @@
 //!
 //! The CoW orderbook exposes two cancel-by-UID flows:
 //!
-//! - **Single**: [`OrderCancellation`]: a signed `OrderCancellation(bytes orderUid)`
+//! - **Single**: [`SignedOrderCancellation`]: a signed `OrderCancellation(bytes orderUid)`
 //!   EIP-712 struct.
 //! - **Collection**: [`OrderCancellations`]: a signed
 //!   `OrderCancellations(bytes[] orderUid)` EIP-712 struct that cancels
@@ -56,7 +56,7 @@ mod eip712 {
 /// stays interoperable.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct OrderCancellation {
+pub struct SignedOrderCancellation {
     /// UID of the order being cancelled.
     pub order_uid: OrderUid,
     /// ECDSA signature over the EIP-712 struct hash. Wire form is the
@@ -68,7 +68,7 @@ pub struct OrderCancellation {
     pub signing_scheme: EcdsaSigningScheme,
 }
 
-impl OrderCancellation {
+impl SignedOrderCancellation {
     /// EIP-712 `hashStruct` for the single-order cancellation type.
     /// Delegates to [`alloy_sol_types::SolStruct`] applied to the
     /// private `eip712::OrderCancellation` declaration.
@@ -270,6 +270,33 @@ mod tests {
         );
     }
 
+    /// Locks `SignedOrderCancellation::hash_struct` against an independent
+    /// re-derivation of the EIP-712 `hashStruct` for the single dynamic
+    /// `bytes orderUid` field, computed by hand with raw `keccak256` rather
+    /// than going through alloy's [`alloy_sol_types::SolStruct`].
+    ///
+    /// This is NOT an external ethers.js / services golden: it is an
+    /// independent EIP-712 re-derivation. Per EIP-712 a dynamic `bytes`
+    /// member is encoded as its `keccak256`, so
+    /// `hashStruct = keccak256(typeHash ++ keccak256(orderUid))`, with
+    /// `typeHash = keccak256("OrderCancellation(bytes orderUid)")` (the
+    /// internal `sol!` type string, not the renamed Rust type). Locking the
+    /// `SolStruct` path against this hand rolled form catches drift in the
+    /// generated encoding without inventing a value we cannot verify.
+    #[test]
+    fn order_cancellation_hash_struct_matches_independent_eip712_derivation() {
+        let type_hash = keccak256(b"OrderCancellation(bytes orderUid)");
+
+        for uid in [OrderUid::from([0u8; 56]), OrderUid::from([0x42; 56])] {
+            let mut encoded = [0u8; 64];
+            encoded[0..32].copy_from_slice(type_hash.as_slice());
+            encoded[32..64].copy_from_slice(keccak256(uid.as_slice()).as_slice());
+            let expected = keccak256(encoded);
+
+            assert_eq!(SignedOrderCancellation::hash_struct(&uid), expected);
+        }
+    }
+
     fn fixed_signer() -> PrivateKeySigner {
         PrivateKeySigner::from_bytes(&U256::from(1u64).to_be_bytes().into()).unwrap()
     }
@@ -293,7 +320,7 @@ mod tests {
         let uid = OrderUid::from([0x42; 56]);
 
         for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
-            let cancellation = OrderCancellation::sign(uid, scheme, &domain, &signer).unwrap();
+            let cancellation = SignedOrderCancellation::sign(uid, scheme, &domain, &signer).unwrap();
             let recovered = cancellation.recover_owner(&domain).unwrap();
             assert_eq!(recovered, signer.address());
         }
@@ -330,12 +357,12 @@ mod tests {
         assert!(body["signature"].as_str().unwrap().starts_with("0x"));
     }
 
-    /// `OrderCancellation` round-trips through JSON: serialise, deserialise,
+    /// `SignedOrderCancellation` round-trips through JSON: serialise, deserialise,
     /// compare. Lets wasm callers (and any other JSON consumer) hand the
     /// type back and forth without losing fields.
     #[test]
     fn order_cancellation_json_round_trip() {
-        let original = OrderCancellation::sign(
+        let original = SignedOrderCancellation::sign(
             OrderUid::from([0x77; 56]),
             EcdsaSigningScheme::Eip712,
             &fixed_domain(),
@@ -343,7 +370,7 @@ mod tests {
         )
         .unwrap();
         let json = serde_json::to_string(&original).unwrap();
-        let parsed: OrderCancellation = serde_json::from_str(&json).unwrap();
+        let parsed: SignedOrderCancellation = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, original);
         // Wire keys are camelCase, matching the orderbook OpenAPI.
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();

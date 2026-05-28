@@ -521,18 +521,6 @@ impl AppDataDoc {
         serde_json::to_string(&sorted).expect("Value must re-serialise")
     }
 
-    /// Parse a canonical JSON document, rejecting input larger than
-    /// [`APP_DATA_SIZE_LIMIT`] before allocating any nested structure.
-    pub fn try_from_str(json: &str) -> Result<Self, AppDataError> {
-        if json.len() > APP_DATA_SIZE_LIMIT {
-            return Err(AppDataError::DocumentTooLarge {
-                len: json.len(),
-                max: APP_DATA_SIZE_LIMIT,
-            });
-        }
-        serde_json::from_str(json).map_err(|e| AppDataError::Parse(e.to_string()))
-    }
-
     /// `keccak256(canonical_json())`. This is the digest written into the
     /// signed `Order.appData` field.
     ///
@@ -554,6 +542,30 @@ impl AppDataDoc {
             });
         }
         Ok(keccak256(json.as_bytes()))
+    }
+}
+
+impl std::str::FromStr for AppDataDoc {
+    type Err = AppDataError;
+
+    /// Parse a canonical JSON document, rejecting input larger than
+    /// [`APP_DATA_SIZE_LIMIT`] before allocating any nested structure.
+    fn from_str(json: &str) -> Result<Self, Self::Err> {
+        if json.len() > APP_DATA_SIZE_LIMIT {
+            return Err(AppDataError::DocumentTooLarge {
+                len: json.len(),
+                max: APP_DATA_SIZE_LIMIT,
+            });
+        }
+        serde_json::from_str(json).map_err(|e| AppDataError::Parse(e.to_string()))
+    }
+}
+
+impl TryFrom<&str> for AppDataDoc {
+    type Error = AppDataError;
+
+    fn try_from(json: &str) -> Result<Self, Self::Error> {
+        json.parse()
     }
 }
 

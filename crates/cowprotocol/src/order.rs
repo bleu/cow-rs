@@ -102,7 +102,10 @@ pub struct OrderData {
     pub sell_token: Address,
     /// Token the owner is buying.
     pub buy_token: Address,
-    /// `None` means the owner receives the buy token.
+    /// `None` means the owner receives the buy token. `Some(Address::ZERO)`
+    /// is semantically equal to `None`, but raw `OrderData` you build and
+    /// sign yourself is not normalised: the `Some(ZERO)` to `None` collapse
+    /// only happens when you go through [`OrderCreation::from_signed_order_data`].
     #[serde(default)]
     pub receiver: Option<Address>,
     /// Atomic units of `sell_token`.
@@ -145,7 +148,7 @@ impl OrderData {
     pub fn uid(&self, domain: &DomainSeparator, owner: Address) -> OrderUid {
         use alloy_sol_types::SolStruct;
         let signing_hash = eip712::Order::from(self).eip712_signing_hash(domain);
-        pack_order_uid(signing_hash, owner, self.valid_to)
+        OrderUid::from_parts(signing_hash, owner, self.valid_to)
     }
 
     /// Sign with an ECDSA signer; equivalent to
@@ -395,29 +398,36 @@ impl BuyTokenDestination {
 /// Type-aliased onto alloy's [`FixedBytes<56>`] so `Debug` / `Display` /
 /// serde (`0x`-prefixed lower-case hex), `FromStr`, `From<[u8; 56]>`,
 /// `AsRef<[u8]>` and `Index` all come from there for free; use
-/// [`pack_order_uid`] / [`unpack_order_uid`] to split or rebuild the
-/// 56-byte layout.
+/// [`OrderUidParts`] to split or rebuild the 56-byte layout.
 pub type OrderUid = FixedBytes<56>;
 
-/// Assemble an [`OrderUid`] from its three parts.
-pub fn pack_order_uid(hash: B256, owner: Address, valid_to: u32) -> OrderUid {
-    let mut uid = [0u8; 56];
-    uid[0..32].copy_from_slice(hash.as_slice());
-    uid[32..52].copy_from_slice(owner.as_slice());
-    uid[52..56].copy_from_slice(&valid_to.to_be_bytes());
-    FixedBytes::new(uid)
+/// Split / rebuild an [`OrderUid`]'s `digest || owner || validTo` layout.
+pub trait OrderUidParts {
+    /// Assemble from the three parts.
+    fn from_parts(hash: B256, owner: Address, valid_to: u32) -> Self;
+    /// Split into `(digest, owner, validTo)`.
+    fn to_parts(&self) -> (B256, Address, u32);
 }
 
-/// Split an [`OrderUid`] into its three parts.
-pub fn unpack_order_uid(uid: &OrderUid) -> (B256, Address, u32) {
-    let bytes = uid.as_slice();
-    let mut valid_to = [0u8; 4];
-    valid_to.copy_from_slice(&bytes[52..56]);
-    (
-        B256::from_slice(&bytes[0..32]),
-        Address::from_slice(&bytes[32..52]),
-        u32::from_be_bytes(valid_to),
-    )
+impl OrderUidParts for OrderUid {
+    fn from_parts(hash: B256, owner: Address, valid_to: u32) -> Self {
+        let mut uid = [0u8; 56];
+        uid[0..32].copy_from_slice(hash.as_slice());
+        uid[32..52].copy_from_slice(owner.as_slice());
+        uid[52..56].copy_from_slice(&valid_to.to_be_bytes());
+        Self::new(uid)
+    }
+
+    fn to_parts(&self) -> (B256, Address, u32) {
+        let bytes = self.as_slice();
+        let mut valid_to = [0u8; 4];
+        valid_to.copy_from_slice(&bytes[52..56]);
+        (
+            B256::from_slice(&bytes[0..32]),
+            Address::from_slice(&bytes[32..52]),
+            u32::from_be_bytes(valid_to),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -771,7 +781,7 @@ mod tests {
             "0x5668997bd3fb981d1b3ec44e8483e7c369756df47d10241c1c7a26fde4d1090e89984d17af2f18f8c54873c0de68a56cc5a23e0f695ba915",
         )
         .unwrap();
-        let (hash, owner, valid_to) = unpack_order_uid(&original);
+        let (hash, owner, valid_to) = original.to_parts();
         assert_eq!(
             hash,
             B256::from(hex!(
@@ -784,7 +794,7 @@ mod tests {
         );
         assert_eq!(valid_to, 0x695ba915);
 
-        let rebuilt = pack_order_uid(hash, owner, valid_to);
+        let rebuilt = OrderUid::from_parts(hash, owner, valid_to);
         assert_eq!(rebuilt, original);
     }
 
@@ -809,7 +819,7 @@ mod tests {
         let valid_to_seed = keccak256(b"valid to");
         let valid_to = u32::from_be_bytes(valid_to_seed[28..32].try_into().unwrap());
 
-        let uid = pack_order_uid(digest, owner, valid_to);
+        let uid = OrderUid::from_parts(digest, owner, valid_to);
 
         let mut expected = [0u8; 56];
         expected[0..32].copy_from_slice(digest.as_slice());
@@ -817,7 +827,7 @@ mod tests {
         expected[52..56].copy_from_slice(&valid_to.to_be_bytes());
         assert_eq!(uid.0, expected);
 
-        let (round_digest, round_owner, round_valid_to) = unpack_order_uid(&uid);
+        let (round_digest, round_owner, round_valid_to) = uid.to_parts();
         assert_eq!(round_digest, digest);
         assert_eq!(round_owner, owner);
         assert_eq!(round_valid_to, valid_to);

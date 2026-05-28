@@ -13,7 +13,9 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// Top-level error type for `cow-rs`.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// HTTP transport, redirect, body or response error.
+    /// HTTP transport, redirect, body or response error. Only present
+    /// when the `http-client` feature is enabled.
+    #[cfg(feature = "http-client")]
     #[error("transport error: {0}")]
     Transport(#[from] reqwest::Error),
 
@@ -30,6 +32,8 @@ pub enum Error {
     UnsupportedChain(#[from] UnsupportedChain),
 
     /// The CoW orderbook responded with a structured error envelope.
+    /// Only present when the `http-client` feature is enabled.
+    #[cfg(feature = "http-client")]
     #[error("orderbook error ({}{}): {}",
         api.error_type,
         api.data.as_ref().map(|_| ", +data").unwrap_or(""),
@@ -43,6 +47,8 @@ pub enum Error {
     },
 
     /// The orderbook returned a non-2xx status with an unparseable body.
+    /// Only present when the `http-client` feature is enabled.
+    #[cfg(feature = "http-client")]
     #[error("unexpected orderbook status {status}: {body}")]
     UnexpectedStatus {
         /// HTTP status.
@@ -85,7 +91,7 @@ pub enum Error {
 
     /// A field on the orderbook's quote response did not match the
     /// caller's [`crate::QuoteRequest`]. Raised by
-    /// [`crate::OrderQuoteResponse::to_signed_order_data`] before any
+    /// [`crate::OrderQuoteResponse::try_into_signed_order_data`] before any
     /// `OrderData` is returned, so a hostile orderbook cannot trick the
     /// caller into signing an order with a swapped buy token, recipient,
     /// or app-data digest.
@@ -147,7 +153,7 @@ pub enum Error {
 
     /// The keccak256 of an [`crate::AppDataDocument`]'s `fullAppData`
     /// bytes did not match the [`crate::AppDataHash`] it was paired with.
-    /// Raised by [`crate::OrderBookApi::get_app_data`] when the orderbook
+    /// Raised by [`crate::OrderBookApi::app_data`] when the orderbook
     /// serves a document that does not hash to the requested digest, and
     /// by [`crate::OrderBookApi::put_app_data`] before issuing a pin
     /// whose payload would be rejected server-side. The signed order
