@@ -74,10 +74,15 @@ cp "$SRC_BUNDLER/cow_sdk_wasm_bg.js" "$OUT/bundler/cow_sdk_wasm_bg.js"
 perl -pi -e 's{"\./cow_sdk_wasm_bg\.wasm"}{"../cow_sdk_wasm_bg.wasm"}g' \
     "$OUT/bundler/cow_sdk_wasm.js"
 
-# nodejs target: `${__dirname}/cow_sdk_wasm_bg.wasm` -> one level up.
-cp "$SRC_NODEJS/cow_sdk_wasm.js" "$OUT/nodejs/cow_sdk_wasm.js"
+# nodejs target: wasm-pack emits CommonJS here (`require`, `module.exports`,
+# `__dirname`). The unified package is `"type": "module"`, so a `.js`
+# extension would make Node parse this glue as ESM and throw "exports is not
+# defined in ES module scope". Emit it as `.cjs` so Node always treats it as
+# CommonJS regardless of the package `type`. The wasm path is also rewritten
+# one level up to the shared binary.
+cp "$SRC_NODEJS/cow_sdk_wasm.js" "$OUT/nodejs/cow_sdk_wasm.cjs"
 perl -pi -e 's{\$\{__dirname\}/cow_sdk_wasm_bg\.wasm}{\${__dirname}/../cow_sdk_wasm_bg.wasm}g' \
-    "$OUT/nodejs/cow_sdk_wasm.js"
+    "$OUT/nodejs/cow_sdk_wasm.cjs"
 
 # Inherit the version + description + repository fields from the
 # per-target package.json wasm-pack already wrote (cargo metadata is
@@ -96,14 +101,14 @@ cat > "$OUT/package.json" <<EOF
     "url": "https://github.com/cowdao-grants/cow-rs"
   },
   "type": "module",
-  "main": "./nodejs/cow_sdk_wasm.js",
+  "main": "./nodejs/cow_sdk_wasm.cjs",
   "module": "./web/cow_sdk_wasm.js",
   "browser": "./web/cow_sdk_wasm.js",
   "types": "./cow_sdk_wasm.d.ts",
   "exports": {
     ".": {
       "types": "./cow_sdk_wasm.d.ts",
-      "node": "./nodejs/cow_sdk_wasm.js",
+      "node": "./nodejs/cow_sdk_wasm.cjs",
       "browser": "./web/cow_sdk_wasm.js",
       "default": "./bundler/cow_sdk_wasm.js"
     },
@@ -131,8 +136,10 @@ echo ""
 echo "wasm-npm-pack: assembled $OUT"
 echo "  $(du -h "$OUT/cow_sdk_wasm_bg.wasm" | cut -f1)  cow_sdk_wasm_bg.wasm (shared)"
 for tgt in web bundler nodejs; do
-    js_size=$(du -h "$OUT/$tgt/cow_sdk_wasm.js" | cut -f1)
-    echo "  ${js_size}  $tgt/cow_sdk_wasm.js"
+    glue="cow_sdk_wasm.js"
+    [ "$tgt" = nodejs ] && glue="cow_sdk_wasm.cjs"
+    js_size=$(du -h "$OUT/$tgt/$glue" | cut -f1)
+    echo "  ${js_size}  $tgt/$glue"
 done
 total=$(du -sh "$OUT" | cut -f1)
 echo "  ${total}  total"
