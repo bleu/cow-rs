@@ -115,8 +115,23 @@ impl TradingClient {
     /// [`OrderBookApi`]. Use this when the caller wants to share a
     /// `reqwest::Client` across endpoints or point the SDK at the
     /// barn / staging orderbook.
-    pub const fn from_orderbook(chain: Chain, api: OrderBookApi) -> Self {
-        Self { api, chain }
+    ///
+    /// `chain` drives the EIP-712 signing domain; the `api` drives the
+    /// HTTP endpoint. If `api` was built from a known chain (via
+    /// [`OrderBookApi::new`]) that disagrees with `chain`, this returns
+    /// [`Error::ChainMismatch`] rather than letting the caller sign for
+    /// one chain and post to another. An arbitrary-URL `api` (staging /
+    /// mock) carries no chain, so the caller's `chain` is trusted.
+    pub fn from_orderbook(chain: Chain, api: OrderBookApi) -> Result<Self> {
+        if let Some(api_chain) = api.chain()
+            && api_chain != chain
+        {
+            return Err(Error::ChainMismatch {
+                client: chain,
+                api: api_chain,
+            });
+        }
+        Ok(Self { api, chain })
     }
 
     /// The chain this client is bound to.
@@ -154,7 +169,10 @@ impl TradingClient {
     where
         S: SignerSync,
     {
-        let app_data_hash = params.app_data.hash();
+        // `try_hash` rather than `hash`: the document is caller-supplied
+        // (a partner can hand in oversized hooks), so surface an oversize
+        // doc as an error instead of panicking the task.
+        let app_data_hash = params.app_data.try_hash()?;
         let app_data_json = params.app_data.canonical_json();
 
         let quote = self.api.quote(&params.request).await?;
@@ -298,7 +316,7 @@ mod tests {
             .await;
 
         let api = OrderBookApi::new_with_base_url(server.uri().parse().unwrap());
-        let client = TradingClient::from_orderbook(Chain::Mainnet, api);
+        let client = TradingClient::from_orderbook(Chain::Mainnet, api).unwrap();
         let app_data = AppDataDoc::sdk_attribution("cow-rs");
         // Match the mocked quote's `sellAmount + feeAmount` so the
         // fixed-leg amount binding passes and execution reaches the
@@ -328,5 +346,57 @@ mod tests {
             post_calls.lock().unwrap().is_empty(),
             "POST /api/v1/orders must not be reached when verify_owner fails",
         );
+    }
+
+    /// `from_orderbook` refuses a `chain` that disagrees with a
+    /// chain-bound `OrderBookApi`, so a caller cannot sign for one chain
+    /// and post to another's orderbook.
+    #[test]
+    fn from_orderbook_rejects_chain_mismatch() {
+        let api = OrderBookApi::new(Chain::Gnosis);
+        let err = TradingClient::from_orderbook(Chain::Mainnet, api).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::ChainMismatch {
+                    client: Chain::Mainnet,
+                    api: Chain::Gnosis
+                }
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    /// Matching chains (and arbitrary-URL apis, whose chain is unknown)
+    /// are accepted.
+    #[test]
+    fn from_orderbook_accepts_matching_and_unknown_chain() {
+        assert!(
+            TradingClient::from_orderbook(Chain::Mainnet, OrderBookApi::new(Chain::Mainnet))
+                .is_ok()
+        );
+        let mock = OrderBookApi::new_with_base_url("https://example.test/".parse().unwrap());
+        assert!(TradingClient::from_orderbook(Chain::Gnosis, mock).is_ok());
+    }
+
+    /// `post_swap_order` surfaces an oversized caller-supplied app-data
+    /// document as an error rather than panicking through `hash()`. The
+    /// guard fires before any network call.
+    #[tokio::test]
+    async fn post_swap_order_surfaces_oversize_app_data_without_panicking() {
+        let app_data = AppDataDoc {
+            app_code: Some("x".repeat(crate::app_data::APP_DATA_SIZE_LIMIT + 1)),
+            ..AppDataDoc::default()
+        };
+        let owner = address!("70997970C51812dc3A010C7d01b50e0d17dc79C8");
+        let client = TradingClient::new(Chain::Mainnet);
+        let request = QuoteRequest::sell_before_fee(USDC, DAI, owner, U256::from(1u64));
+        let params = SwapOrder::eip712(request, &app_data);
+        let signer = PrivateKeySigner::random();
+        let err = client
+            .post_swap_order(params, &signer)
+            .await
+            .expect_err("oversize app-data must error, not panic");
+        assert!(matches!(err, Error::AppData(_)), "got: {err:?}");
     }
 }

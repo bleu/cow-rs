@@ -67,6 +67,12 @@ pub enum Error {
     #[error(transparent)]
     Signature(#[from] SignatureError),
 
+    /// An app-data document failed to hash or serialise (e.g. it
+    /// exceeded [`crate::app_data::APP_DATA_SIZE_LIMIT`]). Surfaced
+    /// instead of panicking when the document comes from a caller.
+    #[error(transparent)]
+    AppData(#[from] crate::app_data::AppDataError),
+
     /// The submission-side adjustment `sellAmount + feeAmount` overflowed
     /// the U256 range. Real quotes never come anywhere close, but the
     /// orderbook would silently accept the saturated value and produce a
@@ -99,6 +105,18 @@ pub enum Error {
         field: &'static str,
         /// Why it failed.
         reason: &'static str,
+    },
+
+    /// A [`crate::TradingClient`] was built with a `chain` that disagrees
+    /// with the chain its [`crate::OrderBookApi`] targets. Signing under
+    /// one chain and posting to another's orderbook produces an order the
+    /// orderbook rejects, so it is refused at construction.
+    #[error("chain mismatch: TradingClient signs for {client} but its OrderBookApi targets {api}")]
+    ChainMismatch {
+        /// Chain the [`crate::TradingClient`] would sign for.
+        client: crate::chain::Chain,
+        /// Chain the [`crate::OrderBookApi`] targets.
+        api: crate::chain::Chain,
     },
 
     /// A field on the orderbook's quote response did not match the

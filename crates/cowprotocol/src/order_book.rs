@@ -768,6 +768,11 @@ pub struct OrderQuoteResponse {
 pub struct OrderBookApi {
     base_url: url::Url,
     client: reqwest::Client,
+    // `Some` when built from a [`Chain`] via [`Self::new`]; `None` when
+    // built from an arbitrary URL (staging / mock), where the chain is
+    // not known. [`crate::TradingClient::from_orderbook`] uses it to
+    // refuse a chain that disagrees with the signing domain.
+    chain: Option<Chain>,
 }
 
 #[cfg(feature = "http-client")]
@@ -776,12 +781,16 @@ impl OrderBookApi {
     /// [`Chain::orderbook_base_url`] already includes the trailing slash
     /// [`url::Url::join`] needs to append, not replace, path segments.
     pub fn new(chain: Chain) -> Self {
-        Self::new_with_base_url(chain.orderbook_base_url())
+        let mut api = Self::new_with_base_url(chain.orderbook_base_url());
+        api.chain = Some(chain);
+        api
     }
 
     /// Client against an arbitrary base URL (staging, recorded mock,
     /// etc.). The default reqwest client enforces
-    /// [`DEFAULT_HTTP_TIMEOUT`].
+    /// [`DEFAULT_HTTP_TIMEOUT`]. The chain is left unknown; prefer
+    /// [`Self::new`] when targeting a production chain so
+    /// [`crate::TradingClient::from_orderbook`] can cross-check it.
     pub fn new_with_base_url(base_url: url::Url) -> Self {
         // `ClientBuilder::timeout` is non-wasm32 only; the wasm
         // backend defers to the browser's fetch timeout.
@@ -798,12 +807,20 @@ impl OrderBookApi {
         Self {
             base_url: ensure_trailing_slash(base_url),
             client,
+            chain: None,
         }
     }
 
     /// Base URL with the trailing slash path joining relies on.
     pub const fn base_url(&self) -> &url::Url {
         &self.base_url
+    }
+
+    /// The [`Chain`] this client targets, when known. `Some` only when
+    /// built via [`Self::new`]; arbitrary-URL constructors leave it
+    /// `None`.
+    pub const fn chain(&self) -> Option<Chain> {
+        self.chain
     }
 
     /// `POST /api/v1/quote`.
@@ -1112,8 +1129,10 @@ impl OrderBookApi {
 }
 
 /// Read a response body as UTF-8 text, rejecting payloads above
-/// [`MAX_RESPONSE_BYTES`]. Early-rejects on `Content-Length` and
-/// re-checks the materialised body as a backstop.
+/// [`MAX_RESPONSE_BYTES`]. Early-rejects on a declared `Content-Length`,
+/// then bounds the body as it streams in (see [`read_capped_body`]) so a
+/// chunked or length-less response cannot buffer past the cap before the
+/// check fires.
 #[cfg(feature = "http-client")]
 async fn read_capped_text(response: reqwest::Response) -> Result<String> {
     if let Some(declared_len) = response.content_length()
@@ -1123,6 +1142,35 @@ async fn read_capped_text(response: reqwest::Response) -> Result<String> {
             max: MAX_RESPONSE_BYTES,
         });
     }
+    read_capped_body(response).await
+}
+
+/// Accumulate the body chunk-by-chunk, failing the moment the running
+/// length would exceed [`MAX_RESPONSE_BYTES`]. This is the stream-bounded
+/// guard the `Content-Length` early-reject cannot provide for chunked
+/// transfers.
+#[cfg(all(feature = "http-client", not(target_arch = "wasm32")))]
+async fn read_capped_body(mut response: reqwest::Response) -> Result<String> {
+    let mut body: Vec<u8> = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
+            return Err(Error::ResponseTooLarge {
+                max: MAX_RESPONSE_BYTES,
+            });
+        }
+        body.extend_from_slice(&chunk);
+    }
+    // The orderbook always returns UTF-8 JSON; a non-UTF-8 body is
+    // pathological and would fail the downstream `serde_json` parse
+    // anyway, so a lossy decode is acceptable and avoids a panic.
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
+/// wasm's `reqwest` backend has no streaming body API, so fall back to a
+/// buffered read plus the post-read backstop. The `Content-Length`
+/// early-reject in [`read_capped_text`] still applies.
+#[cfg(all(feature = "http-client", target_arch = "wasm32"))]
+async fn read_capped_body(response: reqwest::Response) -> Result<String> {
     let text = response.text().await?;
     if text.len() > MAX_RESPONSE_BYTES {
         return Err(Error::ResponseTooLarge {
@@ -1157,6 +1205,33 @@ mod tests {
     const USDC: Address = address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
     const DAI: Address = address!("6B175474E89094C44Da98b954EedeAC495271d0F");
     const OWNER: Address = address!("70997970C51812dc3A010C7d01b50e0d17dc79C8");
+
+    /// The streaming guard in `read_capped_body` rejects an oversize body
+    /// as it accumulates, independent of the `Content-Length` early-reject
+    /// in `read_capped_text` (called directly here to bypass that
+    /// early-out, which is what a chunked / length-less response does).
+    #[cfg(all(feature = "http-client", not(target_arch = "wasm32")))]
+    #[tokio::test]
+    async fn read_capped_body_rejects_oversize_stream() {
+        let body = vec![b'a'; MAX_RESPONSE_BYTES + 1];
+        let response = reqwest::Response::from(http::Response::new(body));
+        let err = read_capped_body(response).await.unwrap_err();
+        assert!(
+            matches!(err, Error::ResponseTooLarge { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    /// A body exactly at the cap streams through, proving the guard fires
+    /// at `+1`, not `=`.
+    #[cfg(all(feature = "http-client", not(target_arch = "wasm32")))]
+    #[tokio::test]
+    async fn read_capped_body_accepts_at_cap() {
+        let body = vec![b'a'; MAX_RESPONSE_BYTES];
+        let response = reqwest::Response::from(http::Response::new(body));
+        let text = read_capped_body(response).await.unwrap();
+        assert_eq!(text.len(), MAX_RESPONSE_BYTES);
+    }
 
     fn fixture_quote_request() -> QuoteRequest {
         QuoteRequest::sell_before_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64))

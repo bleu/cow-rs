@@ -1,6 +1,6 @@
 [package]
 name = "cowprotocol"
-version = "1.0.0-alpha.2"
+version = "1.0.0-alpha.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -56,6 +56,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 wiremock.workspace = true
+# Builds a `reqwest::Response` from an in-memory body with no
+# `Content-Length` header, to exercise the streaming response cap.
+http = "1"
 
 # Both examples drive the async orderbook client, so they only build
 # when `http-client` is on (it is, by default).

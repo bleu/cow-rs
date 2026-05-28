@@ -113,7 +113,7 @@ async fn post_swap_order_lowers_buy_amount_when_protocol_fee_compounds_with_part
         .await;
 
     let api = OrderBookApi::new_with_base_url(server.uri().parse().unwrap());
-    let client = TradingClient::from_orderbook(Chain::Mainnet, api);
+    let client = TradingClient::from_orderbook(Chain::Mainnet, api).unwrap();
     let app_data = AppDataDoc::sdk_attribution("cow-rs");
 
     // The request's fixed leg is bound against the quote: `sell_after_fee`
