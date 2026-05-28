@@ -282,11 +282,18 @@ pub struct QuoteRequest {
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buy_amount_after_fee: Option<U256>,
-    /// Absolute expiry; orderbook applies a default when absent.
+    /// Absolute expiry; orderbook applies a default when absent. This is
+    /// the authoritative expiry: when pinned it is bound against the
+    /// quote response, so a hostile orderbook cannot lengthen it. Prefer
+    /// it over `valid_for` whenever the expiry is security-relevant.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub valid_to: Option<u32>,
-    /// Relative expiry (seconds from server clock; wire `validFor`).
-    /// Mutually exclusive with `valid_to`; default 30 min.
+    /// Relative expiry (seconds from the *server* clock; wire `validFor`).
+    /// Mutually exclusive with `valid_to` (setting both is rejected at the
+    /// signing chokepoint). Advisory only: being server-relative it
+    /// cannot be bound client-side, so the SDK signs whatever absolute
+    /// `validTo` the orderbook derives from it. Use `valid_to` for a
+    /// client-enforced expiry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub valid_for: Option<u32>,
     /// Optional pin on the app-data digest or document.
@@ -548,6 +555,16 @@ impl OrderQuoteResponse {
         app_data: AppDataHash,
     ) -> Result<()> {
         let q = &self.quote;
+        // `valid_to` (absolute) and `valid_for` (server-relative) are
+        // mutually exclusive. Sending both is ambiguous, and only
+        // `valid_to` can be bound client-side: refuse rather than sign
+        // against whichever one the orderbook happened to honour.
+        if request.valid_to.is_some() && request.valid_for.is_some() {
+            return Err(Error::QuoteRequestInvalid {
+                field: "validTo/validFor",
+                reason: "are mutually exclusive; set at most one",
+            });
+        }
         if q.sell_token != request.sell_token {
             return Err(Error::QuoteFieldMismatch {
                 field: "sellToken",
@@ -672,6 +689,49 @@ impl OrderQuoteResponse {
                     returned: app_data.to_string(),
                 });
             }
+        }
+        // Bind the fixed leg the caller specified. Without this a hostile
+        // orderbook can echo the right token pair and `kind` but inflate
+        // the fixed amount, so the caller signs an order moving more (or
+        // accepting less) than they requested. The variable leg (buy for
+        // SELL, sell for BUY) is the quote itself and is deliberately not
+        // bound: it is what the orderbook is being asked to price, and
+        // slippage / fee composition adjust it downstream.
+        if let Some(requested) = request.sell_amount_before_fee {
+            // The signed `sellAmount` folds the fee back in, so the
+            // pre-fee request equals `sellAmount + feeAmount`.
+            let signed_sell =
+                q.sell_amount
+                    .checked_add(q.fee_amount)
+                    .ok_or(Error::QuoteAmountOverflow {
+                        sell: q.sell_amount,
+                        fee: q.fee_amount,
+                    })?;
+            if signed_sell != requested {
+                return Err(Error::QuoteFieldMismatch {
+                    field: "sellAmountBeforeFee",
+                    requested: requested.to_string(),
+                    returned: signed_sell.to_string(),
+                });
+            }
+        }
+        if let Some(requested) = request.sell_amount_after_fee
+            && q.sell_amount != requested
+        {
+            return Err(Error::QuoteFieldMismatch {
+                field: "sellAmountAfterFee",
+                requested: requested.to_string(),
+                returned: q.sell_amount.to_string(),
+            });
+        }
+        if let Some(requested) = request.buy_amount_after_fee
+            && q.buy_amount != requested
+        {
+            return Err(Error::QuoteFieldMismatch {
+                field: "buyAmountAfterFee",
+                requested: requested.to_string(),
+                returned: q.buy_amount.to_string(),
+            });
         }
         Ok(())
     }
@@ -1307,10 +1367,10 @@ mod tests {
         quote.quote.kind = OrderKind::Buy;
         let original_sell = quote.quote.sell_amount;
         let original_buy = quote.quote.buy_amount;
-        // Match the mutated `kind` so the request-bound projection
-        // does not reject this synthetic Buy-side quote.
-        let request =
-            QuoteRequest::buy_after_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64));
+        // Match the mutated `kind` and the quote's fixed buy leg so the
+        // request-bound projection does not reject this synthetic
+        // Buy-side quote.
+        let request = QuoteRequest::buy_after_fee(USDC, DAI, OWNER, original_buy);
 
         let signed = quote
             .try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)
@@ -1478,19 +1538,24 @@ mod tests {
     /// saturated `U256::MAX` into the signed `OrderData`.
     #[test]
     fn try_into_signed_order_data_with_costs_rejects_overflowing_sell_adjustment() {
+        // Buy-side so the fixed-leg amount binding (which only pins the
+        // buy amount for a Buy order) passes, letting the fee-math
+        // overflow on the sell side actually be reached: `sellAmount +
+        // feeAmount` in `after_network_costs.sell` overflows.
         let mut quote = load_mainnet_quote();
-        quote.quote.kind = OrderKind::Sell;
+        quote.quote.kind = OrderKind::Buy;
+        quote.quote.buy_amount = U256::MAX;
         quote.quote.sell_amount = U256::MAX;
         quote.quote.fee_amount = U256::from(1u64);
+        let request = QuoteRequest::buy_after_fee(
+            quote.quote.sell_token,
+            quote.quote.buy_token,
+            quote.from,
+            U256::MAX,
+        );
 
         let err = quote
-            .try_into_signed_order_data_with_costs(
-                &fixture_quote_request(),
-                0,
-                0,
-                None,
-                EMPTY_APP_DATA_HASH,
-            )
+            .try_into_signed_order_data_with_costs(&request, 0, 0, None, EMPTY_APP_DATA_HASH)
             .unwrap_err();
         assert!(
             matches!(err, Error::QuoteFeeMathOverflow { .. }),
@@ -1556,7 +1621,8 @@ mod tests {
             quote.quote.sell_token,
             quote.quote.buy_token,
             quote.from,
-            U256::from(1u64),
+            // Pre-fee request equals the quote's `sellAmount + feeAmount`.
+            quote.quote.sell_amount + quote.quote.fee_amount,
         );
         let signed = quote
             .try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)
@@ -1616,7 +1682,7 @@ mod tests {
             quote.quote.sell_token,
             quote.quote.buy_token,
             quote.from,
-            U256::from(1u64),
+            quote.quote.sell_amount + quote.quote.fee_amount,
         );
         quote
             .try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)
@@ -1697,6 +1763,123 @@ mod tests {
             .unwrap_err();
         assert!(
             matches!(&err, Error::QuoteFieldMismatch { field: "kind", .. }),
+            "got: {err}"
+        );
+    }
+
+    /// The CRITICAL finding: a hostile orderbook echoes the right token
+    /// pair and `kind` but inflates `sellAmount`. Without binding the
+    /// fixed leg the caller would sign an order moving more than they
+    /// requested. The signed `sellAmount` is `sellAmount + feeAmount`,
+    /// so the pre-fee request must equal that sum.
+    #[test]
+    fn try_into_signed_order_data_rejects_inflated_sell_amount_before_fee() {
+        let mut quote = load_mainnet_quote();
+        let requested = quote.quote.sell_amount + quote.quote.fee_amount;
+        // Orderbook returns double the sell amount for the same request.
+        quote.quote.sell_amount *= U256::from(2u64);
+        let request = QuoteRequest::sell_before_fee(
+            quote.quote.sell_token,
+            quote.quote.buy_token,
+            quote.from,
+            requested,
+        );
+        let err = quote
+            .try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                Error::QuoteFieldMismatch {
+                    field: "sellAmountBeforeFee",
+                    ..
+                }
+            ),
+            "got: {err}"
+        );
+    }
+
+    /// Buy-side counterpart: the fixed leg is `buyAmount`. An inflated or
+    /// deflated buy amount must be rejected before signing.
+    #[test]
+    fn try_into_signed_order_data_rejects_mismatched_buy_amount_after_fee() {
+        let mut quote = load_mainnet_quote();
+        quote.quote.kind = OrderKind::Buy;
+        let requested = quote.quote.buy_amount;
+        quote.quote.buy_amount += U256::from(1u64);
+        let request = QuoteRequest::buy_after_fee(
+            quote.quote.sell_token,
+            quote.quote.buy_token,
+            quote.from,
+            requested,
+        );
+        let err = quote
+            .try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                Error::QuoteFieldMismatch {
+                    field: "buyAmountAfterFee",
+                    ..
+                }
+            ),
+            "got: {err}"
+        );
+    }
+
+    /// `sell_after_fee` pins the post-fee sell leg directly against the
+    /// quote's `sellAmount`.
+    #[test]
+    fn try_into_signed_order_data_rejects_mismatched_sell_amount_after_fee() {
+        let mut quote = load_mainnet_quote();
+        let request = QuoteRequest::sell_after_fee(
+            quote.quote.sell_token,
+            quote.quote.buy_token,
+            quote.from,
+            U256::from(50_000_000u64),
+        );
+        quote.quote.sell_amount = U256::from(60_000_000u64);
+        let err = quote
+            .try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                Error::QuoteFieldMismatch {
+                    field: "sellAmountAfterFee",
+                    ..
+                }
+            ),
+            "got: {err}"
+        );
+    }
+
+    /// `valid_to` and `valid_for` are mutually exclusive: setting both is
+    /// rejected at the signing chokepoint rather than signing against
+    /// whichever the orderbook honoured.
+    #[test]
+    fn try_into_signed_order_data_rejects_valid_to_and_valid_for_together() {
+        let quote = load_mainnet_quote();
+        let mut request = QuoteRequest::sell_before_fee(
+            quote.quote.sell_token,
+            quote.quote.buy_token,
+            quote.from,
+            quote.quote.sell_amount + quote.quote.fee_amount,
+        );
+        request.valid_to = Some(1_000);
+        request.valid_for = Some(1_800);
+        let err = quote
+            .try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                Error::QuoteRequestInvalid {
+                    field: "validTo/validFor",
+                    ..
+                }
+            ),
             "got: {err}"
         );
     }
@@ -2058,7 +2241,7 @@ mod tests {
             quote.quote.sell_token,
             quote.quote.buy_token,
             quote.from,
-            U256::from(1u64),
+            quote.quote.sell_amount + quote.quote.fee_amount,
         );
         request.app_data = Some(QuoteAppData::Full(EMPTY_APP_DATA_JSON.to_owned()));
         quote

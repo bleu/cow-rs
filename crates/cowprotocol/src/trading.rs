@@ -300,11 +300,14 @@ mod tests {
         let api = OrderBookApi::new_with_base_url(server.uri().parse().unwrap());
         let client = TradingClient::from_orderbook(Chain::Mainnet, api);
         let app_data = AppDataDoc::sdk_attribution("cow-rs");
+        // Match the mocked quote's `sellAmount + feeAmount` so the
+        // fixed-leg amount binding passes and execution reaches the
+        // `verify_owner` guard this test exercises.
         let request = QuoteRequest::sell_before_fee(
             USDC,
             DAI,
             declared_from,
-            U256::from(1_000_000_u64),
+            U256::from(1_000_000_000_000_000_000_u64),
         );
         let params = SwapOrder::eip712(request, &app_data);
 

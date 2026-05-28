@@ -116,9 +116,14 @@ async fn post_swap_order_lowers_buy_amount_when_protocol_fee_compounds_with_part
     let client = TradingClient::from_orderbook(Chain::Mainnet, api);
     let app_data = AppDataDoc::sdk_attribution("cow-rs");
 
-    let mut request = QuoteRequest::sell_after_fee(USDC, DAI, signer_addr, U256::from(1u64));
-    // The fixture already pins amounts; the request only needs to
-    // carry from + tokens for cross-checking.
+    // The request's fixed leg is bound against the quote: `sell_after_fee`
+    // must equal the mocked `sellAmount` (1e18).
+    let mut request = QuoteRequest::sell_after_fee(
+        USDC,
+        DAI,
+        signer_addr,
+        U256::from(1_000_000_000_000_000_000u128),
+    );
     request.kind = OrderKind::Sell;
 
     let order = SwapOrder {

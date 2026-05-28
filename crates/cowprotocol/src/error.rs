@@ -89,6 +89,18 @@ pub enum Error {
         reason: &'static str,
     },
 
+    /// The caller's [`crate::QuoteRequest`] was internally inconsistent
+    /// (e.g. both `valid_to` and `valid_for` set). Surfaced at the
+    /// signing chokepoint so an ambiguous request is never projected
+    /// into a signed `OrderData`.
+    #[error("invalid QuoteRequest: {field} {reason}")]
+    QuoteRequestInvalid {
+        /// Field that failed validation.
+        field: &'static str,
+        /// Why it failed.
+        reason: &'static str,
+    },
+
     /// A field on the orderbook's quote response did not match the
     /// caller's [`crate::QuoteRequest`]. Raised by
     /// [`crate::OrderQuoteResponse::try_into_signed_order_data`] before any
