@@ -320,7 +320,8 @@ mod tests {
         let uid = OrderUid::from([0x42; 56]);
 
         for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
-            let cancellation = SignedOrderCancellation::sign(uid, scheme, &domain, &signer).unwrap();
+            let cancellation =
+                SignedOrderCancellation::sign(uid, scheme, &domain, &signer).unwrap();
             let recovered = cancellation.recover_owner(&domain).unwrap();
             assert_eq!(recovered, signer.address());
         }

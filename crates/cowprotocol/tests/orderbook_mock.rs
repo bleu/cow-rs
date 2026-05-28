@@ -10,8 +10,8 @@
 use alloy_primitives::{Address, B256, U256, address};
 use cowprotocol::{
     AppDataHash, BuyTokenDestination, Chain, OrderBookApi, OrderCancellations, OrderCreation,
-    OrderData, OrderKind, OrderUid, QuoteRequest, SellTokenSource, Signature, SignedOrderCancellation,
-    SigningScheme, order_book::AppDataDocument,
+    OrderData, OrderKind, OrderUid, QuoteRequest, SellTokenSource, Signature,
+    SignedOrderCancellation, SigningScheme, order_book::AppDataDocument,
 };
 use serde_json::json;
 use wiremock::{
@@ -44,8 +44,7 @@ async fn get_quote_decodes_recorded_mainnet_response() {
         .mount(&server)
         .await;
 
-    let request =
-        QuoteRequest::sell_before_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64));
+    let request = QuoteRequest::sell_before_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64));
     let response = api(&server).quote(&request).await.unwrap();
 
     assert_eq!(response.quote.kind, OrderKind::Sell);
@@ -741,8 +740,7 @@ async fn unused_optional_quote_fields_are_omitted_from_request_body() {
         .mount(&server)
         .await;
 
-    let mut request =
-        QuoteRequest::sell_before_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64));
+    let mut request = QuoteRequest::sell_before_fee(USDC, DAI, OWNER, U256::from(100_000_000_u64));
     request.receiver = Some(OWNER);
     api(&server).quote(&request).await.unwrap();
 

@@ -528,8 +528,7 @@ mod tests {
         let domain = crate::domain::settlement_domain(1, SETTLEMENT);
         let payload = eip712::Order::from(&sample_order());
 
-        let ecdsa =
-            sign_ecdsa(EcdsaSigningScheme::Eip712, &domain, &payload, &signer).unwrap();
+        let ecdsa = sign_ecdsa(EcdsaSigningScheme::Eip712, &domain, &payload, &signer).unwrap();
 
         // Expected (r, s, v) from ethers Wallet.signTypedData on the same
         // inputs. v=28 (the high-order normalised form). Bytes layout

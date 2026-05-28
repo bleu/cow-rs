@@ -17,9 +17,7 @@
 //!
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/model/src/signature.rs
 
-use alloy_primitives::{
-    Address, B256, Bytes, Signature as PrimSignature, eip191_hash_message,
-};
+use alloy_primitives::{Address, B256, Bytes, Signature as PrimSignature, eip191_hash_message};
 use alloy_signer::{SignerSync, k256::ecdsa::Error as K256Error};
 use alloy_sol_types::SolStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
@@ -260,11 +258,7 @@ pub fn parse_ecdsa(bytes: &[u8]) -> Result<EcdsaSignature, SignatureError> {
 /// Assemble a signature from its three scalar components. `v` is
 /// rejected for any value outside `{0, 1, 27, 28}` and normalised to
 /// the canonical Electrum form alloy stores internally.
-pub fn ecdsa_from_components(
-    r: B256,
-    s: B256,
-    v: u8,
-) -> Result<EcdsaSignature, SignatureError> {
+pub fn ecdsa_from_components(r: B256, s: B256, v: u8) -> Result<EcdsaSignature, SignatureError> {
     let mut bytes = [0u8; 65];
     bytes[..32].copy_from_slice(r.as_slice());
     bytes[32..64].copy_from_slice(s.as_slice());
@@ -485,9 +479,8 @@ mod tests {
         // directly so the visitor sees the raw hex before
         // `const_hex::decode` would allocate a buffer for it.
         let oversize_hex = format!("0x{}", "00".repeat(EIP1271_MAX_LEN + 1));
-        let payload = format!(
-            "{{\"signingScheme\":\"eip1271\",\"signature\":\"{oversize_hex}\"}}",
-        );
+        let payload =
+            format!("{{\"signingScheme\":\"eip1271\",\"signature\":\"{oversize_hex}\"}}",);
         let err = serde_json::from_str::<Signature>(&payload)
             .expect_err("oversize hex string must be rejected before decode");
         let msg = err.to_string();
@@ -501,9 +494,8 @@ mod tests {
     fn deserialize_accepts_at_limit_eip1271_hex() {
         let at_limit_hex = format!("0x{}", "00".repeat(EIP1271_MAX_LEN));
         assert_eq!(at_limit_hex.len(), EIP1271_MAX_LEN * 2 + 2);
-        let payload = format!(
-            "{{\"signingScheme\":\"eip1271\",\"signature\":\"{at_limit_hex}\"}}",
-        );
+        let payload =
+            format!("{{\"signingScheme\":\"eip1271\",\"signature\":\"{at_limit_hex}\"}}",);
         let sig: Signature = serde_json::from_str(&payload).unwrap();
         assert!(matches!(sig, Signature::Eip1271(ref b) if b.len() == EIP1271_MAX_LEN));
     }

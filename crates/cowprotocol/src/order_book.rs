@@ -5,9 +5,9 @@
 //! and `cow-py`. The request and response shapes reflect the
 //! production orderbook OpenAPI as of 2026-05.
 
-use alloy_primitives::{Address, U256, keccak256};
 #[cfg(feature = "http-client")]
 use alloy_primitives::B256;
+use alloy_primitives::{Address, U256, keccak256};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::collections::BTreeMap;
@@ -19,16 +19,16 @@ use crate::app_data::AppDataHash;
 use crate::cancellation::{SignedOrderCancellation, SignedOrderCancellations};
 #[cfg(feature = "http-client")]
 use crate::chain::Chain;
-use crate::error::{Error, Result};
 #[cfg(feature = "http-client")]
 use crate::error::ApiError;
+use crate::error::{Error, Result};
 #[cfg(feature = "http-client")]
 use crate::order::Order;
 use crate::order::{BuyTokenDestination, OrderData, OrderKind, OrderUid, SellTokenSource};
-#[cfg(feature = "http-client")]
-use crate::signature::{EcdsaSignature, ecdsa_wire};
 #[cfg(test)]
 use crate::signature::Signature;
+#[cfg(feature = "http-client")]
+use crate::signature::{EcdsaSignature, ecdsa_wire};
 #[cfg(feature = "http-client")]
 use crate::signing_scheme::EcdsaSigningScheme;
 use crate::signing_scheme::SigningScheme;
@@ -1693,7 +1693,8 @@ mod tests {
     /// `check_response_matches_request` guard and must reject the
     /// default-receiver swap on the costs-aware path too.
     #[test]
-    fn try_into_signed_order_data_with_costs_rejects_swapped_receiver_when_request_omits_receiver() {
+    fn try_into_signed_order_data_with_costs_rejects_swapped_receiver_when_request_omits_receiver()
+    {
         use alloy_primitives::address;
         let mut quote = load_mainnet_quote();
         quote.quote.receiver = Some(address!("dead00000000000000000000000000000000beef"));

@@ -635,9 +635,9 @@ const MULTIHASH_KECCAK_256: u64 = 0x1b;
 /// Upper bound on an app-data CID string. A CIDv1 wrapping a 32-byte
 /// keccak-256 digest is ~59 chars in canonical base32 and ~75 in
 /// base16; anything far longer is malformed or hostile. Capping before
-/// [`cid::Cid::from_str`] stops an attacker from forcing proportional
+/// `cid::Cid::from_str` stops an attacker from forcing proportional
 /// allocation in the upstream multibase decoder.
-const MAX_CID_STR_LEN: usize = 128;
+pub const MAX_CID_STR_LEN: usize = 128;
 
 /// Parse an [`AppDataCid`] from its string form, rejecting input above
 /// [`MAX_CID_STR_LEN`] before the upstream multibase decoder allocates.
@@ -1295,7 +1295,10 @@ mod tests {
         let cid = app_data_cid(EMPTY_APP_DATA_HASH).to_string();
         assert!(cid.len() <= MAX_CID_STR_LEN);
         let parsed = parse_app_data_cid(&cid).unwrap();
-        assert_eq!(app_data_hash_from_cid(&parsed).unwrap(), EMPTY_APP_DATA_HASH);
+        assert_eq!(
+            app_data_hash_from_cid(&parsed).unwrap(),
+            EMPTY_APP_DATA_HASH
+        );
     }
 
     #[test]

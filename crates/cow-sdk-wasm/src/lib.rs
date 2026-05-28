@@ -36,9 +36,9 @@ mod transport;
 use {
     alloy_primitives::{Address, B256, U256},
     cowprotocol::{
-        AppDataDoc, AppDataHash, Chain, EMPTY_APP_DATA_HASH, EcdsaSigningScheme,
-        SignedOrderCancellation, OrderData, OrderUid, QuoteRequest, Signature, SigningScheme,
-        app_data_cid, ecdsa_from_components, settlement_domain,
+        AppDataDoc, AppDataHash, Chain, EMPTY_APP_DATA_HASH, EcdsaSigningScheme, OrderData,
+        OrderUid, QuoteRequest, Signature, SignedOrderCancellation, SigningScheme, app_data_cid,
+        ecdsa_from_components, settlement_domain,
     },
     serde::{Deserialize, Serialize},
     wasm_bindgen::prelude::*,

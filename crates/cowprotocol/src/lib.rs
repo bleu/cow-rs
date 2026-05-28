@@ -127,7 +127,7 @@ pub use crate::{
         AppDataCid, AppDataCidError, AppDataDoc, AppDataFlashloan, AppDataHash, AppDataMetadata,
         AppDataOrderClass, AppDataPartnerFee, AppDataQuote, AppDataReferrer, AppDataReplacedOrder,
         AppDataUtm, AppDataWrapperCall, COW_RS_APP_CODE, COW_RS_WASM_APP_CODE, EMPTY_APP_DATA_HASH,
-        EMPTY_APP_DATA_JSON, FeePolicy, LATEST_APP_DATA_VERSION, app_data_cid,
+        EMPTY_APP_DATA_JSON, FeePolicy, LATEST_APP_DATA_VERSION, MAX_CID_STR_LEN, app_data_cid,
         app_data_hash_from_cid, parse_app_data_cid,
     },
     cancellation::{OrderCancellations, SignedOrderCancellation, SignedOrderCancellations},
@@ -158,8 +158,8 @@ pub use crate::{
         Amounts as QuoteAmounts, QuoteAmountsAndCosts, QuoteAmountsParams, QuoteCosts,
     },
     signature::{
-        EcdsaSignature, Recovered, Signature, SignatureError, ecdsa_from_components,
-        ecdsa_recover, parse_ecdsa, sign_ecdsa,
+        EcdsaSignature, Recovered, Signature, SignatureError, ecdsa_from_components, ecdsa_recover,
+        parse_ecdsa, sign_ecdsa,
     },
     signing_scheme::{EcdsaSigningScheme, SigningScheme},
 };
