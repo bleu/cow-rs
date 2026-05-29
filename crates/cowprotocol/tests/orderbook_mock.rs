@@ -330,6 +330,7 @@ async fn trades_by_order_uid_queries_by_uid() {
             "buyToken": format!("{DAI:?}"),
             "sellAmount": "1000000",
             "buyAmount": "999000",
+            "txHash": format!("{:?}", B256::repeat_byte(0xcd)),
         }])))
         .mount(&server)
         .await;
@@ -341,6 +342,8 @@ async fn trades_by_order_uid_queries_by_uid() {
     assert_eq!(trades.len(), 1);
     assert_eq!(trades[0].order_uid, uid);
     assert_eq!(trades[0].sell_amount, U256::from(1_000_000_u64));
+    // `txHash` hex-decodes into a typed `B256` rather than staying a string.
+    assert_eq!(trades[0].tx_hash, Some(B256::repeat_byte(0xcd)));
 }
 
 #[tokio::test]

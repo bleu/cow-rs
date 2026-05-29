@@ -287,3 +287,204 @@ impl OrderCreation {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_data::{EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON};
+    use crate::domain::{DomainSeparator, settlement_domain};
+    use crate::signing_scheme::EcdsaSigningScheme;
+    use alloy_primitives::address;
+    use alloy_signer_local::PrivateKeySigner;
+
+    const SETTLEMENT: Address = address!("9008D19f58AAbD9eD0D60971565AA8510560ab41");
+
+    /// `OrderData` whose `app_data` is `EMPTY_APP_DATA_HASH`, so the
+    /// canonical `EMPTY_APP_DATA_JSON` document hashes to match it.
+    fn empty_app_data_order() -> OrderData {
+        OrderData {
+            sell_token: address!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            buy_token: address!("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            receiver: None,
+            sell_amount: U256::from(1_000_000u64),
+            buy_amount: U256::from(999u64),
+            valid_to: 0xffff_ffff,
+            app_data: EMPTY_APP_DATA_HASH,
+            fee_amount: U256::ZERO,
+            kind: OrderKind::Sell,
+            partially_fillable: false,
+            sell_token_balance: SellTokenSource::default(),
+            buy_token_balance: BuyTokenDestination::default(),
+        }
+    }
+
+    fn signer() -> PrivateKeySigner {
+        PrivateKeySigner::from_bytes(&U256::from(1u64).to_be_bytes().into()).unwrap()
+    }
+
+    /// `from_signed_order_data` rejects a zero `from` address locally
+    /// rather than letting the orderbook reject it.
+    #[test]
+    fn from_signed_order_data_rejects_zero_from_address() {
+        let err = OrderCreation::from_signed_order_data(
+            &OrderData::default(),
+            Signature::empty_for(SigningScheme::Eip712),
+            Address::ZERO,
+            EMPTY_APP_DATA_JSON.to_owned(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::OrderCreationInvalid { field: "from", .. }),
+            "got: {err}"
+        );
+    }
+
+    /// R21: `from_signed_order_data` rejects an `app_data` JSON document
+    /// whose keccak256 does not match the `OrderData::app_data` digest the
+    /// user signed against.
+    #[test]
+    fn from_signed_order_data_rejects_app_data_digest_mismatch() {
+        let err = OrderCreation::from_signed_order_data(
+            &empty_app_data_order(),
+            Signature::empty_for(SigningScheme::Eip712),
+            address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
+            // Document does NOT hash to `EMPTY_APP_DATA_HASH`.
+            r#"{"version":"1.6.0","metadata":{}}"#.to_owned(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::OrderCreationInvalid {
+                    field: "app_data",
+                    ..
+                }
+            ),
+            "got: {err}"
+        );
+    }
+
+    /// R21b: the `TryFrom<OrderCreationWire>` deserialisation path applies
+    /// the same digest check. Serialise a valid body, swap the `appData`
+    /// document for one whose keccak256 differs while leaving `appDataHash`
+    /// untouched, and confirm `serde_json` rejects it before the body can
+    /// be relayed downstream.
+    #[test]
+    fn deserialise_rejects_app_data_digest_mismatch() {
+        let creation = OrderCreation::from_signed_order_data(
+            &empty_app_data_order(),
+            Signature::empty_for(SigningScheme::Eip712),
+            address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
+            EMPTY_APP_DATA_JSON.to_owned(),
+            None,
+        )
+        .unwrap();
+        let mut body = serde_json::to_value(creation).unwrap();
+        body["appData"] = serde_json::Value::String(r#"{"version":"1.6.0","metadata":{}}"#.into());
+        let err = serde_json::from_value::<OrderCreation>(body).unwrap_err();
+        assert!(
+            err.to_string().contains("app_data"),
+            "expected app_data digest mismatch surfaced through serde, got: {err}"
+        );
+    }
+
+    /// R22: `verify_owner` rejects a synthesised EIP-1271 / PreSign body
+    /// whose `from` is the zero address. The `Ok` arm must never act as a
+    /// positive owner assertion for an obviously bogus body.
+    #[test]
+    fn verify_owner_rejects_zero_from_for_onchain_schemes() {
+        // Build the OrderCreation directly, bypassing
+        // `from_signed_order_data` (which already rejects zero-from), so we
+        // reproduce the wire shape an attacker could synthesise.
+        let creation = OrderCreation {
+            sell_token: Address::ZERO,
+            buy_token: Address::ZERO,
+            receiver: None,
+            sell_amount: U256::ZERO,
+            buy_amount: U256::ZERO,
+            valid_to: 0,
+            app_data: EMPTY_APP_DATA_JSON.to_owned(),
+            app_data_hash: EMPTY_APP_DATA_HASH,
+            fee_amount: U256::ZERO,
+            kind: OrderKind::Sell,
+            partially_fillable: false,
+            sell_token_balance: SellTokenSource::default(),
+            buy_token_balance: BuyTokenDestination::default(),
+            signing_scheme: SigningScheme::PreSign,
+            signature: Signature::PreSign,
+            from: Address::ZERO,
+            quote_id: None,
+        };
+        let err = creation
+            .verify_owner(&DomainSeparator::default())
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            crate::signature::SignatureError::SignerMismatch { .. }
+        ));
+    }
+
+    /// R23: `verify_owner` rejects an ECDSA-signed body whose declared
+    /// `from` is not the address recovered from the signature. The
+    /// typo-and-wallet-switch case the WASM `build_order_creation` shim
+    /// relies on to fail fast client-side instead of pushing the bad pair
+    /// to the orderbook.
+    #[test]
+    fn verify_owner_rejects_signer_mismatch_for_ecdsa() {
+        let signer = signer();
+        let real_signer = signer.address();
+        let impostor = address!("dead0000dead0000dead0000dead0000dead0000");
+        assert_ne!(real_signer, impostor);
+
+        let domain = settlement_domain(1, SETTLEMENT);
+        let order_data = empty_app_data_order();
+        let signature = order_data
+            .sign(EcdsaSigningScheme::Eip712, &domain, &signer)
+            .unwrap();
+        // Build the body with the *wrong* declared owner.
+        let creation = OrderCreation::from_signed_order_data(
+            &order_data,
+            signature,
+            impostor,
+            EMPTY_APP_DATA_JSON.to_owned(),
+            None,
+        )
+        .unwrap();
+        let err = creation.verify_owner(&domain).unwrap_err();
+        match err {
+            crate::signature::SignatureError::SignerMismatch {
+                declared,
+                recovered,
+            } => {
+                assert_eq!(declared, impostor);
+                assert_eq!(recovered, real_signer);
+            }
+            other => panic!("expected SignerMismatch, got {other:?}"),
+        }
+    }
+
+    /// `verify_owner` returns the owner when the declared `from` matches the
+    /// address recovered from a real ECDSA signature: the success path the
+    /// mismatch test guards.
+    #[test]
+    fn verify_owner_succeeds_for_matching_ecdsa_signer() {
+        let signer = signer();
+        let owner = signer.address();
+        let domain = settlement_domain(1, SETTLEMENT);
+        let order_data = empty_app_data_order();
+        let signature = order_data
+            .sign(EcdsaSigningScheme::Eip712, &domain, &signer)
+            .unwrap();
+        let creation = OrderCreation::from_signed_order_data(
+            &order_data,
+            signature,
+            owner,
+            EMPTY_APP_DATA_JSON.to_owned(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(creation.verify_owner(&domain).unwrap(), owner);
+    }
+}
