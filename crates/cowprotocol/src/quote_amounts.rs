@@ -60,6 +60,11 @@ const ONE_HUNDRED_BPS: u64 = 10_000;
 /// fractional digits of precision, matching the TS SDK's
 /// `Math.round(protocolFeeBps * 100_000)`.
 const HUNDRED_THOUSANDS: u64 = 100_000;
+/// Combined denominator for the protocol-fee `mul_div`: bps are reported
+/// against `10_000`, then scaled by `100_000` for fractional precision.
+/// Evaluated at compile time, so const evaluation rejects any overflow
+/// rather than a runtime `expect` having to.
+const SCALE: U256 = U256::from_limbs([(ONE_HUNDRED_BPS * HUNDRED_THOUSANDS), 0, 0, 0]);
 
 /// A pair of sell / buy amounts at a specific fee-application stage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,6 +100,16 @@ pub struct QuoteCosts {
 
 /// Full amount projection plus cost breakdown, mirroring the TS SDK's
 /// `QuoteAmountsAndCosts` return type.
+///
+/// The intermediate stages (`before_all_fees`, `after_protocol_fees`,
+/// `after_network_costs`, `after_partner_fees`, `after_slippage`) and
+/// `costs` reproduce the cow-sdk TypeScript `QuoteAmountsAndCosts` surface
+/// field-for-field, for parity with that reference and so callers can
+/// inspect any leg of the fee composition. Only `amounts_to_sign` is
+/// consumed internally (by
+/// [`crate::OrderQuoteResponse::try_into_signed_order_data`]); the other
+/// stages are exposed for parity and external inspection, not because the
+/// SDK reads them back.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QuoteAmountsAndCosts {
     /// `true` for SELL quotes, `false` for BUY.
@@ -202,147 +217,100 @@ pub fn compute(params: QuoteAmountsParams<'_>) -> Result<QuoteAmountsAndCosts> {
         protocol_fee_bps_scaled,
     )?;
 
+    // The two directions are mirror images: fees always land on the
+    // surplus side while the fixed side is pinned. Work in (fixed,
+    // surplus) pairs (SELL: fixed=sell, surplus=buy; BUY: fixed=buy,
+    // surplus=sell), so the protocol/partner/slippage/sign legs collapse
+    // to a single body. `before_all_fees` and `after_network_costs` stay
+    // direction-specific because the network cost lands asymmetrically:
+    // baked into the SELL sell side, added to the BUY sell side later.
+    let dir = Dir::new(is_sell);
+
     let before_all_fees = if is_sell {
-        Amounts {
-            sell_amount: sell_amount.checked_add(fee_amount).ok_or(
-                Error::QuoteFeeMathOverflow {
-                    stage: "before_all_fees.sell",
-                },
-            )?,
-            buy_amount: buy_amount
-                .checked_add(network_fee_in_buy)
-                .ok_or(Error::QuoteFeeMathOverflow {
-                    stage: "before_all_fees.buy_network",
-                })?
-                .checked_add(protocol_fee_amount)
-                .ok_or(Error::QuoteFeeMathOverflow {
-                    stage: "before_all_fees.buy_protocol",
-                })?,
-        }
-    } else {
-        Amounts {
-            sell_amount: sell_amount.checked_sub(protocol_fee_amount).ok_or(
-                Error::QuoteFeeMathOverflow {
-                    stage: "before_all_fees.sell_protocol",
-                },
-            )?,
+        // Spot price: undo the protocol fee and network cost the API
+        // folded into the quoted surplus side, plus the network cost on
+        // the fixed side.
+        let fixed = checked_add(sell_amount, fee_amount, "before_all_fees.sell")?;
+        let surplus = checked_add(
             buy_amount,
-        }
-    };
-
-    let after_protocol_fees = if is_sell {
-        Amounts {
-            sell_amount: before_all_fees.sell_amount,
-            buy_amount: before_all_fees
-                .buy_amount
-                .checked_sub(protocol_fee_amount)
-                .ok_or(Error::QuoteFeeMathOverflow {
-                    stage: "after_protocol_fees.buy",
-                })?,
-        }
+            network_fee_in_buy,
+            "before_all_fees.buy_network",
+        )?;
+        let surplus = checked_add(surplus, protocol_fee_amount, "before_all_fees.buy_protocol")?;
+        dir.amounts(fixed, surplus)
     } else {
-        Amounts {
+        let surplus = checked_sub(
             sell_amount,
-            buy_amount: before_all_fees.buy_amount,
-        }
+            protocol_fee_amount,
+            "before_all_fees.sell_protocol",
+        )?;
+        dir.amounts(buy_amount, surplus)
     };
 
+    // Protocol fee leaves the surplus side: removed on SELL, added back on
+    // BUY. The fixed side is pinned to its `before_all_fees` value.
+    let after_protocol_fees = dir.amounts(
+        dir.fixed_of(&before_all_fees),
+        dir.peel_fee(
+            dir.surplus_of(&before_all_fees),
+            protocol_fee_amount,
+            dir.after_protocol_stage,
+        )?,
+    );
+
+    // Network costs are already baked into the SELL quote, so this leg is a
+    // pure identity there; on BUY it adds the network fee to the sell side.
     let after_network_costs = if is_sell {
-        Amounts {
-            sell_amount,
-            buy_amount,
-        }
+        dir.amounts(sell_amount, buy_amount)
     } else {
-        Amounts {
-            sell_amount: sell_amount.checked_add(fee_amount).ok_or(
-                Error::QuoteFeeMathOverflow {
-                    stage: "after_network_costs.sell",
-                },
-            )?,
-            buy_amount: after_protocol_fees.buy_amount,
-        }
+        let fixed = dir.fixed_of(&after_protocol_fees);
+        let surplus = checked_add(
+            dir.surplus_of(&after_protocol_fees),
+            fee_amount,
+            "after_network_costs.sell",
+        )?;
+        dir.amounts(fixed, surplus)
     };
 
-    let surplus_base = if is_sell {
-        before_all_fees.buy_amount
-    } else {
-        before_all_fees.sell_amount
-    };
+    // Partner fee is charged on the spot-price surplus base.
     let partner_fee_amount = if partner_fee_bps == 0 {
         U256::ZERO
     } else {
         mul_div(
-            surplus_base,
+            dir.surplus_of(&before_all_fees),
             U256::from(partner_fee_bps),
             U256::from(ONE_HUNDRED_BPS),
             "partner_fee.mul_div",
         )?
     };
-    let after_partner_fees = if is_sell {
-        Amounts {
-            sell_amount: after_network_costs.sell_amount,
-            buy_amount: after_network_costs
-                .buy_amount
-                .checked_sub(partner_fee_amount)
-                .ok_or(Error::QuoteFeeMathOverflow {
-                    stage: "after_partner_fees.buy",
-                })?,
-        }
-    } else {
-        Amounts {
-            sell_amount: after_network_costs
-                .sell_amount
-                .checked_add(partner_fee_amount)
-                .ok_or(Error::QuoteFeeMathOverflow {
-                    stage: "after_partner_fees.sell",
-                })?,
-            buy_amount: after_network_costs.buy_amount,
-        }
-    };
+    let after_partner_fees = dir.amounts(
+        dir.fixed_of(&after_network_costs),
+        dir.peel_fee(
+            dir.surplus_of(&after_network_costs),
+            partner_fee_amount,
+            dir.after_partner_stage,
+        )?,
+    );
 
-    let after_slippage = if is_sell {
-        let slip = mul_div(
-            after_partner_fees.buy_amount,
-            U256::from(slippage_bps),
-            U256::from(ONE_HUNDRED_BPS),
-            "slippage_buy.mul_div",
-        )?;
-        Amounts {
-            sell_amount: after_partner_fees.sell_amount,
-            buy_amount: after_partner_fees.buy_amount.checked_sub(slip).ok_or(
-                Error::QuoteFeeMathOverflow {
-                    stage: "after_slippage.buy",
-                },
-            )?,
-        }
-    } else {
-        let slip = mul_div(
-            after_partner_fees.sell_amount,
-            U256::from(slippage_bps),
-            U256::from(ONE_HUNDRED_BPS),
-            "slippage_sell.mul_div",
-        )?;
-        Amounts {
-            sell_amount: after_partner_fees.sell_amount.checked_add(slip).ok_or(
-                Error::QuoteFeeMathOverflow {
-                    stage: "after_slippage.sell",
-                },
-            )?,
-            buy_amount: after_partner_fees.buy_amount,
-        }
-    };
+    // Slippage widens the surplus side against the trader: tightening the
+    // SELL buy floor, loosening the BUY sell ceiling.
+    let surplus_after_partner = dir.surplus_of(&after_partner_fees);
+    let slip = mul_div(
+        surplus_after_partner,
+        U256::from(slippage_bps),
+        U256::from(ONE_HUNDRED_BPS),
+        dir.slippage_mul_div_stage,
+    )?;
+    let after_slippage = dir.amounts(
+        dir.fixed_of(&after_partner_fees),
+        dir.peel_fee(surplus_after_partner, slip, dir.after_slippage_stage)?,
+    );
 
-    let amounts_to_sign = if is_sell {
-        Amounts {
-            sell_amount: before_all_fees.sell_amount,
-            buy_amount: after_slippage.buy_amount,
-        }
-    } else {
-        Amounts {
-            sell_amount: after_slippage.sell_amount,
-            buy_amount: before_all_fees.buy_amount,
-        }
-    };
+    // Sign the pinned fixed side and the fully-adjusted surplus side.
+    let amounts_to_sign = dir.amounts(
+        dir.fixed_of(&before_all_fees),
+        dir.surplus_of(&after_slippage),
+    );
 
     Ok(QuoteAmountsAndCosts {
         is_sell,
@@ -361,6 +329,102 @@ pub fn compute(params: QuoteAmountsParams<'_>) -> Result<QuoteAmountsAndCosts> {
             protocol_fee_bps_scaled,
         },
     })
+}
+
+/// Maps the direction-agnostic `(fixed, surplus)` projection back onto the
+/// `(sell, buy)` wire pair and carries the per-leg overflow-stage labels.
+///
+/// On a SELL quote the sell side is fixed and the buy side carries the
+/// surplus (and every fee); on a BUY quote the roles swap. `peel_fee`
+/// subtracts a fee from the surplus on SELL and adds it on BUY, which is
+/// the single sign difference between the two directions once the network
+/// cost (handled separately in [`compute`]) is set aside.
+#[derive(Clone, Copy)]
+struct Dir {
+    is_sell: bool,
+    after_protocol_stage: &'static str,
+    after_partner_stage: &'static str,
+    slippage_mul_div_stage: &'static str,
+    after_slippage_stage: &'static str,
+}
+
+impl Dir {
+    const fn new(is_sell: bool) -> Self {
+        if is_sell {
+            Self {
+                is_sell,
+                after_protocol_stage: "after_protocol_fees.buy",
+                after_partner_stage: "after_partner_fees.buy",
+                slippage_mul_div_stage: "slippage_buy.mul_div",
+                after_slippage_stage: "after_slippage.buy",
+            }
+        } else {
+            Self {
+                is_sell,
+                after_protocol_stage: "after_protocol_fees.sell",
+                after_partner_stage: "after_partner_fees.sell",
+                slippage_mul_div_stage: "slippage_sell.mul_div",
+                after_slippage_stage: "after_slippage.sell",
+            }
+        }
+    }
+
+    /// Assemble an [`Amounts`] from a `(fixed, surplus)` pair.
+    const fn amounts(&self, fixed: U256, surplus: U256) -> Amounts {
+        if self.is_sell {
+            Amounts {
+                sell_amount: fixed,
+                buy_amount: surplus,
+            }
+        } else {
+            Amounts {
+                sell_amount: surplus,
+                buy_amount: fixed,
+            }
+        }
+    }
+
+    /// The pinned (non-surplus) side of `a`.
+    const fn fixed_of(&self, a: &Amounts) -> U256 {
+        if self.is_sell {
+            a.sell_amount
+        } else {
+            a.buy_amount
+        }
+    }
+
+    /// The fee-bearing surplus side of `a`.
+    const fn surplus_of(&self, a: &Amounts) -> U256 {
+        if self.is_sell {
+            a.buy_amount
+        } else {
+            a.sell_amount
+        }
+    }
+
+    /// Move `fee` off the surplus side: it leaves the trader's proceeds on
+    /// SELL (subtract) and is added to what they pay on BUY (add).
+    fn peel_fee(&self, surplus: U256, fee: U256, stage: &'static str) -> Result<U256> {
+        if self.is_sell {
+            checked_sub(surplus, fee, stage)
+        } else {
+            checked_add(surplus, fee, stage)
+        }
+    }
+}
+
+/// Checked `U256` addition that fails closed at `stage` on overflow.
+#[inline]
+fn checked_add(a: U256, b: U256, stage: &'static str) -> Result<U256> {
+    a.checked_add(b)
+        .ok_or(Error::QuoteFeeMathOverflow { stage })
+}
+
+/// Checked `U256` subtraction that fails closed at `stage` on underflow.
+#[inline]
+fn checked_sub(a: U256, b: U256, stage: &'static str) -> Result<U256> {
+    a.checked_sub(b)
+        .ok_or(Error::QuoteFeeMathOverflow { stage })
 }
 
 /// Scale factor applied to `protocol_fee_bps` to keep five decimal
@@ -410,21 +474,7 @@ fn parse_protocol_fee_bps(input: Option<&str>) -> Result<u64> {
                 reason: "fractional part is not a decimal number",
             });
         }
-        // Pad to 6 digits so we can read 5 digits of result + 1 digit
-        // for half-away-from-zero rounding, matching `Math.round`.
-        let mut padded = String::with_capacity(6);
-        padded.push_str(frac_part);
-        while padded.len() < 6 {
-            padded.push('0');
-        }
-        let five: u64 = padded[..5]
-            .parse()
-            .map_err(|_| Error::InvalidProtocolFeeBps {
-                value: raw.to_owned(),
-                reason: "fractional part overflows internal scale",
-            })?;
-        let round_digit = padded.as_bytes()[5] - b'0';
-        if round_digit >= 5 { five + 1 } else { five }
+        round_fraction_to_five_digits(frac_part.as_bytes())
     };
     int_val
         .checked_mul(HUNDRED_THOUSANDS)
@@ -433,6 +483,21 @@ fn parse_protocol_fee_bps(input: Option<&str>) -> Result<u64> {
             value: raw.to_owned(),
             reason: "value too large for internal scale",
         })
+}
+
+/// Read `frac_digits` (ASCII decimal digits, no sign or point) as a
+/// fixed-point value scaled to five fractional places, rounding the sixth
+/// place half-away-from-zero to match the TS SDK's
+/// `Math.round(protocolFeeBps * 100_000)`.
+///
+/// The first five digits form the scaled integer; if a sixth digit exists
+/// and is `>= 5`, the result is incremented. Digits beyond the sixth do not
+/// affect the outcome (a `Math.round` of a value already past the rounding
+/// boundary). Callers must validate that every byte is an ASCII digit.
+fn round_fraction_to_five_digits(frac_digits: &[u8]) -> u64 {
+    let digit_at = |i: usize| u64::from(frac_digits.get(i).map_or(0, |b| b - b'0'));
+    let five = (0..5).fold(0u64, |acc, i| acc * 10 + digit_at(i));
+    if digit_at(5) >= 5 { five + 1 } else { five }
 }
 
 fn protocol_fee_amount(
@@ -446,19 +511,14 @@ fn protocol_fee_amount(
         return Ok(U256::ZERO);
     }
     let bps_big = U256::from(bps_scaled);
-    // 10_000 * 100_000 fits trivially; .expect documents the invariant
-    // rather than silently saturating like the prior implementation.
-    let scale = U256::from(ONE_HUNDRED_BPS)
-        .checked_mul(U256::from(HUNDRED_THOUSANDS))
-        .expect("ONE_HUNDRED_BPS * HUNDRED_THOUSANDS fits in U256");
     match kind {
         OrderKind::Sell => {
             // protocolFeeInBuy = buyAmount * bps / (10_000 * 100_000 - bps)
-            // bps >= scale means the quote claims >=100% protocol fee,
+            // bps >= SCALE means the quote claims >=100% protocol fee,
             // which the TS reference would surface as division by zero
             // (or worse, negative denominator). Fail closed instead of
             // letting an over-100% fee saturate to a bogus signed amount.
-            let denom = scale
+            let denom = SCALE
                 .checked_sub(bps_big)
                 .ok_or(Error::QuoteFeeMathOverflow {
                     stage: "protocol_fee.sell_denom",
@@ -473,8 +533,8 @@ fn protocol_fee_amount(
         OrderKind::Buy => {
             // protocolFeeInSell = (sellAmount + feeAmount) * bps
             //                     / (10_000 * 100_000 + bps)
-            // `scale + bps` cannot zero (scale > 0), so no zero check.
-            let denom = scale
+            // `SCALE + bps` cannot zero (SCALE > 0), so no zero check.
+            let denom = SCALE
                 .checked_add(bps_big)
                 .ok_or(Error::QuoteFeeMathOverflow {
                     stage: "protocol_fee.buy_denom",
@@ -489,11 +549,20 @@ fn protocol_fee_amount(
     }
 }
 
+/// `a * b / c`, failing closed on multiplication overflow.
+///
+/// `c` is an internal invariant: every caller proves it non-zero before
+/// calling (the bps denominators are non-zero consts, `protocol_fee_amount`
+/// rejects a zero `denom` at its own boundary, and `network_fee_in_buy`
+/// passes a guarded-non-zero `sell_amount`). A zero `c` therefore signals a
+/// caller bug, not malformed input, so it trips a `debug_assert!` rather
+/// than masking a future divide-by-zero behind a silent `0`.
 #[inline]
 fn mul_div(a: U256, b: U256, c: U256, stage: &'static str) -> Result<U256> {
-    if c.is_zero() {
-        return Ok(U256::ZERO);
-    }
+    debug_assert!(
+        !c.is_zero(),
+        "mul_div denominator must be non-zero at {stage}"
+    );
     let prod = a
         .checked_mul(b)
         .ok_or(Error::QuoteFeeMathOverflow { stage })?;
