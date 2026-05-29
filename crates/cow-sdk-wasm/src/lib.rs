@@ -673,26 +673,47 @@ pub async fn account_orders(
     to_js(&orders)
 }
 
-/// `GET /api/v1/trades?owner=...`.
+/// Append `&offset=`/`&limit=` to a path that already carries a query
+/// string. `None` leaves the parameter off so the server default applies.
+fn push_pagination(path: &mut String, offset: Option<u32>, limit: Option<u32>) {
+    if let Some(offset) = offset {
+        path.push_str(&format!("&offset={offset}"));
+    }
+    if let Some(limit) = limit {
+        path.push_str(&format!("&limit={limit}"));
+    }
+}
+
+/// `GET /api/v2/trades?owner=...`. Paginated; omit `offset` / `limit`
+/// for the server defaults.
 #[wasm_bindgen]
-pub async fn trades_by_owner(chain: &str, owner: &str) -> Result<JsValue, JsValue> {
+pub async fn trades_by_owner(
+    chain: &str,
+    owner: &str,
+    offset: Option<u32>,
+    limit: Option<u32>,
+) -> Result<JsValue, JsValue> {
     let owner = parse_address(owner)?;
-    let url = endpoint(
-        parse_chain(chain)?,
-        &format!("api/v1/trades?owner={owner:?}"),
-    );
+    let mut path = format!("api/v2/trades?owner={owner:?}");
+    push_pagination(&mut path, offset, limit);
+    let url = endpoint(parse_chain(chain)?, &path);
     let trades: Vec<cowprotocol::Trade> = transport::get(&url).await?;
     to_js(&trades)
 }
 
-/// `GET /api/v1/trades?orderUid=...`.
+/// `GET /api/v2/trades?orderUid=...`. Paginated; omit `offset` / `limit`
+/// for the server defaults.
 #[wasm_bindgen]
-pub async fn trades_by_order_uid(chain: &str, uid: &str) -> Result<JsValue, JsValue> {
+pub async fn trades_by_order_uid(
+    chain: &str,
+    uid: &str,
+    offset: Option<u32>,
+    limit: Option<u32>,
+) -> Result<JsValue, JsValue> {
     let uid = parse_uid(uid)?;
-    let url = endpoint(
-        parse_chain(chain)?,
-        &format!("api/v1/trades?orderUid={uid}"),
-    );
+    let mut path = format!("api/v2/trades?orderUid={uid}");
+    push_pagination(&mut path, offset, limit);
+    let url = endpoint(parse_chain(chain)?, &path);
     let trades: Vec<cowprotocol::Trade> = transport::get(&url).await?;
     to_js(&trades)
 }

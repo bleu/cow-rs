@@ -298,13 +298,17 @@ async fn get_orders_by_uids_posts_camel_case_uid_array() {
 async fn trades_by_owner_filters_with_query_param() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/api/v1/trades"))
+        .and(path("/api/v2/trades"))
         .and(query_param("owner", format!("{OWNER:?}").as_str()))
+        .and(query_param("limit", "50"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
         .mount(&server)
         .await;
 
-    let trades = api(&server).trades_by_owner(OWNER).await.unwrap();
+    let trades = api(&server)
+        .trades_by_owner(OWNER, None, Some(50))
+        .await
+        .unwrap();
     assert!(trades.is_empty());
 }
 
@@ -315,7 +319,7 @@ async fn trades_by_order_uid_queries_by_uid() {
     let uid_hex = uid.to_string();
 
     Mock::given(method("GET"))
-        .and(path("/api/v1/trades"))
+        .and(path("/api/v2/trades"))
         .and(query_param("orderUid", uid_hex.as_str()))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
             "blockNumber": 17_456_789_u64,
@@ -330,7 +334,10 @@ async fn trades_by_order_uid_queries_by_uid() {
         .mount(&server)
         .await;
 
-    let trades = api(&server).trades_by_order_uid(&uid).await.unwrap();
+    let trades = api(&server)
+        .trades_by_order_uid(&uid, None, None)
+        .await
+        .unwrap();
     assert_eq!(trades.len(), 1);
     assert_eq!(trades[0].order_uid, uid);
     assert_eq!(trades[0].sell_amount, U256::from(1_000_000_u64));

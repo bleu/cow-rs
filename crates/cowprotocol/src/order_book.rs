@@ -82,14 +82,22 @@ impl From<AppDataHash> for QuoteAppData {
 pub enum PriceQuality {
     /// Fastest available answer; solvers may skip simulation.
     Fast,
-    /// Default: best solver answer within the quoting window.
-    #[default]
+    /// Best solver answer within the quoting window.
     Optimal,
     /// `Optimal` plus on-chain simulation against balances/allowances.
+    /// The server's default when `priceQuality` is omitted (openapi
+    /// `OrderQuoteRequest.priceQuality.default: verified`), so it is the
+    /// [`Default`] here too.
+    #[default]
     Verified,
 }
 
-/// `GET /api/v1/trades` row: one per `GPv2Settlement.Trade` log.
+/// `GET /api/v2/trades` row: one per `GPv2Settlement.Trade` log.
+///
+/// The openapi `Trade` schema also carries `executedProtocolFees`; it is
+/// not modelled here (cow-sdk drops it too). Serde tolerates the extra
+/// field, so callers needing the per-trade fee breakdown can decode the
+/// raw JSON body themselves.
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -318,7 +326,8 @@ pub struct QuoteRequest {
     /// `true` for orders placed on chain (EIP-1271 / PreSign).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub onchain_order: Option<bool>,
-    /// Defaults to [`PriceQuality::Optimal`].
+    /// Price-quality hint. Omitted from the wire when `None`, in which
+    /// case the server applies its default ([`PriceQuality::Verified`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub price_quality: Option<PriceQuality>,
 }
@@ -399,6 +408,11 @@ impl QuoteRequest {
 /// [`OrderQuoteResponse::try_into_signed_order_data`] to project into a
 /// signable [`OrderData`] after binding the response to the
 /// originating [`QuoteRequest`].
+///
+/// The openapi schema also carries `gasAmount` / `gasPrice` /
+/// `sellTokenPrice`; those are not modelled here (cow-sdk drops them
+/// too). Serde tolerates the extras, so callers needing the gas
+/// breakdown can decode the raw JSON body themselves.
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -879,15 +893,7 @@ impl OrderBookApi {
         let mut url = self
             .base_url
             .join(&format!("api/v1/account/{owner:?}/orders"))?;
-        {
-            let mut q = url.query_pairs_mut();
-            if let Some(offset) = offset {
-                q.append_pair("offset", &offset.to_string());
-            }
-            if let Some(limit) = limit {
-                q.append_pair("limit", &limit.to_string());
-            }
-        }
+        append_pagination(&mut url.query_pairs_mut(), offset, limit);
         let response = self.client.get(url).send().await?;
         Self::decode_response(response).await
     }
@@ -902,20 +908,40 @@ impl OrderBookApi {
         .await
     }
 
-    /// `GET /api/v1/trades?owner=...`.
-    pub async fn trades_by_owner(&self, owner: Address) -> Result<Vec<Trade>> {
-        let mut url = self.base_url.join("api/v1/trades")?;
-        url.query_pairs_mut()
-            .append_pair("owner", &format!("{owner:?}"));
+    /// `GET /api/v2/trades?owner=...`. Newest first. Pass `None` for both
+    /// pagers to use the server defaults (`offset` 0, `limit` 10); the
+    /// server caps `limit` at 1000. v2 replaces the deprecated,
+    /// unpaginated v1 endpoint.
+    pub async fn trades_by_owner(
+        &self,
+        owner: Address,
+        offset: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<Vec<Trade>> {
+        let mut url = self.base_url.join("api/v2/trades")?;
+        {
+            let mut q = url.query_pairs_mut();
+            q.append_pair("owner", &format!("{owner:?}"));
+            append_pagination(&mut q, offset, limit);
+        }
         let response = self.client.get(url).send().await?;
         Self::decode_response(response).await
     }
 
-    /// `GET /api/v1/trades?orderUid=...`.
-    pub async fn trades_by_order_uid(&self, uid: &OrderUid) -> Result<Vec<Trade>> {
-        let mut url = self.base_url.join("api/v1/trades")?;
-        url.query_pairs_mut()
-            .append_pair("orderUid", &uid.to_string());
+    /// `GET /api/v2/trades?orderUid=...`. Newest first; see
+    /// [`OrderBookApi::trades_by_owner`] for the pagination semantics.
+    pub async fn trades_by_order_uid(
+        &self,
+        uid: &OrderUid,
+        offset: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<Vec<Trade>> {
+        let mut url = self.base_url.join("api/v2/trades")?;
+        {
+            let mut q = url.query_pairs_mut();
+            q.append_pair("orderUid", &uid.to_string());
+            append_pagination(&mut q, offset, limit);
+        }
         let response = self.client.get(url).send().await?;
         Self::decode_response(response).await
     }
@@ -929,6 +955,12 @@ impl OrderBookApi {
     }
 
     /// `GET /api/v1/token/{token}/metadata`.
+    ///
+    /// The handler ships in upstream `services`, so this works against
+    /// production today, but the route is not documented in the bundled
+    /// orderbook OpenAPI and `@cowprotocol/cow-sdk` does not expose it.
+    /// Treat it as best-effort: it could be removed without an OpenAPI
+    /// bump.
     pub async fn token_metadata(&self, token: Address) -> Result<TokenMetadata> {
         self.get_json(&format!("api/v1/token/{token:?}/metadata"))
             .await
@@ -1187,6 +1219,22 @@ fn ensure_trailing_slash(mut url: url::Url) -> url::Url {
         url.set_path(&new_path);
     }
     url
+}
+
+/// Append the optional `offset` / `limit` pagination pair to a query.
+/// `None` leaves the parameter off so the server applies its default.
+#[cfg(feature = "http-client")]
+fn append_pagination(
+    q: &mut url::form_urlencoded::Serializer<'_, url::UrlQuery<'_>>,
+    offset: Option<u32>,
+    limit: Option<u32>,
+) {
+    if let Some(offset) = offset {
+        q.append_pair("offset", &offset.to_string());
+    }
+    if let Some(limit) = limit {
+        q.append_pair("limit", &limit.to_string());
+    }
 }
 
 #[cfg(test)]
