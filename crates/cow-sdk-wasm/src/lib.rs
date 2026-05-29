@@ -38,7 +38,7 @@ use {
     cowprotocol::{
         AppDataDoc, AppDataHash, Chain, EMPTY_APP_DATA_HASH, EcdsaSigningScheme, OrderData,
         OrderUid, QuoteRequest, Signature, SignedOrderCancellation, SigningScheme, app_data_cid,
-        ecdsa_from_components, settlement_domain,
+        ecdsa_from_components,
     },
     serde::{Deserialize, Serialize},
     wasm_bindgen::prelude::*,
@@ -59,12 +59,20 @@ fn to_js<T: Serialize + ?Sized>(value: &T) -> Result<JsValue, JsValue> {
     let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
     value
         .serialize(&serializer)
-        .map_err(|err| JsValue::from_str(&format!("serialise failed: {err}")))
+        .map_err(js_err("serialise failed"))
 }
 
 fn from_js<T: for<'de> Deserialize<'de>>(value: JsValue) -> Result<T, JsValue> {
-    serde_wasm_bindgen::from_value(value)
-        .map_err(|err| JsValue::from_str(&format!("deserialise failed: {err}")))
+    serde_wasm_bindgen::from_value(value).map_err(js_err("deserialise failed"))
+}
+
+/// `map_err` adapter that prefixes a fixed context onto any
+/// [`Display`](core::fmt::Display) error, producing the
+/// `"<ctx>: <err>"` string the JS boundary surfaces. Lets the call
+/// sites write `.map_err(js_err("<ctx>"))` instead of repeating the
+/// `format!` closure.
+fn js_err<E: core::fmt::Display>(ctx: &'static str) -> impl FnOnce(E) -> JsValue {
+    move |err| JsValue::from_str(&format!("{ctx}: {err}"))
 }
 
 fn parse_typed<T>(value: &str, kind: &str) -> Result<T, JsValue>
@@ -101,7 +109,7 @@ fn parse_chain(value: &str) -> Result<Chain, JsValue> {
 fn parse_signer(private_key_hex: &str) -> Result<PrivateKeySigner, JsValue> {
     private_key_hex
         .parse::<PrivateKeySigner>()
-        .map_err(|err| JsValue::from_str(&format!("invalid private key: {err}")))
+        .map_err(js_err("invalid private key"))
 }
 
 fn parse_scheme(value: &str) -> Result<EcdsaSigningScheme, JsValue> {
@@ -121,6 +129,10 @@ fn parse_scheme(value: &str) -> Result<EcdsaSigningScheme, JsValue> {
 /// [`Chain::orderbook_base_url`] guarantees the trailing slash that
 /// `join` needs to append, rather than replace, the last segment.
 fn endpoint(chain: Chain, path: &str) -> String {
+    // The `expect` is sound because every `path` is a crate-internal
+    // literal (`"api/v1/quote"`, `format!("api/v1/orders/{uid}")`, ...);
+    // no caller-controlled string reaches `join`, so the only way this
+    // could panic is a malformed base URL, which is a build-time bug.
     chain
         .orderbook_base_url()
         .join(path)
@@ -155,7 +167,7 @@ pub fn chain_info(chain: &str) -> Result<JsValue, JsValue> {
 #[wasm_bindgen]
 pub fn domain_separator(chain: &str) -> Result<String, JsValue> {
     let c = parse_chain(chain)?;
-    let domain = settlement_domain(c.id(), c.settlement());
+    let domain = c.settlement_domain();
     Ok(domain.separator().to_string())
 }
 
@@ -201,49 +213,15 @@ pub fn domain_separator(chain: &str) -> Result<String, JsValue> {
 pub fn eip712_payload(order_data: JsValue, chain: &str) -> Result<JsValue, JsValue> {
     let order: OrderData = from_js(order_data)?;
     let c = parse_chain(chain)?;
-    let mut message = serde_json::to_value(order)
-        .map_err(|err| JsValue::from_str(&format!("serialise order failed: {err}")))?;
-    // null receiver gets hashed as address(0); make that explicit.
-    if message
-        .get("receiver")
-        .is_none_or(serde_json::Value::is_null)
-    {
-        message["receiver"] = serde_json::Value::String(Address::ZERO.to_string());
-    }
-    let payload = serde_json::json!({
-        "domain": {
-            "name": "Gnosis Protocol",
-            "version": "v2",
-            "chainId": c.id(),
-            "verifyingContract": c.settlement().to_string(),
-        },
-        "primaryType": "Order",
-        // `EIP712Domain` is deliberately not in `types`: ethers v6 and
-        // viem build the domain typedef from the `domain` object and
-        // throw on a duplicate entry. Raw `eth_signTypedData_v4`
-        // callers (window.ethereum.request, WalletConnect, Safe SDK)
-        // must inject EIP712Domain themselves before stringifying for
-        // the wallet RPC. See `test-harness/index.html`'s shim button
-        // for an example.
-        "types": {
-            "Order": [
-                {"name": "sellToken",          "type": "address"},
-                {"name": "buyToken",           "type": "address"},
-                {"name": "receiver",           "type": "address"},
-                {"name": "sellAmount",         "type": "uint256"},
-                {"name": "buyAmount",          "type": "uint256"},
-                {"name": "validTo",            "type": "uint32"},
-                {"name": "appData",            "type": "bytes32"},
-                {"name": "feeAmount",          "type": "uint256"},
-                {"name": "kind",               "type": "string"},
-                {"name": "partiallyFillable",  "type": "bool"},
-                {"name": "sellTokenBalance",   "type": "string"},
-                {"name": "buyTokenBalance",    "type": "string"},
-            ],
-        },
-        "message": message,
-    });
-    to_js(&payload)
+    // The whole `{ domain, primaryType, types, message }` envelope
+    // (including the receiver normalisation, the deliberate
+    // `EIP712Domain` omission, and the centralised domain name /
+    // version) is built by core, byte-identical to the prior hand table.
+    to_js(&cowprotocol::order_typed_data(
+        &order,
+        c.id(),
+        c.settlement(),
+    ))
 }
 
 /// `keccak256(order)` struct hash (the input to EIP-712's `_hashTypedData`).
@@ -260,7 +238,7 @@ pub fn order_struct_hash(order_data: JsValue) -> Result<String, JsValue> {
 pub fn order_uid(order_data: JsValue, chain: &str, owner: &str) -> Result<String, JsValue> {
     let order: OrderData = from_js(order_data)?;
     let c = parse_chain(chain)?;
-    let domain = settlement_domain(c.id(), c.settlement());
+    let domain = c.settlement_domain();
     Ok(order.uid(&domain, parse_address(owner)?).to_string())
 }
 
@@ -272,11 +250,7 @@ pub fn order_uid(order_data: JsValue, chain: &str, owner: &str) -> Result<String
 pub fn eip712_message_hash(domain_hex: &str, struct_hash_hex: &str) -> Result<String, JsValue> {
     let separator = parse_b256(domain_hex)?;
     let struct_hash = parse_b256(struct_hash_hex)?;
-    let mut buf = [0u8; 66];
-    buf[..2].copy_from_slice(&[0x19, 0x01]);
-    buf[2..34].copy_from_slice(separator.as_slice());
-    buf[34..].copy_from_slice(struct_hash.as_slice());
-    Ok(alloy_primitives::keccak256(buf).to_string())
+    Ok(cowprotocol::eip712_message_hash(separator, struct_hash).to_string())
 }
 
 /// In-shim ECDSA signing. Returns the (r, s, v) packed signature plus
@@ -323,11 +297,11 @@ fn sign_with_scheme(
 ) -> Result<JsValue, JsValue> {
     let order: OrderData = from_js(order_data)?;
     let c = parse_chain(chain)?;
-    let domain = settlement_domain(c.id(), c.settlement());
+    let domain = c.settlement_domain();
     let signer = parse_signer(private_key_hex)?;
     let ecdsa = order
         .sign_ecdsa(scheme, &domain, &signer)
-        .map_err(|err| JsValue::from_str(&format!("sign failed: {err}")))?;
+        .map_err(js_err("sign failed"))?;
     let bytes = ecdsa.as_bytes();
     let r = B256::from_slice(&bytes[..32]);
     let s = B256::from_slice(&bytes[32..64]);
@@ -390,15 +364,38 @@ pub fn build_order_creation(
     let scheme = parse_scheme(&sig.signing_scheme)?;
     let r = parse_b256(&sig.r)?;
     let s = parse_b256(&sig.s)?;
-    let ecdsa = ecdsa_from_components(r, s, sig.v)
-        .map_err(|err| JsValue::from_str(&format!("invalid signature: {err}")))?;
+    let ecdsa = ecdsa_from_components(r, s, sig.v).map_err(js_err("invalid signature"))?;
     let signature = Signature::from_ecdsa(ecdsa, scheme);
-    let owner = parse_address(owner)?;
-    let c = parse_chain(chain)?;
-    let domain = settlement_domain(c.id(), c.settlement());
-    let quote_id = quote_id
+    assemble_creation(order, signature, owner, chain, app_data_json, quote_id)
+}
+
+/// Convert a JS-supplied `quote_id` (`u64`) into the orderbook's `i64`
+/// quote id, rejecting a value above `i64::MAX` rather than letting it
+/// wrap to a negative id. `None` stays `None`.
+fn to_quote_id(quote_id: Option<u64>) -> Result<Option<i64>, JsValue> {
+    quote_id
         .map(|id| i64::try_from(id).map_err(|_| JsValue::from_str("quote_id exceeds i64::MAX")))
-        .transpose()?;
+        .transpose()
+}
+
+/// Shared tail of [`build_order_creation`] and
+/// [`build_order_creation_eip1271`]: thread the parsed `signature`,
+/// `owner`, `chain`, app-data JSON and `quote_id` into core's
+/// `OrderCreation::from_signed_order_data`, then run the local
+/// `verify_owner` guard against the chain's settlement domain before
+/// handing the body back to JS. The two public exports differ only in
+/// how they build `signature`.
+fn assemble_creation(
+    order: OrderData,
+    signature: Signature,
+    owner: &str,
+    chain: &str,
+    app_data_json: &str,
+    quote_id: Option<u64>,
+) -> Result<JsValue, JsValue> {
+    let owner = parse_address(owner)?;
+    let domain = parse_chain(chain)?.settlement_domain();
+    let quote_id = to_quote_id(quote_id)?;
     let creation = cowprotocol::OrderCreation::from_signed_order_data(
         &order,
         signature,
@@ -406,10 +403,10 @@ pub fn build_order_creation(
         app_data_json.to_owned(),
         quote_id,
     )
-    .map_err(|err| JsValue::from_str(&format!("build creation failed: {err}")))?;
+    .map_err(js_err("build creation failed"))?;
     creation
         .verify_owner(&domain)
-        .map_err(|err| JsValue::from_str(&format!("verify_owner: {err}")))?;
+        .map_err(js_err("verify_owner"))?;
     to_js(&creation)
 }
 
@@ -443,27 +440,10 @@ pub fn build_order_creation_eip1271(
     let order: OrderData = from_js(order_data)?;
     let bytes: alloy_primitives::Bytes = signature_hex
         .parse()
-        .map_err(|err| JsValue::from_str(&format!("invalid signature hex: {err}")))?;
+        .map_err(js_err("invalid signature hex"))?;
     let signature = Signature::from_bytes(SigningScheme::Eip1271, &bytes)
-        .map_err(|err| JsValue::from_str(&format!("invalid eip1271 signature: {err}")))?;
-    let owner = parse_address(owner)?;
-    let c = parse_chain(chain)?;
-    let domain = settlement_domain(c.id(), c.settlement());
-    let quote_id = quote_id
-        .map(|id| i64::try_from(id).map_err(|_| JsValue::from_str("quote_id exceeds i64::MAX")))
-        .transpose()?;
-    let creation = cowprotocol::OrderCreation::from_signed_order_data(
-        &order,
-        signature,
-        owner,
-        app_data_json.to_owned(),
-        quote_id,
-    )
-    .map_err(|err| JsValue::from_str(&format!("build creation failed: {err}")))?;
-    creation
-        .verify_owner(&domain)
-        .map_err(|err| JsValue::from_str(&format!("verify_owner: {err}")))?;
-    to_js(&creation)
+        .map_err(js_err("invalid eip1271 signature"))?;
+    assemble_creation(order, signature, owner, chain, app_data_json, quote_id)
 }
 
 /// Parse a JSON app-data document and return its keccak256 digest.
@@ -474,10 +454,8 @@ pub fn build_order_creation_eip1271(
 pub fn app_data_hash_from_json(canonical_json: &str) -> Result<String, JsValue> {
     let doc = canonical_json
         .parse::<AppDataDoc>()
-        .map_err(|err| JsValue::from_str(&format!("parse failed: {err}")))?;
-    let hash = doc
-        .try_hash()
-        .map_err(|err| JsValue::from_str(&format!("hash failed: {err}")))?;
+        .map_err(js_err("parse failed"))?;
+    let hash = doc.try_hash().map_err(js_err("hash failed"))?;
     Ok(hash.to_string())
 }
 
@@ -488,7 +466,7 @@ pub fn app_data_cid_from_hash(hash_hex: &str) -> Result<String, JsValue> {
     Ok(app_data_cid(hash).to_string())
 }
 
-/// 32-byte digest of `keccak256("{}")` — the empty app-data sentinel.
+/// 32-byte digest of `keccak256("{}")`: the empty app-data sentinel.
 #[wasm_bindgen]
 pub fn empty_app_data_hash() -> String {
     EMPTY_APP_DATA_HASH.to_string()
@@ -544,7 +522,7 @@ pub fn to_signed_order_data(
     let app_data: AppDataHash = parse_b256(app_data_hash_hex)?;
     let order_data = response
         .try_into_signed_order_data(&request, app_data)
-        .map_err(|err| JsValue::from_str(&format!("to_signed_order_data failed: {err}")))?;
+        .map_err(js_err("to_signed_order_data failed"))?;
     to_js(&order_data)
 }
 
@@ -569,11 +547,18 @@ pub fn to_signed_order_data(
 #[wasm_bindgen]
 pub async fn get_quote(chain: &str, request: JsValue) -> Result<JsValue, JsValue> {
     let request: QuoteRequest = from_js(request)?;
+    // This wasm path posts straight through `transport`, so it skips the
+    // `request.validate()` core's `OrderBookApi::quote` runs. Re-assert
+    // the request-shape invariants here so a deserialised, inconsistent
+    // request never reaches the orderbook.
+    request
+        .validate()
+        .map_err(js_err("invalid quote request"))?;
     let url = endpoint(parse_chain(chain)?, "api/v1/quote");
     let response: cowprotocol::OrderQuoteResponse = transport::post_json(&url, &request).await?;
     response
         .try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)
-        .map_err(|err| JsValue::from_str(&format!("quote response binding failed: {err}")))?;
+        .map_err(js_err("quote response binding failed"))?;
     to_js(&response)
 }
 
@@ -600,8 +585,8 @@ pub async fn get_quote_simple(
     let response: cowprotocol::OrderQuoteResponse = transport::post_json(&url, &request).await?;
     let order_data = response
         .try_into_signed_order_data(&request, cowprotocol::EMPTY_APP_DATA_HASH)
-        .map_err(|err| JsValue::from_str(&format!("to_signed_order_data failed: {err}")))?;
-    let domain = settlement_domain(c.id(), c.settlement());
+        .map_err(js_err("to_signed_order_data failed"))?;
+    let domain = c.settlement_domain();
     let uid = order_data.uid(&domain, response.from);
     let payload = serde_json::json!({
         "response": response,
@@ -621,10 +606,10 @@ pub async fn get_quote_simple(
 pub async fn post_order(chain: &str, creation: JsValue) -> Result<String, JsValue> {
     let creation: cowprotocol::OrderCreation = from_js(creation)?;
     let c = parse_chain(chain)?;
-    let domain = settlement_domain(c.id(), c.settlement());
+    let domain = c.settlement_domain();
     creation
         .verify_owner(&domain)
-        .map_err(|err| JsValue::from_str(&format!("verify_owner: {err}")))?;
+        .map_err(js_err("verify_owner"))?;
     let url = endpoint(c, "api/v1/orders");
     transport::post_json_string(&url, &creation).await
 }
@@ -657,31 +642,32 @@ pub async fn account_orders(
 ) -> Result<JsValue, JsValue> {
     let owner = parse_address(owner)?;
     let mut path = format!("api/v1/account/{owner:?}/orders");
-    let mut query = Vec::with_capacity(2);
-    if let Some(offset) = offset {
-        query.push(format!("offset={offset}"));
-    }
-    if let Some(limit) = limit {
-        query.push(format!("limit={limit}"));
-    }
-    if !query.is_empty() {
-        path.push('?');
-        path.push_str(&query.join("&"));
-    }
+    push_pagination(&mut path, offset, limit);
     let url = endpoint(parse_chain(chain)?, &path);
     let orders: Vec<cowprotocol::Order> = transport::get(&url).await?;
     to_js(&orders)
 }
 
-/// Append `&offset=`/`&limit=` to a path that already carries a query
-/// string. `None` leaves the parameter off so the server default applies.
+/// Append `offset=`/`limit=` query parameters to a path, picking the
+/// `?` or `&` separator by whether the path already carries a query
+/// string. `None` leaves the parameter off so the server default
+/// applies. Shared by [`account_orders`] (no prior query) and the two
+/// trades endpoints (a prior `?owner=`/`?orderUid=`).
 fn push_pagination(path: &mut String, offset: Option<u32>, limit: Option<u32>) {
     if let Some(offset) = offset {
-        path.push_str(&format!("&offset={offset}"));
+        push_query_param(path, "offset", offset);
     }
     if let Some(limit) = limit {
-        path.push_str(&format!("&limit={limit}"));
+        push_query_param(path, "limit", limit);
     }
+}
+
+/// Append a single `name=value` query parameter, prefixing `?` if `path`
+/// has no query string yet and `&` otherwise.
+fn push_query_param(path: &mut String, name: &str, value: u32) {
+    let separator = if path.contains('?') { '&' } else { '?' };
+    path.push(separator);
+    path.push_str(&format!("{name}={value}"));
 }
 
 /// `GET /api/v2/trades?owner=...`. Paginated; omit `offset` / `limit`
@@ -761,11 +747,11 @@ pub fn cancel_order_signed(
 ) -> Result<JsValue, JsValue> {
     let uid = parse_uid(uid)?;
     let c = parse_chain(chain)?;
-    let domain = settlement_domain(c.id(), c.settlement());
+    let domain = c.settlement_domain();
     let signer = parse_signer(private_key_hex)?;
     let cancellation =
         SignedOrderCancellation::sign(uid, EcdsaSigningScheme::Eip712, &domain, &signer)
-            .map_err(|err| JsValue::from_str(&format!("sign cancellation failed: {err}")))?;
+            .map_err(js_err("sign cancellation failed"))?;
     to_js(&cancellation)
 }
 

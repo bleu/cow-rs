@@ -22,20 +22,21 @@ use {
 };
 
 /// Wall-clock cap applied to every `fetch` call this module issues.
-/// Mirrors the timeout that
-/// [`cowprotocol::order_book::DEFAULT_HTTP_TIMEOUT`] applies to the
-/// reqwest client on native targets. The chosen cap (30 s) is long
-/// enough for legitimate orderbook traffic and short enough that a
-/// hostile peer cannot hold a wasm task open indefinitely.
-pub(crate) const FETCH_TIMEOUT_MS: u32 = 30_000;
+/// Derived from [`cowprotocol::order_book::DEFAULT_HTTP_TIMEOUT`], the
+/// same timeout the reqwest client applies on native targets, so the two
+/// transports cannot drift. The cap (30 s) is long enough for legitimate
+/// orderbook traffic and short enough that a hostile peer cannot hold a
+/// wasm task open indefinitely.
+pub(crate) const FETCH_TIMEOUT_MS: u32 =
+    cowprotocol::order_book::DEFAULT_HTTP_TIMEOUT.as_secs() as u32 * 1000;
 
 /// Maximum byte length the wasm transport will accept for any single
 /// response body. Larger payloads are rejected before being decoded
 /// into a Rust `String`, so a hostile orderbook cannot OOM the wasm
-/// process by streaming a multi-GB body. Eight MiB is generous for
-/// every documented orderbook endpoint (mirrors
-/// [`cowprotocol::order_book::MAX_RESPONSE_BYTES`]).
-pub(crate) const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+/// process by streaming a multi-GB body. Imported from
+/// [`cowprotocol::order_book::MAX_RESPONSE_BYTES`] so the wasm and native
+/// caps cannot drift.
+pub(crate) const MAX_RESPONSE_BYTES: usize = cowprotocol::order_book::MAX_RESPONSE_BYTES;
 
 /// `GET <url>` decoded as JSON.
 pub(crate) async fn get<T: DeserializeOwned>(url: &str) -> Result<T, JsValue> {
