@@ -31,21 +31,37 @@
 #![warn(missing_docs, rustdoc::missing_crate_level_docs)]
 
 mod allocator;
+mod app_data;
+mod endpoints;
+mod signing;
 mod transport;
 
-use {
-    alloy_primitives::{Address, B256, U256},
-    cowprotocol::{
-        AppDataDoc, AppDataHash, Chain, EMPTY_APP_DATA_HASH, EcdsaSigningScheme, OrderData,
-        OrderUid, QuoteRequest, Signature, SignedOrderCancellation, SigningScheme, app_data_cid,
-        ecdsa_from_components,
+#[doc(inline)]
+pub use {
+    app_data::{
+        app_data_cid_from_hash, app_data_hash_from_json, empty_app_data_hash, sdk_app_data_hash,
+        sdk_app_data_json, to_signed_order_data,
     },
-    serde::{Deserialize, Serialize},
-    wasm_bindgen::prelude::*,
+    endpoints::{
+        account_orders, cancel_order, get_order, get_order_status, get_quote, get_quote_simple,
+        native_price, post_order, trades_by_order_uid, trades_by_owner, version,
+    },
+    signing::{
+        build_order_creation, build_order_creation_eip1271, eip712_message_hash, eip712_payload,
+        order_struct_hash, order_uid,
+    },
 };
 
 #[cfg(feature = "in_shim_signing")]
-use alloy_signer_local::PrivateKeySigner;
+#[doc(inline)]
+pub use signing::{cancel_order_signed, sign_eip712, sign_ethsign};
+
+use {
+    alloy_primitives::{Address, B256},
+    cowprotocol::{Chain, EcdsaSigningScheme, OrderUid},
+    serde::{Deserialize, Serialize},
+    wasm_bindgen::prelude::*,
+};
 
 /// `wasm-pack` start hook. Installs a panic handler that surfaces Rust
 /// panics in the browser console; idempotent so it is safe for every
@@ -55,14 +71,14 @@ pub fn _start() {
     console_error_panic_hook::set_once();
 }
 
-fn to_js<T: Serialize + ?Sized>(value: &T) -> Result<JsValue, JsValue> {
+pub(crate) fn to_js<T: Serialize + ?Sized>(value: &T) -> Result<JsValue, JsValue> {
     let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
     value
         .serialize(&serializer)
         .map_err(js_err("serialise failed"))
 }
 
-fn from_js<T: for<'de> Deserialize<'de>>(value: JsValue) -> Result<T, JsValue> {
+pub(crate) fn from_js<T: for<'de> Deserialize<'de>>(value: JsValue) -> Result<T, JsValue> {
     serde_wasm_bindgen::from_value(value).map_err(js_err("deserialise failed"))
 }
 
@@ -71,11 +87,11 @@ fn from_js<T: for<'de> Deserialize<'de>>(value: JsValue) -> Result<T, JsValue> {
 /// `"<ctx>: <err>"` string the JS boundary surfaces. Lets the call
 /// sites write `.map_err(js_err("<ctx>"))` instead of repeating the
 /// `format!` closure.
-fn js_err<E: core::fmt::Display>(ctx: &'static str) -> impl FnOnce(E) -> JsValue {
+pub(crate) fn js_err<E: core::fmt::Display>(ctx: &'static str) -> impl FnOnce(E) -> JsValue {
     move |err| JsValue::from_str(&format!("{ctx}: {err}"))
 }
 
-fn parse_typed<T>(value: &str, kind: &str) -> Result<T, JsValue>
+pub(crate) fn parse_typed<T>(value: &str, kind: &str) -> Result<T, JsValue>
 where
     T: std::str::FromStr,
     T::Err: std::fmt::Display,
@@ -85,34 +101,23 @@ where
         .map_err(|err| JsValue::from_str(&format!("invalid {kind} {value}: {err}")))
 }
 
-fn parse_address(value: &str) -> Result<Address, JsValue> {
+pub(crate) fn parse_address(value: &str) -> Result<Address, JsValue> {
     parse_typed(value, "address")
 }
 
-fn parse_u256(value: &str) -> Result<U256, JsValue> {
-    parse_typed(value, "u256")
-}
-
-fn parse_uid(value: &str) -> Result<OrderUid, JsValue> {
+pub(crate) fn parse_uid(value: &str) -> Result<OrderUid, JsValue> {
     parse_typed(value, "order uid")
 }
 
-fn parse_b256(value: &str) -> Result<B256, JsValue> {
+pub(crate) fn parse_b256(value: &str) -> Result<B256, JsValue> {
     parse_typed(value, "32-byte hex")
 }
 
-fn parse_chain(value: &str) -> Result<Chain, JsValue> {
+pub(crate) fn parse_chain(value: &str) -> Result<Chain, JsValue> {
     parse_typed(value, "chain")
 }
 
-#[cfg(feature = "in_shim_signing")]
-fn parse_signer(private_key_hex: &str) -> Result<PrivateKeySigner, JsValue> {
-    private_key_hex
-        .parse::<PrivateKeySigner>()
-        .map_err(js_err("invalid private key"))
-}
-
-fn parse_scheme(value: &str) -> Result<EcdsaSigningScheme, JsValue> {
+pub(crate) fn parse_scheme(value: &str) -> Result<EcdsaSigningScheme, JsValue> {
     match value.to_ascii_lowercase().as_str() {
         "eip712" => Ok(EcdsaSigningScheme::Eip712),
         "ethsign" => Ok(EcdsaSigningScheme::EthSign),
@@ -128,7 +133,7 @@ fn parse_scheme(value: &str) -> Result<EcdsaSigningScheme, JsValue> {
 /// link reqwest. Delegates path resolution to [`url::Url::join`];
 /// [`Chain::orderbook_base_url`] guarantees the trailing slash that
 /// `join` needs to append, rather than replace, the last segment.
-fn endpoint(chain: Chain, path: &str) -> String {
+pub(crate) fn endpoint(chain: Chain, path: &str) -> String {
     // The `expect` is sound because every `path` is a crate-internal
     // literal (`"api/v1/quote"`, `format!("api/v1/orders/{uid}")`, ...);
     // no caller-controlled string reaches `join`, so the only way this
@@ -138,6 +143,28 @@ fn endpoint(chain: Chain, path: &str) -> String {
         .join(path)
         .expect("orderbook base url + relative path resolves cleanly")
         .to_string()
+}
+
+/// Append `offset=`/`limit=` query parameters to a path, picking the
+/// `?` or `&` separator by whether the path already carries a query
+/// string. `None` leaves the parameter off so the server default
+/// applies. Shared by [`account_orders`] (no prior query) and the two
+/// trades endpoints (a prior `?owner=`/`?orderUid=`).
+pub(crate) fn push_pagination(path: &mut String, offset: Option<u32>, limit: Option<u32>) {
+    if let Some(offset) = offset {
+        push_query_param(path, "offset", offset);
+    }
+    if let Some(limit) = limit {
+        push_query_param(path, "limit", limit);
+    }
+}
+
+/// Append a single `name=value` query parameter, prefixing `?` if `path`
+/// has no query string yet and `&` otherwise.
+pub(crate) fn push_query_param(path: &mut String, name: &str, value: u32) {
+    let separator = if path.contains('?') { '&' } else { '?' };
+    path.push(separator);
+    path.push_str(&format!("{name}={value}"));
 }
 
 // ===== Pure-compute helpers ============================================
@@ -169,590 +196,6 @@ pub fn domain_separator(chain: &str) -> Result<String, JsValue> {
     let c = parse_chain(chain)?;
     let domain = c.settlement_domain();
     Ok(domain.separator().to_string())
-}
-
-/// Canonical EIP-712 typed-data payload for an order, ready to feed
-/// into viem's `signTypedData` or ethers' `signer.signTypedData`. Lets
-/// JS callers sign with their own wallet without redefining the
-/// `Order` type or the `Gnosis Protocol` domain separator.
-///
-/// Returns `{ domain, primaryType, types, message }`. The `message`
-/// normalises `receiver: null` to `address(0)` so the hash the wallet
-/// signs matches what `OrderData::hash_struct` computes server-side.
-///
-/// # Raw `eth_signTypedData_v4` callers
-///
-/// `types` deliberately omits the `EIP712Domain` entry: ethers v6 and
-/// viem build the domain typedef from the `domain` object and throw on
-/// a duplicate. Callers using the raw EIP-1193 RPC (`window.ethereum`,
-/// WalletConnect, Safe SDK) must inject `EIP712Domain` before
-/// stringifying the payload for the wallet, otherwise the wallet
-/// hashes the domain with the wrong typedef and the signature won't
-/// verify. Example:
-///
-/// ```js
-/// const payload = eip712_payload(order, 'mainnet');
-/// const v4 = {
-///   ...payload,
-///   types: {
-///     EIP712Domain: [
-///       { name: 'name',              type: 'string'  },
-///       { name: 'version',           type: 'string'  },
-///       { name: 'chainId',           type: 'uint256' },
-///       { name: 'verifyingContract', type: 'address' },
-///     ],
-///     ...payload.types,
-///   },
-/// };
-/// await window.ethereum.request({
-///   method: 'eth_signTypedData_v4',
-///   params: [account, JSON.stringify(v4)],
-/// });
-/// ```
-#[wasm_bindgen]
-pub fn eip712_payload(order_data: JsValue, chain: &str) -> Result<JsValue, JsValue> {
-    let order: OrderData = from_js(order_data)?;
-    let c = parse_chain(chain)?;
-    // The whole `{ domain, primaryType, types, message }` envelope
-    // (including the receiver normalisation, the deliberate
-    // `EIP712Domain` omission, and the centralised domain name /
-    // version) is built by core, byte-identical to the prior hand table.
-    to_js(&cowprotocol::order_typed_data(
-        &order,
-        c.id(),
-        c.settlement(),
-    ))
-}
-
-/// `keccak256(order)` struct hash (the input to EIP-712's `_hashTypedData`).
-/// Accepts the same JSON shape that `OrderData` serialises to.
-#[wasm_bindgen]
-pub fn order_struct_hash(order_data: JsValue) -> Result<String, JsValue> {
-    let order: OrderData = from_js(order_data)?;
-    Ok(order.hash_struct().to_string())
-}
-
-/// 56-byte `OrderUid` for the order against the given chain's domain.
-/// Returns `0x` + 112 hex chars.
-#[wasm_bindgen]
-pub fn order_uid(order_data: JsValue, chain: &str, owner: &str) -> Result<String, JsValue> {
-    let order: OrderData = from_js(order_data)?;
-    let c = parse_chain(chain)?;
-    let domain = c.settlement_domain();
-    Ok(order.uid(&domain, parse_address(owner)?).to_string())
-}
-
-/// EIP-712 wrapped hash `keccak256(0x1901 || domain || struct_hash)`.
-/// JS interop helper: callers that already hold the 32-byte domain
-/// separator and struct hash get the typed-data hash without having to
-/// reassemble an `alloy_sol_types::Eip712Domain`.
-#[wasm_bindgen]
-pub fn eip712_message_hash(domain_hex: &str, struct_hash_hex: &str) -> Result<String, JsValue> {
-    let separator = parse_b256(domain_hex)?;
-    let struct_hash = parse_b256(struct_hash_hex)?;
-    Ok(cowprotocol::eip712_message_hash(separator, struct_hash).to_string())
-}
-
-/// In-shim ECDSA signing. Returns the (r, s, v) packed signature plus
-/// the chosen scheme; feed the result into [`build_order_creation`].
-/// Requires the `in_shim_signing` cargo feature.
-#[cfg(feature = "in_shim_signing")]
-#[wasm_bindgen]
-pub fn sign_eip712(
-    order_data: JsValue,
-    chain: &str,
-    private_key_hex: &str,
-) -> Result<JsValue, JsValue> {
-    sign_with_scheme(
-        order_data,
-        chain,
-        private_key_hex,
-        EcdsaSigningScheme::Eip712,
-    )
-}
-
-/// In-shim signing with the EthSign (personal_sign) variant.
-/// Requires the `in_shim_signing` cargo feature.
-#[cfg(feature = "in_shim_signing")]
-#[wasm_bindgen]
-pub fn sign_ethsign(
-    order_data: JsValue,
-    chain: &str,
-    private_key_hex: &str,
-) -> Result<JsValue, JsValue> {
-    sign_with_scheme(
-        order_data,
-        chain,
-        private_key_hex,
-        EcdsaSigningScheme::EthSign,
-    )
-}
-
-#[cfg(feature = "in_shim_signing")]
-fn sign_with_scheme(
-    order_data: JsValue,
-    chain: &str,
-    private_key_hex: &str,
-    scheme: EcdsaSigningScheme,
-) -> Result<JsValue, JsValue> {
-    let order: OrderData = from_js(order_data)?;
-    let c = parse_chain(chain)?;
-    let domain = c.settlement_domain();
-    let signer = parse_signer(private_key_hex)?;
-    let ecdsa = order
-        .sign_ecdsa(scheme, &domain, &signer)
-        .map_err(js_err("sign failed"))?;
-    let bytes = ecdsa.as_bytes();
-    let r = B256::from_slice(&bytes[..32]);
-    let s = B256::from_slice(&bytes[32..64]);
-    let payload = serde_json::json!({
-        "signingScheme": scheme_to_str(scheme),
-        "r": r.to_string(),
-        "s": s.to_string(),
-        "v": bytes[64],
-        "owner": signer.address().to_string(),
-    });
-    to_js(&payload)
-}
-
-#[cfg(feature = "in_shim_signing")]
-const fn scheme_to_str(scheme: EcdsaSigningScheme) -> &'static str {
-    match scheme {
-        EcdsaSigningScheme::Eip712 => "eip712",
-        EcdsaSigningScheme::EthSign => "ethsign",
-    }
-}
-
-/// Build a `POST /orders` payload from a signed order. Accepts a
-/// signature object produced by [`sign_eip712`] / [`sign_ethsign`], or
-/// an externally signed `{ signingScheme, r, s, v }` bag with matching
-/// shape.
-///
-/// `chain` selects the EIP-712 domain (chain id + settlement
-/// `verifyingContract`) used to recover the signer; the assembled
-/// `OrderCreation` is rejected locally with a `verify_owner` error if
-/// the recovered signer does not match `owner`. This catches the
-/// typo-and-wallet-switch family of bugs that would otherwise only
-/// surface as a 4xx from the orderbook.
-///
-/// The `{ r, s, v }` bag is funnelled through `ecdsa_from_components`
-/// so `v` is normalised to `27` / `28` even when the originating
-/// wallet returns the raw `0` / `1` form.
-///
-/// `quote_id` is forwarded as the orderbook's `i64` quote id; a JS
-/// BigInt that exceeds `i64::MAX` is rejected rather than silently
-/// wrapping to a negative value.
-#[wasm_bindgen]
-pub fn build_order_creation(
-    order_data: JsValue,
-    signature: JsValue,
-    owner: &str,
-    chain: &str,
-    app_data_json: &str,
-    quote_id: Option<u64>,
-) -> Result<JsValue, JsValue> {
-    let order: OrderData = from_js(order_data)?;
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct SigInput {
-        signing_scheme: String,
-        r: String,
-        s: String,
-        v: u8,
-    }
-    let sig: SigInput = from_js(signature)?;
-    let scheme = parse_scheme(&sig.signing_scheme)?;
-    let r = parse_b256(&sig.r)?;
-    let s = parse_b256(&sig.s)?;
-    let ecdsa = ecdsa_from_components(r, s, sig.v).map_err(js_err("invalid signature"))?;
-    let signature = Signature::from_ecdsa(ecdsa, scheme);
-    assemble_creation(order, signature, owner, chain, app_data_json, quote_id)
-}
-
-/// Convert a JS-supplied `quote_id` (`u64`) into the orderbook's `i64`
-/// quote id, rejecting a value above `i64::MAX` rather than letting it
-/// wrap to a negative id. `None` stays `None`.
-fn to_quote_id(quote_id: Option<u64>) -> Result<Option<i64>, JsValue> {
-    quote_id
-        .map(|id| i64::try_from(id).map_err(|_| JsValue::from_str("quote_id exceeds i64::MAX")))
-        .transpose()
-}
-
-/// Shared tail of [`build_order_creation`] and
-/// [`build_order_creation_eip1271`]: thread the parsed `signature`,
-/// `owner`, `chain`, app-data JSON and `quote_id` into core's
-/// `OrderCreation::from_signed_order_data`, then run the local
-/// `verify_owner` guard against the chain's settlement domain before
-/// handing the body back to JS. The two public exports differ only in
-/// how they build `signature`.
-fn assemble_creation(
-    order: OrderData,
-    signature: Signature,
-    owner: &str,
-    chain: &str,
-    app_data_json: &str,
-    quote_id: Option<u64>,
-) -> Result<JsValue, JsValue> {
-    let owner = parse_address(owner)?;
-    let domain = parse_chain(chain)?.settlement_domain();
-    let quote_id = to_quote_id(quote_id)?;
-    let creation = cowprotocol::OrderCreation::from_signed_order_data(
-        &order,
-        signature,
-        owner,
-        app_data_json.to_owned(),
-        quote_id,
-    )
-    .map_err(js_err("build creation failed"))?;
-    creation
-        .verify_owner(&domain)
-        .map_err(js_err("verify_owner"))?;
-    to_js(&creation)
-}
-
-/// Apply an externally produced EIP-1271 signature (Safe / contract
-/// wallet). `owner` must be the smart-wallet contract address that
-/// `isValidSignature` will be called on. `signature_hex` is the
-/// contract's expected calldata (often the wrapper bytes Safe's
-/// `signMessage` returns).
-///
-/// The signature is funnelled through
-/// [`Signature::from_bytes`] so the
-/// [`cowprotocol::signature::EIP1271_MAX_LEN`] (32 KiB) cap applies here as well
-/// as on the deserialise path. `chain` is accepted for parity with the
-/// ECDSA constructor; for EIP-1271 it is informational (owner
-/// verification is on-chain via `isValidSignature`, not via signer
-/// recovery) but it lets us reject a malformed bag of arguments
-/// uniformly.
-///
-/// `quote_id` is forwarded as the orderbook's `i64` quote id; a JS
-/// BigInt that exceeds `i64::MAX` is rejected rather than silently
-/// wrapping to a negative value.
-#[wasm_bindgen]
-pub fn build_order_creation_eip1271(
-    order_data: JsValue,
-    signature_hex: &str,
-    owner: &str,
-    chain: &str,
-    app_data_json: &str,
-    quote_id: Option<u64>,
-) -> Result<JsValue, JsValue> {
-    let order: OrderData = from_js(order_data)?;
-    let bytes: alloy_primitives::Bytes = signature_hex
-        .parse()
-        .map_err(js_err("invalid signature hex"))?;
-    let signature = Signature::from_bytes(SigningScheme::Eip1271, &bytes)
-        .map_err(js_err("invalid eip1271 signature"))?;
-    assemble_creation(order, signature, owner, chain, app_data_json, quote_id)
-}
-
-/// Parse a JSON app-data document and return its keccak256 digest.
-/// The caller is responsible for canonicalising the JSON before
-/// passing it in (the orderbook indexes documents byte-exactly; any
-/// reformatting after this call changes the hash).
-#[wasm_bindgen]
-pub fn app_data_hash_from_json(canonical_json: &str) -> Result<String, JsValue> {
-    let doc = canonical_json
-        .parse::<AppDataDoc>()
-        .map_err(js_err("parse failed"))?;
-    let hash = doc.try_hash().map_err(js_err("hash failed"))?;
-    Ok(hash.to_string())
-}
-
-/// IPFS CIDv1 the orderbook pins for a given app-data digest.
-#[wasm_bindgen]
-pub fn app_data_cid_from_hash(hash_hex: &str) -> Result<String, JsValue> {
-    let hash: AppDataHash = parse_b256(hash_hex)?;
-    Ok(app_data_cid(hash).to_string())
-}
-
-/// 32-byte digest of `keccak256("{}")`: the empty app-data sentinel.
-#[wasm_bindgen]
-pub fn empty_app_data_hash() -> String {
-    EMPTY_APP_DATA_HASH.to_string()
-}
-
-/// Canonical SDK-attribution app-data document JSON, with
-/// `appCode: "cow-rs-wasm"` and the wasm crate's version pinned in
-/// `metadata.quote.version`. Pass this to [`build_order_creation`] as
-/// the `app_data_json` argument so the orderbook indexer can
-/// attribute the order back to this SDK; pair with
-/// [`sdk_app_data_hash`] for the signed `appData` field.
-#[wasm_bindgen]
-pub fn sdk_app_data_json() -> String {
-    cowprotocol::AppDataDoc::sdk_attribution(cowprotocol::COW_RS_WASM_APP_CODE).canonical_json()
-}
-
-/// 32-byte keccak256 digest of [`sdk_app_data_json`], 0x-prefixed.
-/// Embed in [`OrderData::app_data`] before signing so the wire shape
-/// matches what the orderbook will hash server-side.
-#[wasm_bindgen]
-pub fn sdk_app_data_hash() -> String {
-    cowprotocol::AppDataDoc::sdk_attribution(cowprotocol::COW_RS_WASM_APP_CODE)
-        .hash()
-        .to_string()
-}
-
-/// Project an `OrderQuoteResponse` into the 12-field `OrderData` the
-/// owner will sign, after cross-checking the response against the
-/// originating `QuoteRequest`.
-///
-/// The single chokepoint for assembling signable bytes from a quote
-/// in JS-land. Mirrors the native
-/// [`cowprotocol::OrderQuoteResponse::try_into_signed_order_data`]: rejects
-/// any response whose `sellToken`, `buyToken`, normalised `receiver`,
-/// `from`, `kind`, or pinned `appData` disagrees with the request,
-/// plus `validTo` / `partiallyFillable` / `sellTokenBalance` /
-/// `buyTokenBalance` / `signingScheme` when the caller pinned them.
-/// Use this instead of hand-copying `response.quote.*` into an
-/// `orderData` object before passing it to `eip712_payload` and
-/// `build_order_creation`.
-///
-/// `app_data_hash_hex` is the 32-byte digest of the app-data document
-/// the caller will submit (commonly [`sdk_app_data_hash`] for SDK
-/// attribution, or [`empty_app_data_hash`] for the empty document).
-#[wasm_bindgen]
-pub fn to_signed_order_data(
-    request: JsValue,
-    response: JsValue,
-    app_data_hash_hex: &str,
-) -> Result<JsValue, JsValue> {
-    let request: QuoteRequest = from_js(request)?;
-    let response: cowprotocol::OrderQuoteResponse = from_js(response)?;
-    let app_data: AppDataHash = parse_b256(app_data_hash_hex)?;
-    let order_data = response
-        .try_into_signed_order_data(&request, app_data)
-        .map_err(js_err("to_signed_order_data failed"))?;
-    to_js(&order_data)
-}
-
-// ===== Networked endpoints =============================================
-//
-// All requests go through `transport::*` (a thin wrapper over the JS
-// `fetch` global) rather than through `cowprotocol::OrderBookApi`. This
-// keeps reqwest out of the wasm output: with `lto = "fat"`, any
-// reqwest-using code in `cowprotocol` that is not reached from a
-// wasm-bindgen export gets pruned during linking.
-
-/// `POST /api/v1/quote`. Accepts a `QuoteRequest` JSON object.
-///
-/// Cross-checks the response against the request via
-/// [`cowprotocol::OrderQuoteResponse::try_into_signed_order_data`] before
-/// returning, so a hostile orderbook cannot hand JS callers a swapped
-/// `sellToken` / `buyToken` / `receiver` / `from` / `kind` they would
-/// then pass into [`to_signed_order_data`] / [`build_order_creation`].
-/// The empty-document app-data hash is used for the bind check; the
-/// caller's eventual signing-time digest is checked again when they
-/// call [`to_signed_order_data`].
-#[wasm_bindgen]
-pub async fn get_quote(chain: &str, request: JsValue) -> Result<JsValue, JsValue> {
-    let request: QuoteRequest = from_js(request)?;
-    // This wasm path posts straight through `transport`, so it skips the
-    // `request.validate()` core's `OrderBookApi::quote` runs. Re-assert
-    // the request-shape invariants here so a deserialised, inconsistent
-    // request never reaches the orderbook.
-    request
-        .validate()
-        .map_err(js_err("invalid quote request"))?;
-    let url = endpoint(parse_chain(chain)?, "api/v1/quote");
-    let response: cowprotocol::OrderQuoteResponse = transport::post_json(&url, &request).await?;
-    response
-        .try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)
-        .map_err(js_err("quote response binding failed"))?;
-    to_js(&response)
-}
-
-/// Convenience: same as [`get_quote`] but accepts the four most-common
-/// inputs as plain strings and uses `sellAmountBeforeFee`. Returns the
-/// raw response plus the derived `OrderUid` (the next signing step's
-/// target).
-#[wasm_bindgen]
-pub async fn get_quote_simple(
-    chain: &str,
-    sell_token: &str,
-    buy_token: &str,
-    from: &str,
-    sell_amount_before_fee: &str,
-) -> Result<JsValue, JsValue> {
-    let request = QuoteRequest::sell_before_fee(
-        parse_address(sell_token)?,
-        parse_address(buy_token)?,
-        parse_address(from)?,
-        parse_u256(sell_amount_before_fee)?,
-    );
-    let c = parse_chain(chain)?;
-    let url = endpoint(c, "api/v1/quote");
-    let response: cowprotocol::OrderQuoteResponse = transport::post_json(&url, &request).await?;
-    let order_data = response
-        .try_into_signed_order_data(&request, cowprotocol::EMPTY_APP_DATA_HASH)
-        .map_err(js_err("to_signed_order_data failed"))?;
-    let domain = c.settlement_domain();
-    let uid = order_data.uid(&domain, response.from);
-    let payload = serde_json::json!({
-        "response": response,
-        "uid": uid.to_string(),
-    });
-    to_js(&payload)
-}
-
-/// `POST /api/v1/orders`. Returns the assigned 56-byte UID.
-///
-/// The assembled `OrderCreation` is verified locally via
-/// [`cowprotocol::OrderCreation::verify_owner`] before any network
-/// call, mirroring the guard [`build_order_creation`] performs, so a
-/// hand-assembled body with a typo'd `from` is rejected client-side
-/// rather than as a 4xx from the orderbook.
-#[wasm_bindgen]
-pub async fn post_order(chain: &str, creation: JsValue) -> Result<String, JsValue> {
-    let creation: cowprotocol::OrderCreation = from_js(creation)?;
-    let c = parse_chain(chain)?;
-    let domain = c.settlement_domain();
-    creation
-        .verify_owner(&domain)
-        .map_err(js_err("verify_owner"))?;
-    let url = endpoint(c, "api/v1/orders");
-    transport::post_json_string(&url, &creation).await
-}
-
-/// `GET /api/v1/orders/{uid}`.
-#[wasm_bindgen]
-pub async fn get_order(chain: &str, uid: &str) -> Result<JsValue, JsValue> {
-    let uid = parse_uid(uid)?;
-    let url = endpoint(parse_chain(chain)?, &format!("api/v1/orders/{uid}"));
-    let order: cowprotocol::Order = transport::get(&url).await?;
-    to_js(&order)
-}
-
-/// `GET /api/v1/orders/{uid}/status`.
-#[wasm_bindgen]
-pub async fn get_order_status(chain: &str, uid: &str) -> Result<JsValue, JsValue> {
-    let uid = parse_uid(uid)?;
-    let url = endpoint(parse_chain(chain)?, &format!("api/v1/orders/{uid}/status"));
-    let status: cowprotocol::AuctionStatus = transport::get(&url).await?;
-    to_js(&status)
-}
-
-/// `GET /api/v1/account/{owner}/orders`.
-#[wasm_bindgen]
-pub async fn account_orders(
-    chain: &str,
-    owner: &str,
-    offset: Option<u32>,
-    limit: Option<u32>,
-) -> Result<JsValue, JsValue> {
-    let owner = parse_address(owner)?;
-    let mut path = format!("api/v1/account/{owner:?}/orders");
-    push_pagination(&mut path, offset, limit);
-    let url = endpoint(parse_chain(chain)?, &path);
-    let orders: Vec<cowprotocol::Order> = transport::get(&url).await?;
-    to_js(&orders)
-}
-
-/// Append `offset=`/`limit=` query parameters to a path, picking the
-/// `?` or `&` separator by whether the path already carries a query
-/// string. `None` leaves the parameter off so the server default
-/// applies. Shared by [`account_orders`] (no prior query) and the two
-/// trades endpoints (a prior `?owner=`/`?orderUid=`).
-fn push_pagination(path: &mut String, offset: Option<u32>, limit: Option<u32>) {
-    if let Some(offset) = offset {
-        push_query_param(path, "offset", offset);
-    }
-    if let Some(limit) = limit {
-        push_query_param(path, "limit", limit);
-    }
-}
-
-/// Append a single `name=value` query parameter, prefixing `?` if `path`
-/// has no query string yet and `&` otherwise.
-fn push_query_param(path: &mut String, name: &str, value: u32) {
-    let separator = if path.contains('?') { '&' } else { '?' };
-    path.push(separator);
-    path.push_str(&format!("{name}={value}"));
-}
-
-/// `GET /api/v2/trades?owner=...`. Paginated; omit `offset` / `limit`
-/// for the server defaults.
-#[wasm_bindgen]
-pub async fn trades_by_owner(
-    chain: &str,
-    owner: &str,
-    offset: Option<u32>,
-    limit: Option<u32>,
-) -> Result<JsValue, JsValue> {
-    let owner = parse_address(owner)?;
-    let mut path = format!("api/v2/trades?owner={owner:?}");
-    push_pagination(&mut path, offset, limit);
-    let url = endpoint(parse_chain(chain)?, &path);
-    let trades: Vec<cowprotocol::Trade> = transport::get(&url).await?;
-    to_js(&trades)
-}
-
-/// `GET /api/v2/trades?orderUid=...`. Paginated; omit `offset` / `limit`
-/// for the server defaults.
-#[wasm_bindgen]
-pub async fn trades_by_order_uid(
-    chain: &str,
-    uid: &str,
-    offset: Option<u32>,
-    limit: Option<u32>,
-) -> Result<JsValue, JsValue> {
-    let uid = parse_uid(uid)?;
-    let mut path = format!("api/v2/trades?orderUid={uid}");
-    push_pagination(&mut path, offset, limit);
-    let url = endpoint(parse_chain(chain)?, &path);
-    let trades: Vec<cowprotocol::Trade> = transport::get(&url).await?;
-    to_js(&trades)
-}
-
-/// `GET /api/v1/token/{token}/native_price`.
-#[wasm_bindgen]
-pub async fn native_price(chain: &str, token: &str) -> Result<JsValue, JsValue> {
-    let token = parse_address(token)?;
-    let url = endpoint(
-        parse_chain(chain)?,
-        &format!("api/v1/token/{token:?}/native_price"),
-    );
-    let price: cowprotocol::NativePrice = transport::get(&url).await?;
-    to_js(&price)
-}
-
-/// `GET /api/v1/version`.
-#[wasm_bindgen]
-pub async fn version(chain: &str) -> Result<String, JsValue> {
-    let url = endpoint(parse_chain(chain)?, "api/v1/version");
-    transport::get_text(&url).await
-}
-
-/// `DELETE /api/v1/orders/{uid}`. Caller must construct the signed
-/// `SignedOrderCancellation` (see `cancel_order_signed`) and pass it here.
-#[wasm_bindgen]
-pub async fn cancel_order(chain: &str, cancellation: JsValue) -> Result<(), JsValue> {
-    let cancellation: SignedOrderCancellation = from_js(cancellation)?;
-    let url = endpoint(
-        parse_chain(chain)?,
-        &format!("api/v1/orders/{}", cancellation.order_uid),
-    );
-    transport::delete_json(&url, &cancellation).await
-}
-
-/// Pure-compute helper: sign a single-order cancellation in-shim and
-/// return the wire-shape payload `cancel_order` expects. Requires the
-/// `in_shim_signing` cargo feature.
-#[cfg(feature = "in_shim_signing")]
-#[wasm_bindgen]
-pub fn cancel_order_signed(
-    uid: &str,
-    chain: &str,
-    private_key_hex: &str,
-) -> Result<JsValue, JsValue> {
-    let uid = parse_uid(uid)?;
-    let c = parse_chain(chain)?;
-    let domain = c.settlement_domain();
-    let signer = parse_signer(private_key_hex)?;
-    let cancellation =
-        SignedOrderCancellation::sign(uid, EcdsaSigningScheme::Eip712, &domain, &signer)
-            .map_err(js_err("sign cancellation failed"))?;
-    to_js(&cancellation)
 }
 
 #[cfg(test)]
