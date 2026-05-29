@@ -32,11 +32,6 @@ impl SigningScheme {
             Self::Eip1271 | Self::PreSign => None,
         }
     }
-
-    /// Whether this scheme is one of the two off-chain ECDSA variants.
-    pub const fn is_ecdsa(self) -> bool {
-        self.try_to_ecdsa_scheme().is_some()
-    }
 }
 
 /// Subset of [`SigningScheme`] that uses off-chain ECDSA signatures.

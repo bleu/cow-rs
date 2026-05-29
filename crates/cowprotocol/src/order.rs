@@ -10,9 +10,7 @@
 //!
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/model/src/order.rs
 
-#[cfg(test)]
-use alloy_primitives::keccak256;
-use alloy_primitives::{Address, B256, FixedBytes, U256, b256};
+use alloy_primitives::{Address, B256, FixedBytes, U256, b256, keccak256};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::fmt::{self, Display};
@@ -190,22 +188,77 @@ impl From<&OrderData> for eip712::Order {
             validTo: d.valid_to,
             appData: d.app_data,
             feeAmount: d.fee_amount,
-            kind: match d.kind {
-                OrderKind::Sell => "sell".to_owned(),
-                OrderKind::Buy => "buy".to_owned(),
-            },
+            kind: d.kind.as_str().to_owned(),
             partiallyFillable: d.partially_fillable,
-            sellTokenBalance: match d.sell_token_balance {
-                SellTokenSource::Erc20 => "erc20".to_owned(),
-                SellTokenSource::External => "external".to_owned(),
-                SellTokenSource::Internal => "internal".to_owned(),
-            },
-            buyTokenBalance: match d.buy_token_balance {
-                BuyTokenDestination::Erc20 => "erc20".to_owned(),
-                BuyTokenDestination::Internal => "internal".to_owned(),
-            },
+            sellTokenBalance: d.sell_token_balance.as_str().to_owned(),
+            buyTokenBalance: d.buy_token_balance.as_str().to_owned(),
         }
     }
+}
+
+/// Build the `{ "name": .., "type": .. }` entries of the EIP-712 `Order`
+/// type from the canonical [`eip712::Order`] `sol!` declaration, so the
+/// typed-data table cannot silently drift from the struct the contract
+/// verifies against. Parses [`alloy_sol_types::SolStruct::eip712_root_type`],
+/// which is `Order(<solType> <fieldName>,..)`.
+fn order_type_entries() -> Vec<serde_json::Value> {
+    use alloy_sol_types::SolStruct;
+    let root = <eip712::Order as SolStruct>::eip712_root_type();
+    let fields = root
+        .strip_prefix("Order(")
+        .and_then(|s| s.strip_suffix(')'))
+        .expect("canonical Order root type is `Order(...)`");
+    fields
+        .split(',')
+        .map(|field| {
+            let (sol_type, name) = field
+                .split_once(' ')
+                .expect("each EIP-712 field is `<type> <name>`");
+            serde_json::json!({ "name": name, "type": sol_type })
+        })
+        .collect()
+}
+
+/// Canonical EIP-712 typed-data payload for an order, ready to feed into
+/// viem's `signTypedData` or ethers' `signer.signTypedData`. This is the
+/// single source of truth the wasm layer reuses instead of hand-redeclaring
+/// the `Order` type table.
+///
+/// Returns `{ domain, primaryType, types, message }`. The `message`
+/// normalises an absent or null `receiver` to `address(0)` so the hash a
+/// wallet signs matches what [`OrderData::hash_struct`] computes. The
+/// domain `name` / `version` come from [`crate::domain::DOMAIN_NAME`] /
+/// [`crate::domain::DOMAIN_VERSION`], the same constants
+/// [`crate::domain::settlement_domain`] derives the separator from, so the
+/// typed-data domain and the separator cannot drift.
+///
+/// `types` deliberately omits the `EIP712Domain` entry: ethers v6 and viem
+/// build the domain typedef from the `domain` object and throw on a
+/// duplicate. Raw `eth_signTypedData_v4` callers must inject it themselves.
+pub fn order_typed_data(
+    order: &OrderData,
+    chain_id: u64,
+    verifying_contract: Address,
+) -> serde_json::Value {
+    let mut message = serde_json::to_value(order).expect("OrderData serialises to JSON");
+    // A null or absent receiver hashes as address(0); make that explicit.
+    if message
+        .get("receiver")
+        .is_none_or(serde_json::Value::is_null)
+    {
+        message["receiver"] = serde_json::Value::String(Address::ZERO.to_string());
+    }
+    serde_json::json!({
+        "domain": {
+            "name": crate::domain::DOMAIN_NAME,
+            "version": crate::domain::DOMAIN_VERSION,
+            "chainId": chain_id,
+            "verifyingContract": verifying_contract.to_string(),
+        },
+        "primaryType": "Order",
+        "types": { "Order": order_type_entries() },
+        "message": message,
+    })
 }
 
 /// Full order returned by `GET /api/v1/orders/{uid}`. Flattens the
@@ -302,15 +355,13 @@ impl OrderKind {
 
     /// Parse the 32-byte on-chain marker (as returned by `GPv2Order.Data.kind`)
     /// into a Rust enum. Returns `None` for unknown markers; the contract
-    /// itself only ever writes `BUY` or `SELL`.
+    /// itself only ever writes `BUY` or `SELL`. The marker is derived as
+    /// `keccak256(as_str())` so the wire mapping has a single source of
+    /// truth rather than a re-pasted `b256!` table.
     pub fn from_contract_bytes(bytes: B256) -> Option<Self> {
-        if bytes == Self::BUY {
-            Some(Self::Buy)
-        } else if bytes == Self::SELL {
-            Some(Self::Sell)
-        } else {
-            None
-        }
+        [Self::Buy, Self::Sell]
+            .into_iter()
+            .find(|variant| bytes == keccak256(variant.as_str()))
     }
 }
 
@@ -344,18 +395,23 @@ impl SellTokenSource {
     pub const INTERNAL: B256 =
         b256!("4ac99ace14ee0a5ef932dc609df0943ab7ac16b7583634612f8dc35a4289a6ce");
 
-    /// Parse the on-chain `GPv2Order.Data.sellTokenBalance` marker.
-    /// Returns `None` for unknown values.
-    pub fn from_contract_bytes(bytes: B256) -> Option<Self> {
-        if bytes == Self::ERC20 {
-            Some(Self::Erc20)
-        } else if bytes == Self::EXTERNAL {
-            Some(Self::External)
-        } else if bytes == Self::INTERNAL {
-            Some(Self::Internal)
-        } else {
-            None
+    /// Lower-case wire form (`"erc20"` / `"external"` / `"internal"`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Erc20 => "erc20",
+            Self::External => "external",
+            Self::Internal => "internal",
         }
+    }
+
+    /// Parse the on-chain `GPv2Order.Data.sellTokenBalance` marker.
+    /// Returns `None` for unknown values. The marker is derived as
+    /// `keccak256(as_str())` so the wire mapping has a single source of
+    /// truth rather than a re-pasted `b256!` table.
+    pub fn from_contract_bytes(bytes: B256) -> Option<Self> {
+        [Self::Erc20, Self::External, Self::Internal]
+            .into_iter()
+            .find(|variant| bytes == keccak256(variant.as_str()))
     }
 }
 
@@ -371,23 +427,30 @@ pub enum BuyTokenDestination {
 }
 
 impl BuyTokenDestination {
-    /// `keccak256("erc20")`.
-    pub const ERC20: B256 =
-        b256!("5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9");
-    /// `keccak256("internal")`.
-    pub const INTERNAL: B256 =
-        b256!("4ac99ace14ee0a5ef932dc609df0943ab7ac16b7583634612f8dc35a4289a6ce");
+    /// `keccak256("erc20")`. Identical to [`SellTokenSource::ERC20`]: both
+    /// markers are `keccak256("erc20")`, so this aliases that constant
+    /// rather than re-pasting the literal.
+    pub const ERC20: B256 = SellTokenSource::ERC20;
+    /// `keccak256("internal")`. Identical to [`SellTokenSource::INTERNAL`];
+    /// aliases that constant rather than re-pasting the literal.
+    pub const INTERNAL: B256 = SellTokenSource::INTERNAL;
+
+    /// Lower-case wire form (`"erc20"` / `"internal"`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Erc20 => "erc20",
+            Self::Internal => "internal",
+        }
+    }
 
     /// Parse the on-chain `GPv2Order.Data.buyTokenBalance` marker.
-    /// Returns `None` for unknown values.
+    /// Returns `None` for unknown values. The marker is derived as
+    /// `keccak256(as_str())` so the wire mapping has a single source of
+    /// truth rather than a re-pasted `b256!` table.
     pub fn from_contract_bytes(bytes: B256) -> Option<Self> {
-        if bytes == Self::ERC20 {
-            Some(Self::Erc20)
-        } else if bytes == Self::INTERNAL {
-            Some(Self::Internal)
-        } else {
-            None
-        }
+        [Self::Erc20, Self::Internal]
+            .into_iter()
+            .find(|variant| bytes == keccak256(variant.as_str()))
     }
 }
 
@@ -773,6 +836,57 @@ mod tests {
             <eip712::Order as SolStruct>::eip712_type_hash(&sol_order),
             keccak256(signature),
         );
+    }
+
+    /// Locks the typed-data `types`."Order" table built by
+    /// [`order_typed_data`] against the canonical
+    /// `<eip712::Order as SolStruct>::eip712_root_type()` (field names and
+    /// Solidity types, in declaration order). If the `sol!` struct changes,
+    /// this trips rather than letting the JS-facing table silently drift.
+    #[test]
+    fn order_typed_data_table_matches_sol_struct() {
+        use alloy_sol_types::SolStruct;
+
+        let root = <eip712::Order as SolStruct>::eip712_root_type();
+        let expected: Vec<(&str, &str)> = root
+            .strip_prefix("Order(")
+            .and_then(|s| s.strip_suffix(')'))
+            .unwrap()
+            .split(',')
+            .map(|field| {
+                let (ty, name) = field.split_once(' ').unwrap();
+                (name, ty)
+            })
+            .collect();
+
+        let typed = order_typed_data(&sample_order(), 1, SETTLEMENT);
+        let table = typed["types"]["Order"].as_array().unwrap();
+        assert_eq!(table.len(), expected.len());
+        for (entry, (name, ty)) in table.iter().zip(expected) {
+            assert_eq!(entry["name"], name, "field name");
+            assert_eq!(entry["type"], ty, "field solidity type");
+        }
+    }
+
+    /// Pins the full [`order_typed_data`] envelope: the domain reuses the
+    /// `settlement_domain` constants, `verifyingContract` is the lower-case
+    /// address string, and a `None` receiver is materialised as
+    /// `address(0)` in the message.
+    #[test]
+    fn order_typed_data_envelope_shape() {
+        let mut order = sample_order();
+        order.receiver = None;
+        let typed = order_typed_data(&order, 1, SETTLEMENT);
+
+        assert_eq!(typed["domain"]["name"], crate::domain::DOMAIN_NAME);
+        assert_eq!(typed["domain"]["version"], crate::domain::DOMAIN_VERSION);
+        assert_eq!(typed["domain"]["chainId"], 1);
+        assert_eq!(typed["domain"]["verifyingContract"], SETTLEMENT.to_string());
+        assert_eq!(typed["primaryType"], "Order");
+        // EIP712Domain is intentionally absent from `types`.
+        assert!(typed["types"].get("EIP712Domain").is_none());
+        // Absent receiver materialises as address(0).
+        assert_eq!(typed["message"]["receiver"], Address::ZERO.to_string());
     }
 
     #[test]

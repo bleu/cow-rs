@@ -121,7 +121,9 @@ impl Debug for Signature {
 impl Signature {
     /// Build an empty signature payload for `scheme`. ECDSA variants
     /// get an all-zero (r, s, parity=false) sentinel; mirrors what the
-    /// orderbook accepts when a real signature is filled in later.
+    /// orderbook accepts when a real signature is filled in later. That
+    /// all-zero ECDSA value is a fill-in placeholder only: it is not a
+    /// recoverable signature, so do not pass it to [`Signature::recover`].
     pub fn empty_for(scheme: SigningScheme) -> Self {
         match scheme {
             SigningScheme::Eip712 => Self::Eip712(zero_ecdsa()),
@@ -291,6 +293,8 @@ pub fn ecdsa_recover<T: SolStruct>(
 }
 
 /// All-zero (r, s, parity=false) sentinel used by [`Signature::empty_for`].
+/// A fill-in placeholder only: it is not a recoverable signature, so it
+/// must never be passed to [`ecdsa_recover`] / [`Signature::recover`].
 fn zero_ecdsa() -> EcdsaSignature {
     PrimSignature::from_bytes_and_parity(&[0u8; 64], false)
 }

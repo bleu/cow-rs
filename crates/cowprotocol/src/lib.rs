@@ -142,13 +142,16 @@ pub use crate::{
         CoWSwapOnchainOrders, ERC20, GPV2_ORDER_TYPE_HASH, GPV2_SETTLEMENT, GPV2_VAULT_RELAYER,
         GPv2OrderData, GPv2Settlement, OnchainSignature, OnchainSigningScheme, WETH9,
     },
-    domain::{DomainSeparator, settlement_domain},
+    domain::{
+        DOMAIN_NAME, DOMAIN_VERSION, DomainSeparator, eip712_message_hash, settlement_domain,
+    },
     error::{ApiError, Error, Result},
     eth_flow::{ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowOrder},
     multiplexer::{Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof},
     order::{
         BUY_ETH_ADDRESS, BuyTokenDestination, Order, OrderClass, OrderData, OrderKind, OrderStatus,
-        OrderUid, OrderUidParseError, OrderUidParts, SellTokenSource, parse_order_uid,
+        OrderUid, OrderUidParseError, OrderUidParts, SellTokenSource, order_typed_data,
+        parse_order_uid,
     },
     order_book::{
         AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderCreation,

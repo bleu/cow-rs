@@ -10,6 +10,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::contracts::{GPV2_SETTLEMENT, GPV2_VAULT_RELAYER};
+use crate::domain::DomainSeparator;
 
 /// A chain supported by the CoW Protocol orderbook.
 ///
@@ -92,6 +93,14 @@ impl Chain {
     pub const fn vault_relayer(self) -> Address {
         let _ = self;
         GPV2_VAULT_RELAYER
+    }
+
+    /// EIP-712 [`DomainSeparator`] for this chain's settlement contract.
+    /// Convenience over [`crate::domain::settlement_domain`] so call sites
+    /// can write `chain.settlement_domain()` instead of threading
+    /// [`Chain::id`] and [`Chain::settlement`] in by hand.
+    pub fn settlement_domain(self) -> DomainSeparator {
+        crate::domain::settlement_domain(self.id(), self.settlement())
     }
 
     /// Production orderbook base URL, e.g. `https://api.cow.fi/mainnet/`.
