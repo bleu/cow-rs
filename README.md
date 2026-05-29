@@ -145,7 +145,7 @@ assert_eq!(uid.0.len(), 56);
 | `quote_amounts` | `compute()` (the partner-fee + protocol-fee + slippage composition the TS SDK uses, byte-for-byte against `cow-sdk` PR #867); fail-closed via `Error::QuoteFeeMathOverflow { stage }` on every intermediate |
 | `signature` | `Signature` (all four schemes), `EcdsaSignature`, `Recovered`, `SignatureError` |
 | `domain` | `DomainSeparator`, `hashed_eip712_message`, `hashed_ethsign_message` |
-| `chain` | `Chain` (eleven networks) with `orderbook_base_url`, `orderbook_barn_url`, `settlement`, `vault_relayer`, `subgraph_studio_url` |
+| `chain` | `Chain` (eleven networks) with `orderbook_base_url`, `orderbook_barn_url`, `settlement`, `vault_relayer`, `subgraph_gateway_deployment_id` |
 | `cancellation` | `SignedOrderCancellation` (single), `OrderCancellations` (collection), `SignedOrderCancellations` |
 | `app_data` | `AppDataHash`, `AppDataDoc` (canonical JSON + keccak digest), `AppDataCid` (IPFS CIDv1 derivation), `AppDataDoc::sdk_attribution` for the SDK's `appCode` tag |
 | `eth_flow` | `EthFlowOrder` (non-zero `receiver` enforced at construction), `ETH_FLOW_PRODUCTION`, `ETH_FLOW_STAGING` |

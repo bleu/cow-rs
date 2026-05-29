@@ -130,31 +130,26 @@ impl Chain {
         )
     }
 
-    /// CoW Protocol subgraph URL on The Graph Studio, mirroring
-    /// `cowdao_cowpy.subgraph.deployments.NETWORK_SUBGRAPH_IDS_MAP`.
+    /// CoW Protocol subgraph deployment id on The Graph's decentralised
+    /// network, mirroring `@cowprotocol/cow-sdk`'s
+    /// `SUBGRAPH_BASE_URL` deployment table
+    /// (`packages/subgraph/src/api.ts`).
     ///
-    /// Returns `None` for chains that do not have a published studio
-    /// deployment. Studio endpoints are best-effort: they suit
-    /// development and indexer-status pings, but the production path is
-    /// `gateway.thegraph.com` with an API key, which the caller wires
-    /// directly via [`crate::SubgraphClient::with_bearer_token`].
-    pub const fn subgraph_studio_url(self) -> Option<&'static str> {
+    /// Returns `None` for chains with no published deployment. Compose
+    /// the production URL as
+    /// `https://gateway.thegraph.com/api/subgraphs/id/<id>` and pass your
+    /// API key as a bearer token via
+    /// [`crate::SubgraphClient::with_bearer_token`]; the
+    /// [`crate::SubgraphClient::for_chain_gateway`] constructor does this
+    /// for you. These are CoW DAO's production deployment ids, not a
+    /// personal Graph Studio account.
+    pub const fn subgraph_gateway_deployment_id(self) -> Option<&'static str> {
         match self {
-            Self::Mainnet => Some(
-                "https://api.studio.thegraph.com/query/49707/cow-subgraph-mainnet/version/latest",
-            ),
-            Self::Gnosis => Some(
-                "https://api.studio.thegraph.com/query/49707/cow-subgraph-gnosis/version/latest",
-            ),
-            Self::ArbitrumOne => {
-                Some("https://api.studio.thegraph.com/query/49707/cow-subgraph-arb/version/latest")
-            }
-            Self::Base => {
-                Some("https://api.studio.thegraph.com/query/49707/cow-subgraph-base/version/latest")
-            }
-            Self::Sepolia => Some(
-                "https://api.studio.thegraph.com/query/49707/cow-subgraph-sepolia/version/latest",
-            ),
+            Self::Mainnet => Some("8mdwJG7YCSwqfxUbhCypZvoubeZcFVpCHb4zmHhvuKTD"),
+            Self::Gnosis => Some("HTQcP2gLuAy235CMNE8ApN4cbzpLVjjNxtCAUfpzRubq"),
+            Self::ArbitrumOne => Some("CQ8g2uJCjdAkUSNkVbd9oqqRP2GALKu1jJCD3fyY5tdc"),
+            Self::Base => Some("EYfBtJDj2thuBCVhdpYDpzfsWzDg3qzpEsitqMouU4Rg"),
+            Self::Sepolia => Some("31isonmztVX9ejBneP6SaVDQwEtyKCGBb3RTafB9Uf2y"),
             Self::Bnb
             | Self::Polygon
             | Self::Plasma

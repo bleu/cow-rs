@@ -26,8 +26,16 @@
 //! # Ok(()) }
 //! ```
 //!
-//! For dev work against The Graph Studio (free, less stable) the URL has
-//! the same shape: `https://api.studio.thegraph.com/query/<account>/<slug>/version/latest`.
+//! [`SubgraphClient::for_chain_gateway`] composes the production gateway
+//! URL from CoW DAO's deployment id for a chain and attaches the key:
+//!
+//! ```no_run
+//! use cowprotocol::{Chain, SubgraphClient};
+//! # async fn run() -> cowprotocol::Result<()> {
+//! let client = SubgraphClient::for_chain_gateway(Chain::Mainnet, "<key>").unwrap();
+//! let totals = client.totals().await?;
+//! # Ok(()) }
+//! ```
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -37,11 +45,11 @@ use crate::{
     order_book::{DEFAULT_HTTP_TIMEOUT, MAX_RESPONSE_BYTES},
 };
 
-/// Returned by [`SubgraphClient::for_chain_studio`] when the chain has no
-/// published Graph Studio deployment.
+/// Returned by [`SubgraphClient::for_chain_gateway`] when the chain has
+/// no published subgraph deployment.
 #[derive(Clone, Copy, Debug, thiserror::Error, Eq, PartialEq)]
 #[error(
-    "chain {0:?} has no published Graph Studio subgraph; pass a gateway URL via SubgraphClient::with_bearer_token"
+    "chain {0:?} has no published subgraph deployment; pass a gateway URL via SubgraphClient::with_bearer_token"
 )]
 pub struct ChainSubgraphUnavailable(pub Chain);
 
@@ -114,8 +122,9 @@ pub struct Totals {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyTotal {
-    /// Unix-second timestamp anchoring the day window.
-    pub timestamp: String,
+    /// Unix-second timestamp anchoring the day window. The schema types
+    /// this `Int!`, so The Graph serialises it as a JSON number.
+    pub timestamp: i64,
     /// Volume traded that day, in USD.
     #[serde(default)]
     pub volume_usd: Option<String>,
@@ -125,8 +134,9 @@ pub struct DailyTotal {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HourlyTotal {
-    /// Unix-second timestamp anchoring the hour window.
-    pub timestamp: String,
+    /// Unix-second timestamp anchoring the hour window. The schema types
+    /// this `Int!`, so The Graph serialises it as a JSON number.
+    pub timestamp: i64,
     /// Volume traded that hour, in USD.
     #[serde(default)]
     pub volume_usd: Option<String>,
@@ -233,19 +243,26 @@ impl SubgraphClient {
         }
     }
 
-    /// Build a client targeting The Graph Studio URL published for
-    /// `chain` (see [`Chain::subgraph_studio_url`]).
+    /// Build a client targeting CoW DAO's production subgraph on The
+    /// Graph's decentralised network for `chain`, authenticated with an
+    /// API key (see [`Chain::subgraph_gateway_deployment_id`]).
     ///
-    /// Studio is the developer endpoint and is rate-limited; production
-    /// callers should use [`SubgraphClient::with_bearer_token`] against
-    /// the gateway URL instead.
-    pub fn for_chain_studio(chain: Chain) -> std::result::Result<Self, ChainSubgraphUnavailable> {
-        let url = chain
-            .subgraph_studio_url()
+    /// The key is sent as an `Authorization: Bearer` header against
+    /// `https://gateway.thegraph.com/api/subgraphs/id/<id>`, so it never
+    /// appears in the URL path. Get a key from
+    /// <https://thegraph.com/studio/apikeys/>.
+    pub fn for_chain_gateway(
+        chain: Chain,
+        api_key: impl Into<String>,
+    ) -> std::result::Result<Self, ChainSubgraphUnavailable> {
+        let id = chain
+            .subgraph_gateway_deployment_id()
             .ok_or(ChainSubgraphUnavailable(chain))?;
-        Ok(Self::new(
-            url::Url::parse(url).expect("hard-coded studio URL"),
+        let url = url::Url::parse(&format!(
+            "https://gateway.thegraph.com/api/subgraphs/id/{id}"
         ))
+        .expect("hard-coded gateway URL");
+        Ok(Self::with_bearer_token(url, api_key))
     }
 
     /// The subgraph URL the client points at.
@@ -427,18 +444,18 @@ mod tests {
     #[test]
     fn daily_total_parses_canonical_response_row() {
         let raw = serde_json::json!({
-            "timestamp": "1700000000",
+            "timestamp": 1_700_000_000_i64,
             "volumeUsd": "42000000.42"
         });
         let row: DailyTotal = serde_json::from_value(raw).unwrap();
-        assert_eq!(row.timestamp, "1700000000");
+        assert_eq!(row.timestamp, 1_700_000_000);
         assert_eq!(row.volume_usd.as_deref(), Some("42000000.42"));
     }
 
     #[test]
     fn hourly_total_tolerates_null_volume() {
         let raw = serde_json::json!({
-            "timestamp": "1700000000",
+            "timestamp": 1_700_000_000_i64,
             "volumeUsd": null
         });
         let row: HourlyTotal = serde_json::from_value(raw).unwrap();
@@ -531,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn for_chain_studio_resolves_five_supported_chains() {
+    fn for_chain_gateway_resolves_five_supported_chains() {
         for chain in [
             Chain::Mainnet,
             Chain::Gnosis,
@@ -539,14 +556,18 @@ mod tests {
             Chain::Base,
             Chain::Sepolia,
         ] {
-            let client = SubgraphClient::for_chain_studio(chain).unwrap();
+            let id = chain.subgraph_gateway_deployment_id().unwrap();
+            let client = SubgraphClient::for_chain_gateway(chain, "test-key").unwrap();
             assert_eq!(client.url().scheme(), "https");
-            assert_eq!(client.url().host_str(), Some("api.studio.thegraph.com"));
+            assert_eq!(client.url().host_str(), Some("gateway.thegraph.com"));
+            // The key rides in the bearer header, not the path.
+            assert!(client.url().path().ends_with(id));
+            assert!(!client.url().path().contains("test-key"));
         }
     }
 
     #[test]
-    fn for_chain_studio_rejects_chains_without_studio_deployment() {
+    fn for_chain_gateway_rejects_chains_without_deployment() {
         for chain in [
             Chain::Bnb,
             Chain::Polygon,
@@ -555,7 +576,7 @@ mod tests {
             Chain::Ink,
             Chain::Linea,
         ] {
-            let err = SubgraphClient::for_chain_studio(chain).unwrap_err();
+            let err = SubgraphClient::for_chain_gateway(chain, "test-key").unwrap_err();
             assert_eq!(err, ChainSubgraphUnavailable(chain));
         }
     }

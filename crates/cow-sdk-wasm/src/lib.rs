@@ -131,8 +131,8 @@ fn endpoint(chain: Chain, path: &str) -> String {
 // ===== Pure-compute helpers ============================================
 
 /// Per-chain config: numeric id, settlement / vault-relayer / ETH-flow
-/// contract addresses, orderbook (prod and barn) URLs, subgraph URL,
-/// and ComposableCoW support flag.
+/// contract addresses, orderbook (prod and barn) URLs, subgraph gateway
+/// deployment id, and ComposableCoW support flag.
 #[wasm_bindgen]
 pub fn chain_info(chain: &str) -> Result<JsValue, JsValue> {
     let c = parse_chain(chain)?;
@@ -142,7 +142,7 @@ pub fn chain_info(chain: &str) -> Result<JsValue, JsValue> {
         "vaultRelayer": c.vault_relayer().to_string(),
         "orderbookBaseUrl": c.orderbook_base_url().to_string(),
         "orderbookBarnUrl": c.orderbook_barn_url().map(|u| u.to_string()),
-        "subgraphStudioUrl": c.subgraph_studio_url().map(|u| u.to_string()),
+        "subgraphGatewayDeploymentId": c.subgraph_gateway_deployment_id(),
         "supportsComposableCow": c.supports_composable_cow(),
         "composableCow": c.composable_cow_address().map(|a| a.to_string()),
         "extensibleFallbackHandler": c.extensible_fallback_handler_address().map(|a| a.to_string()),
