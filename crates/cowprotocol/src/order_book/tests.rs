@@ -1,11 +1,25 @@
-use crate::app_data::{EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON};
+use crate::app_data::{AppDataHash, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON};
+use crate::error::Error;
+use crate::order::{BuyTokenDestination, OrderKind, SellTokenSource};
+use crate::signature::Signature;
 // Imported directly rather than via `super::*` because the
 // module-level re-export is gated behind `http-client`; the
 // signing tests below need it regardless of that feature.
-use crate::signing_scheme::EcdsaSigningScheme;
+use crate::signing_scheme::{EcdsaSigningScheme, SigningScheme};
 
 use super::*;
-use alloy_primitives::address;
+use alloy_primitives::{Address, U256, address};
+// Internal client helpers exercised below; gated with the client
+// module itself so the non-`http-client` test build does not import
+// items that no longer exist.
+#[cfg(feature = "http-client")]
+use super::client::OrdersByUidsRequest;
+#[cfg(all(feature = "http-client", not(target_arch = "wasm32")))]
+use super::client::read_capped_body;
+#[cfg(feature = "http-client")]
+use crate::chain::Chain;
+#[cfg(feature = "http-client")]
+use crate::order::OrderUid;
 
 /// Token addresses used by [`fixture_quote_request`]: USDC and DAI on
 /// Ethereum mainnet.
