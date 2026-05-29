@@ -88,9 +88,20 @@ pub enum Signature {
     Eip712(EcdsaSignature),
     /// EIP-191 personal-sign over the EIP-712 hash.
     EthSign(EcdsaSignature),
-    /// EIP-1271 contract signature payload.
+    /// EIP-1271 contract signature payload, in the **orderbook wire
+    /// form**: the raw verifier bytes only. The orderbook re-prepends the
+    /// owner from [`OrderCreation::from`](crate::OrderCreation) before
+    /// settlement. This is *not* the on-chain calldata form:
+    /// `GPv2Signing.recoverEip1271Signer` expects
+    /// `abi.encodePacked(owner, signature)` (owner in the first 20
+    /// bytes), so feeding these bytes straight into
+    /// `GPv2Settlement.settle()` yields a malformed signature.
     Eip1271(Vec<u8>),
-    /// On-chain pre-signature via `GPv2Signing::setPreSignature`.
+    /// On-chain pre-signature via `GPv2Signing::setPreSignature`. The
+    /// orderbook wire form is an empty payload (the owner is carried on
+    /// the order); the on-chain calldata form is the 20-byte owner
+    /// address (`GPv2Signing.sol` requires `length == 20`).
+    /// [`Signature::from_bytes`] accepts both.
     PreSign,
 }
 
