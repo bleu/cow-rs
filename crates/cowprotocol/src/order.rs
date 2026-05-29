@@ -557,6 +557,11 @@ mod tests {
             hex!("d5a25ba2e97094ad7d83dc28a6572da797d6b3e7fc6663bd93efb789fc17e489"),
             "Order(...) typeHash must match the GPv2Settlement-verified value",
         );
+        // The exported constant must equal the derived type hash.
+        assert_eq!(
+            crate::contracts::GPV2_ORDER_TYPE_HASH,
+            <eip712::Order as SolStruct>::eip712_type_hash(&sol_order),
+        );
     }
 
     /// Locks the `settlement_domain` separator against ethers

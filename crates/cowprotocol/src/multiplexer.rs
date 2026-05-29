@@ -24,7 +24,7 @@
 //!
 //! Reference: [`MerkleProof.verify`][oz] in OpenZeppelin Contracts and the
 //! invocation site in
-//! [`ComposableCoW._auth`](https://github.com/nullislabs/composable-cow/blob/main/src/ComposableCoW.sol).
+//! [`ComposableCoW._auth`](https://github.com/cowprotocol/composable-cow/blob/main/src/ComposableCoW.sol).
 //!
 //! [oz]: https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/cryptography/MerkleProof.sol
 
@@ -84,10 +84,20 @@ pub enum MultiplexerError {
 impl Multiplexer {
     /// Construct a tree from leaves derived via [`conditional_order_leaf`].
     ///
-    /// At each level pairs of nodes are combined with `hash_pair`; an
-    /// odd trailing node is carried up unmodified. Matches OZ's
-    /// `StandardMerkleTree` JS algorithm and the on-chain verifier's
-    /// implicit expectations.
+    /// At each level pairs of nodes are combined with the commutative
+    /// `hash_pair`; an odd trailing node is carried up unmodified, and
+    /// input leaf order is preserved.
+    ///
+    /// The proofs this produces verify against the on-chain
+    /// `MerkleProof.verify` (which is order-agnostic), and
+    /// [`verify_proof`] round-trips them. It is **not** byte-equal to the
+    /// JS SDK's root, though: `@openzeppelin/merkle-tree`'s
+    /// `StandardMerkleTree` (used by `cow-sdk`'s `Multiplexer`) sorts
+    /// leaves by hash and lays out a complete binary tree, so
+    /// [`Multiplexer::root`] will differ from a JS-derived root over the
+    /// same orders. Do not cross-publish a `(leaves, root, proofs)` blob
+    /// and expect a JS consumer to re-derive the same root; ship the
+    /// proofs themselves, which verify on either side.
     pub fn new(leaves: &[B256]) -> Result<Self, MultiplexerError> {
         if leaves.is_empty() {
             return Err(MultiplexerError::Empty);

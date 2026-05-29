@@ -48,7 +48,7 @@
 //! layout: callers that need the EIP-712 view should use
 //! [`crate::OrderData`] instead.
 
-use alloy_primitives::{Address, address};
+use alloy_primitives::{Address, B256, address, b256};
 use alloy_sol_types::sol;
 
 /// Deployment address of the `GPv2Settlement` singleton.
@@ -66,6 +66,15 @@ pub const GPV2_SETTLEMENT: Address = address!("9008D19f58AAbD9eD0D60971565AA8510
 /// Identical on every chain CoW Protocol supports. Source:
 /// `cow-protocol/reference/contracts/core.mdx`.
 pub const GPV2_VAULT_RELAYER: Address = address!("C92E8bdf79f0507f65a392b0ab4667716BFE0110");
+
+/// `GPv2Order.TYPE_HASH`: the EIP-712 type hash of the order struct,
+/// `keccak256("Order(address sellToken,...)")`. The on-chain value
+/// hard-coded in `GPv2Order.sol`, also passed to `safeSignature` when
+/// assembling a ComposableCoW EIP-1271 blob (see
+/// [`crate::composable::safe_handler_signature`]). Locked against the
+/// derived `eip712_type_hash` by the test in `crate::order`.
+pub const GPV2_ORDER_TYPE_HASH: B256 =
+    b256!("d5a25ba2e97094ad7d83dc28a6572da797d6b3e7fc6663bd93efb789fc17e489");
 
 sol! {
     /// The 12-field on-chain order struct verified by `GPv2Settlement`.

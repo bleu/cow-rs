@@ -134,12 +134,13 @@ pub use crate::{
     chain::{Chain, UnsupportedChain},
     composable::{
         COMPOSABLE_COW, CURRENT_BLOCK_TIMESTAMP_FACTORY, ComposableCoW, ConditionalOrderParams,
-        EXTENSIBLE_FALLBACK_HANDLER, PollOutcome, Proof, TWAP_HANDLER, TwapData, TwapDuration,
-        TwapError, TwapStart, TwapStaticInput,
+        EXTENSIBLE_FALLBACK_HANDLER, PayloadStruct, PollOutcome, Proof, TWAP_HANDLER, TwapData,
+        TwapDuration, TwapError, TwapStart, TwapStaticInput, forwarder_signature,
+        safe_handler_signature,
     },
     contracts::{
-        CoWSwapOnchainOrders, ERC20, GPV2_SETTLEMENT, GPV2_VAULT_RELAYER, GPv2OrderData,
-        GPv2Settlement, OnchainSignature, OnchainSigningScheme, WETH9,
+        CoWSwapOnchainOrders, ERC20, GPV2_ORDER_TYPE_HASH, GPV2_SETTLEMENT, GPV2_VAULT_RELAYER,
+        GPv2OrderData, GPv2Settlement, OnchainSignature, OnchainSigningScheme, WETH9,
     },
     domain::{DomainSeparator, settlement_domain},
     error::{ApiError, Error, Result},
