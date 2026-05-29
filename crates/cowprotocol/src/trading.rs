@@ -175,6 +175,17 @@ impl TradingClient {
         let app_data_hash = params.app_data.try_hash()?;
         let app_data_json = params.app_data.canonical_json();
 
+        // Cheap precondition on the caller's params: fail fast before the
+        // quote round-trip, consistent with the oversize-app-data guard.
+        if params.request.from == Address::ZERO {
+            return Err(Error::OrderCreationInvalid {
+                field: "from",
+                reason: "QuoteRequest.from must be the order owner; \
+                         TradingClient does not infer it from the signer",
+            });
+        }
+        let from = params.request.from;
+
         let quote = self.api.quote(&params.request).await?;
 
         let order_data = quote.try_into_signed_order_data_with_costs(
@@ -189,15 +200,6 @@ impl TradingClient {
         let signature = order_data
             .sign(params.scheme, &domain, signer)
             .map_err(Error::Signature)?;
-
-        if params.request.from == Address::ZERO {
-            return Err(Error::OrderCreationInvalid {
-                field: "from",
-                reason: "QuoteRequest.from must be the order owner; \
-                         TradingClient does not infer it from the signer",
-            });
-        }
-        let from = params.request.from;
 
         let body = OrderCreation::from_signed_order_data(
             &order_data,

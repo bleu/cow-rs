@@ -11,8 +11,7 @@
 use alloy_primitives::{Address, U256, address};
 use alloy_signer_local::PrivateKeySigner;
 use cowprotocol::{
-    AppDataDoc, Chain, EcdsaSigningScheme, OrderBookApi, OrderKind, QuoteRequest, SwapOrder,
-    TradingClient,
+    AppDataDoc, Chain, EcdsaSigningScheme, OrderBookApi, QuoteRequest, SwapOrder, TradingClient,
 };
 use serde_json::{Value, json};
 use wiremock::{
@@ -118,13 +117,14 @@ async fn post_swap_order_lowers_buy_amount_when_protocol_fee_compounds_with_part
 
     // The request's fixed leg is bound against the quote: `sell_after_fee`
     // must equal the mocked `sellAmount` (1e18).
-    let mut request = QuoteRequest::sell_after_fee(
+    // `sell_after_fee` already pins `kind = Sell`; the fixed leg
+    // (`sell_after_fee` = 1e18) is bound against the mocked `sellAmount`.
+    let request = QuoteRequest::sell_after_fee(
         USDC,
         DAI,
         signer_addr,
         U256::from(1_000_000_000_000_000_000u128),
     );
-    request.kind = OrderKind::Sell;
 
     let order = SwapOrder {
         request,
