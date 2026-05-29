@@ -35,6 +35,14 @@ pub enum Chain {
     /// Avalanche C-Chain (chain id 43114).
     Avalanche = 43_114,
     /// Ink (chain id 57073).
+    ///
+    /// Unlike the other settlement chains, Ink is not enumerated in
+    /// upstream `cowprotocol/contracts/networks.json`, nor is its
+    /// `GPv2Settlement` deployment cross-confirmable via an eth-flow
+    /// `deployment.prod.json`. Treat [`Chain::settlement`] on Ink as
+    /// best-effort until confirmed on a block explorer; the RPC-gated
+    /// `settlement_and_vault_relayer_are_deployed_on_every_configured_chain`
+    /// probe in `tools/chain-probe` is the canonical on-chain check.
     Ink = 57_073,
     /// Linea (chain id 59144).
     Linea = 59_144,
