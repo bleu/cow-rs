@@ -42,8 +42,11 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::{
     chain::Chain,
     error::{Error, Result},
-    order_book::{DEFAULT_HTTP_TIMEOUT, MAX_RESPONSE_BYTES},
+    order_book::MAX_RESPONSE_BYTES,
 };
+// Only consumed by `ClientBuilder::timeout`, which is gated out on wasm.
+#[cfg(not(target_arch = "wasm32"))]
+use crate::order_book::DEFAULT_HTTP_TIMEOUT;
 
 /// Returned by [`SubgraphClient::for_chain_gateway`] when the chain has
 /// no published subgraph deployment.

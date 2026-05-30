@@ -15,12 +15,15 @@ use crate::order::{Order, OrderUid};
 use crate::signature::{EcdsaSignature, ecdsa_wire};
 use crate::signing_scheme::EcdsaSigningScheme;
 
+use super::MAX_RESPONSE_BYTES;
 use super::orders::OrderCreation;
 use super::quote::{OrderQuoteResponse, QuoteRequest};
 use super::types::{
     AppDataDocument, Auction, AuctionStatus, NativePrice, TokenMetadata, TotalSurplus, Trade,
 };
-use super::{DEFAULT_HTTP_TIMEOUT, MAX_RESPONSE_BYTES};
+// Only consumed by `ClientBuilder::timeout`, which is gated out on wasm.
+#[cfg(not(target_arch = "wasm32"))]
+use super::DEFAULT_HTTP_TIMEOUT;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
