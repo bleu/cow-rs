@@ -352,7 +352,10 @@ impl SubgraphClient {
         let status = response.status();
         let text = read_capped_text(response).await?;
         if !status.is_success() {
-            return Err(Error::UnexpectedStatus { status, body: text });
+            return Err(Error::UnexpectedStatus {
+                status: status.as_u16(),
+                body: text,
+            });
         }
         let envelope: Envelope<TData> = serde_json::from_str(&text)?;
         if !envelope.errors.is_empty() {

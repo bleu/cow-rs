@@ -13,7 +13,7 @@ use alloy_primitives::{Address, U256, address};
 // module itself so the non-`http-client` test build does not import
 // items that no longer exist.
 #[cfg(feature = "http-client")]
-use super::client::OrdersByUidsRequest;
+use super::api::OrdersByUidsRequest;
 #[cfg(all(feature = "http-client", not(target_arch = "wasm32")))]
 use super::client::read_capped_body;
 #[cfg(feature = "http-client")]

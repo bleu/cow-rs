@@ -32,8 +32,6 @@ pub enum Error {
     UnsupportedChain(#[from] UnsupportedChain),
 
     /// The CoW orderbook responded with a structured error envelope.
-    /// Only present when the `http-client` feature is enabled.
-    #[cfg(feature = "http-client")]
     #[error("orderbook error ({}{}): {}",
         api.error_type,
         api.data.as_ref().map(|_| ", +data").unwrap_or(""),
@@ -41,18 +39,16 @@ pub enum Error {
     )]
     OrderbookApi {
         /// HTTP status returned with the error.
-        status: reqwest::StatusCode,
+        status: u16,
         /// Decoded `ApiError` body.
         api: ApiError,
     },
 
     /// The orderbook returned a non-2xx status with an unparseable body.
-    /// Only present when the `http-client` feature is enabled.
-    #[cfg(feature = "http-client")]
     #[error("unexpected orderbook status {status}: {body}")]
     UnexpectedStatus {
         /// HTTP status.
-        status: reqwest::StatusCode,
+        status: u16,
         /// Raw body verbatim.
         body: String,
     },

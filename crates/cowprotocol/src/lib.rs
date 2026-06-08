@@ -104,7 +104,7 @@ pub use cowprotocol_appdata::app_data;
 pub use cowprotocol_orderbook::subgraph;
 #[cfg(feature = "http-client")]
 pub use cowprotocol_orderbook::trading;
-pub use cowprotocol_orderbook::{error, order_book, quote_amounts};
+pub use cowprotocol_orderbook::{error, order_book, quote_amounts, transport};
 pub use cowprotocol_primitives::{chain, composable, contracts, domain, multiplexer};
 pub use cowprotocol_signing::{cancellation, order, signature, signing_scheme};
 
@@ -140,8 +140,8 @@ pub use crate::{
         parse_order_uid,
     },
     order_book::{
-        AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderCreation,
-        OrderQuote, OrderQuoteResponse, PriceQuality, QuoteAppData, QuoteRequest,
+        AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderBookApi,
+        OrderCreation, OrderQuote, OrderQuoteResponse, PriceQuality, QuoteAppData, QuoteRequest,
         QuoteRequestBuilder, TokenMetadata, TotalSurplus, Trade,
     },
     quote_amounts::{
@@ -152,11 +152,13 @@ pub use crate::{
         parse_ecdsa, sign_ecdsa,
     },
     signing_scheme::{EcdsaSigningScheme, SigningScheme},
+    transport::{HttpMethod, HttpRequest, HttpResponse, HttpTransport},
 };
 
 #[cfg(feature = "http-client")]
 pub use crate::order_book::{
-    OrderBookApi, OrderBookApiBuilder, OrderBookQuoteBuilder, QuotedOrder, SignedOrderSubmission,
+    OrderBookApiBuilder, OrderBookQuoteBuilder, QuotedOrder, ReqwestTransport,
+    SignedOrderSubmission,
 };
 
 #[cfg(feature = "http-client")]

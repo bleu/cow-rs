@@ -31,11 +31,15 @@ pub use quote::*;
 mod orders;
 pub use orders::OrderCreation;
 
+mod api;
+pub use api::OrderBookApi;
+
 #[cfg(feature = "http-client")]
 mod client;
 #[cfg(feature = "http-client")]
 pub use client::{
-    OrderBookApi, OrderBookApiBuilder, OrderBookQuoteBuilder, QuotedOrder, SignedOrderSubmission,
+    OrderBookApiBuilder, OrderBookQuoteBuilder, QuotedOrder, ReqwestTransport,
+    SignedOrderSubmission,
 };
 
 #[cfg(test)]

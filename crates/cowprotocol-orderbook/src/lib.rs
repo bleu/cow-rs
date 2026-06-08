@@ -23,23 +23,25 @@ pub mod quote_amounts;
 pub mod subgraph;
 #[cfg(feature = "http-client")]
 pub mod trading;
+pub mod transport;
 
 pub use self::{
     error::{ApiError, Error, Result},
     order_book::{
-        AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderCreation,
-        OrderQuote, OrderQuoteResponse, PriceQuality, QuoteAppData, QuoteRequest,
+        AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderBookApi,
+        OrderCreation, OrderQuote, OrderQuoteResponse, PriceQuality, QuoteAppData, QuoteRequest,
         QuoteRequestBuilder, TokenMetadata, TotalSurplus, Trade,
     },
     quote_amounts::{
         Amounts as QuoteAmounts, QuoteAmountsAndCosts, QuoteAmountsParams, QuoteCosts,
     },
+    transport::{HttpMethod, HttpRequest, HttpResponse, HttpTransport},
 };
 
 #[cfg(feature = "http-client")]
 pub use self::{
     order_book::{
-        OrderBookApi, OrderBookApiBuilder, OrderBookQuoteBuilder, QuotedOrder,
+        OrderBookApiBuilder, OrderBookQuoteBuilder, QuotedOrder, ReqwestTransport,
         SignedOrderSubmission,
     },
     trading::{PostedSwapOrder, SwapOrder, TradingClient},
