@@ -1017,18 +1017,15 @@ dependencies = [
  "alloy-signer-local",
  "const-hex",
  "cowprotocol-appdata",
+ "cowprotocol-orderbook",
  "cowprotocol-primitives",
  "cowprotocol-signing",
  "getrandom 0.2.17",
  "hex-literal",
  "http",
  "reqwest",
- "serde",
  "serde_json",
- "serde_with",
- "thiserror",
  "tokio",
- "url",
  "wiremock",
 ]
 
@@ -1050,6 +1047,25 @@ dependencies = [
 [[package]]
 name = "cowprotocol-orderbook"
 version = "1.0.0-alpha.3"
+dependencies = [
+ "alloy-primitives",
+ "alloy-signer",
+ "alloy-signer-local",
+ "const-hex",
+ "cowprotocol-appdata",
+ "cowprotocol-primitives",
+ "cowprotocol-signing",
+ "hex-literal",
+ "http",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "thiserror",
+ "tokio",
+ "url",
+ "wiremock",
+]
 
 [[package]]
 name = "cowprotocol-primitives"

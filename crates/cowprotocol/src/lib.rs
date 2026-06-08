@@ -104,16 +104,14 @@
 #[cfg(target_arch = "wasm32")]
 use getrandom as _;
 
-pub mod error;
 pub mod eth_flow;
-pub mod order_book;
-pub mod quote_amounts;
-#[cfg(feature = "subgraph")]
-pub mod subgraph;
-#[cfg(feature = "http-client")]
-pub mod trading;
 
 pub use cowprotocol_appdata::app_data;
+#[cfg(feature = "subgraph")]
+pub use cowprotocol_orderbook::subgraph;
+#[cfg(feature = "http-client")]
+pub use cowprotocol_orderbook::trading;
+pub use cowprotocol_orderbook::{error, order_book, quote_amounts};
 pub use cowprotocol_primitives::{chain, composable, contracts, domain, multiplexer};
 pub use cowprotocol_signing::{cancellation, order, signature, signing_scheme};
 

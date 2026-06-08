@@ -22,40 +22,34 @@ default = ["http-client", "subgraph"]
 # and signing-only consumers (PG extension via pgrx, FFI shim,
 # embedded context, etc.) disable it to drop `reqwest` and its
 # transitive graph from the build.
-http-client = ["dep:reqwest"]
+http-client = ["cowprotocol-orderbook/http-client"]
 # `subgraph` enables the GraphQL client. It depends on `http-client`
 # because the subgraph executor uses `reqwest` internally.
-subgraph = ["http-client"]
+subgraph = ["http-client", "cowprotocol-orderbook/subgraph"]
 
 [dependencies]
 alloy-primitives.workspace = true
-alloy-signer.workspace = true
 cowprotocol-appdata = { version = "1.0.0-alpha.3", path = "../cowprotocol-appdata" }
+cowprotocol-orderbook = { version = "1.0.0-alpha.3", path = "../cowprotocol-orderbook", default-features = false }
 cowprotocol-primitives = { version = "1.0.0-alpha.3", path = "../cowprotocol-primitives" }
 cowprotocol-signing = { version = "1.0.0-alpha.3", path = "../cowprotocol-signing" }
-serde = { workspace = true }
-serde_json.workspace = true
-serde_with.workspace = true
-thiserror.workspace = true
-url.workspace = true
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-reqwest = { workspace = true, features = ["rustls-tls"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-reqwest = { workspace = true, optional = true }
 # Wires alloy's PRNG into the browser's `crypto.getRandomValues`; this
 # is signing-only, not HTTP-only, so it stays outside the `http-client`
 # gate.
 getrandom = { workspace = true, features = ["js"] }
 
 [dev-dependencies]
+alloy-signer.workspace = true
 alloy-signer-local.workspace = true
 const-hex.workspace = true
 hex-literal.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+reqwest = { workspace = true, features = ["rustls-tls"] }
 wiremock.workspace = true
 # Builds a `reqwest::Response` from an in-memory body with no
 # `Content-Length` header, to exercise the streaming response cap.

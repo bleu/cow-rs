@@ -237,7 +237,7 @@ fn chain_base_url_composes_correctly() {
 /// response). Catches any drift in the wire schema.
 #[test]
 fn deserialise_mainnet_quote_fixture() {
-    let body = include_str!("../../tests/fixtures/quote-mainnet.json");
+    let body = include_str!("../../../cowprotocol/tests/fixtures/quote-mainnet.json");
     let response: OrderQuoteResponse = serde_json::from_str(body).unwrap();
     assert_eq!(response.from, OWNER);
     assert!(response.verified);
@@ -256,7 +256,10 @@ fn deserialise_mainnet_quote_fixture() {
 }
 
 fn load_mainnet_quote() -> OrderQuoteResponse {
-    serde_json::from_str(include_str!("../../tests/fixtures/quote-mainnet.json")).unwrap()
+    serde_json::from_str(include_str!(
+        "../../../cowprotocol/tests/fixtures/quote-mainnet.json"
+    ))
+    .unwrap()
 }
 
 /// `try_into_signed_order_data` for a sell-side quote adds `feeAmount` back

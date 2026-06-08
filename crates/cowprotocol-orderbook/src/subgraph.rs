@@ -14,8 +14,8 @@
 //! and the bearer token directly:
 //!
 //! ```no_run
-//! use cowprotocol::SubgraphClient;
-//! # async fn run() -> cowprotocol::Result<()> {
+//! use cowprotocol_orderbook::SubgraphClient;
+//! # async fn run() -> cowprotocol_orderbook::Result<()> {
 //! let client = SubgraphClient::new(
 //!     "https://gateway.thegraph.com/api/<key>/subgraphs/id/<id>"
 //!         .parse()
@@ -30,8 +30,8 @@
 //! URL from CoW DAO's deployment id for a chain and attaches the key:
 //!
 //! ```no_run
-//! use cowprotocol::{Chain, SubgraphClient};
-//! # async fn run() -> cowprotocol::Result<()> {
+//! use cowprotocol_orderbook::{Chain, SubgraphClient};
+//! # async fn run() -> cowprotocol_orderbook::Result<()> {
 //! let client = SubgraphClient::for_chain_gateway(Chain::Mainnet, "<key>").unwrap();
 //! let totals = client.totals().await?;
 //! # Ok(()) }

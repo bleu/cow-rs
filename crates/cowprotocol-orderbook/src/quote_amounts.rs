@@ -168,7 +168,7 @@ pub struct QuoteAmountsParams<'a> {
 ///
 /// ```
 /// use alloy_primitives::U256;
-/// use cowprotocol::{OrderKind, quote_amounts};
+/// use cowprotocol_orderbook::{OrderKind, quote_amounts};
 ///
 /// let res = quote_amounts::compute(quote_amounts::QuoteAmountsParams {
 ///     kind: OrderKind::Sell,

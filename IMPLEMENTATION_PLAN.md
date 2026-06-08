@@ -20,7 +20,7 @@
 **Goal**: Move quote/order DTOs, orderbook HTTP client, quote amount math, and trading helpers into `cowprotocol-orderbook`.
 **Success Criteria**: `cowprotocol-orderbook` owns the HTTP feature gates and quote-builder flow, while the `cowprotocol` crate remains the common meta entry point.
 **Tests**: `NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 cargo +1.91.1 test -p cowprotocol-orderbook`; `cargo +1.91.1 check -p cowprotocol --no-default-features`
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: Final Facade And WASM Integration
 **Goal**: Make `cowprotocol` a cfg-gated meta crate with a small prelude over the domain crates, and update WASM/tooling dependencies to consume the new boundaries.

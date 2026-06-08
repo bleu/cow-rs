@@ -16,4 +16,35 @@ categories = ["cryptography::cryptocurrencies", "api-bindings"]
 [lints]
 workspace = true
 
+[features]
+default = ["http-client", "subgraph"]
+http-client = ["dep:reqwest"]
+subgraph = ["http-client"]
+
 [dependencies]
+alloy-primitives.workspace = true
+alloy-signer.workspace = true
+cowprotocol-appdata = { version = "1.0.0-alpha.3", path = "../cowprotocol-appdata" }
+cowprotocol-primitives = { version = "1.0.0-alpha.3", path = "../cowprotocol-primitives" }
+cowprotocol-signing = { version = "1.0.0-alpha.3", path = "../cowprotocol-signing" }
+serde.workspace = true
+serde_json.workspace = true
+serde_with.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { workspace = true, features = ["rustls-tls"], optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+alloy-signer-local.workspace = true
+const-hex.workspace = true
+hex-literal.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+wiremock.workspace = true
+http = "1"
