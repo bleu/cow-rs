@@ -97,14 +97,12 @@
 #![warn(missing_docs, rustdoc::missing_crate_level_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 
-pub mod eth_flow;
-
 pub use cowprotocol_appdata::app_data;
 #[cfg(feature = "subgraph")]
 pub use cowprotocol_orderbook::subgraph;
 #[cfg(feature = "http-client")]
 pub use cowprotocol_orderbook::trading;
-pub use cowprotocol_orderbook::{error, order_book, quote_amounts, transport};
+pub use cowprotocol_orderbook::{error, eth_flow, order_book, quote_amounts, transport};
 pub use cowprotocol_primitives::{chain, composable, contracts, domain, multiplexer};
 pub use cowprotocol_signing::{cancellation, order, signature, signing_scheme};
 

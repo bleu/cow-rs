@@ -17,6 +17,7 @@ pub use cowprotocol_signing::{
 };
 
 pub mod error;
+pub mod eth_flow;
 pub mod order_book;
 pub mod quote_amounts;
 #[cfg(feature = "subgraph")]
@@ -27,6 +28,7 @@ pub mod transport;
 
 pub use self::{
     error::{ApiError, Error, Result},
+    eth_flow::{ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowOrder},
     order_book::{
         AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderBookApi,
         OrderCreation, OrderQuote, OrderQuoteResponse, PriceQuality, QuoteAppData, QuoteRequest,
