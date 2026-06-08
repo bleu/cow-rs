@@ -28,14 +28,13 @@ default = []
 in_shim_signing = ["dep:alloy-signer-local"]
 
 [dependencies]
-# `default-features = false` drops both the `http-client` (orderbook +
-# trading) and `subgraph` GraphQL clients from cowprotocol. Neither is
-# reachable from the JS bindings: the shim talks to the orderbook via
-# the JS `fetch` global (see `src/transport.rs`), so `reqwest` is never
-# linked into the wasm binary. The data types those clients consume
-# (`OrderCreation`, `OrderQuoteResponse`, `QuoteRequest`, `Trade`, ...)
-# live outside the feature gate, so they remain available here.
-cowprotocol = { path = "../cowprotocol", version = "1.0.0-alpha.2", default-features = false }
+# `default-features = false` drops the orderbook/trading HTTP client and
+# subgraph GraphQL client from the `cowprotocol` facade. The shim talks
+# to the orderbook via the JS `fetch` global (see `src/transport.rs`),
+# so `reqwest` is never linked into the wasm binary. The DTOs those
+# endpoints consume (`OrderCreation`, `OrderQuoteResponse`,
+# `QuoteRequest`, `Trade`, ...) remain available through the facade.
+cowprotocol = { path = "../cowprotocol", version = "1.0.0-alpha.3", default-features = false }
 alloy-primitives.workspace = true
 alloy-signer-local = { workspace = true, optional = true }
 serde.workspace = true

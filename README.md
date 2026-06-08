@@ -46,7 +46,7 @@ every protocol-critical path byte-for-byte against
 
 ```toml
 [dependencies]
-cowprotocol = "1.0.0-alpha.1"
+cowprotocol = "1.0.0-alpha.3"
 ```
 
 The crate is published as `cowprotocol` on crates.io (the `cow-rs` name was already taken on
@@ -310,8 +310,9 @@ workspace `[profile.release]`):
 - `[profile.release]`: `lto = "fat"`, `opt-level = "z"`,
   `panic = "abort"`, `strip = true`. Workspace-only — crates.io
   consumers use their own profile.
-- `cowprotocol = { default-features = false }`: drops the `subgraph`
-  GraphQL client; not reachable from JS.
+- `cowprotocol = { default-features = false }`: drops the
+  orderbook/trading HTTP client and `subgraph` GraphQL client while
+  keeping quote/order DTOs available through the facade.
 - `lol_alloc` global allocator (~5 KB vs dlmalloc's ~10 KB). Active by
   default — `mod allocator;` is wired in at the top of the wasm crate's
   `lib.rs`.
@@ -322,11 +323,9 @@ workspace `[profile.release]`):
   `build_order_creation`.
 - **No reqwest in the wasm output**: HTTP-touching exports
   (`get_quote`, `post_order`, etc.) call the JS `fetch` global directly
-  via `js_sys::Reflect`, side-stepping reqwest's 150 KB bundle. With
-  `lto = "fat"` the linker drops reqwest from the wasm binary because
-  no wasm-bindgen export reaches it. Cowprotocol stays unchanged — the
-  same crate continues to ship reqwest-backed `OrderBookApi` for
-  native consumers.
+  via `js_sys::Reflect`, side-stepping reqwest's 150 KB bundle. The
+  meta crate still exposes the reqwest-backed `OrderBookApi` for native
+  consumers behind its default `http-client` feature.
 
 Current `.wasm` after `wasm-opt -Oz`:
 

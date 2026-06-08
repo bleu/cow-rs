@@ -27,6 +27,13 @@ serde_json.workspace = true
 serde_with.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Wires alloy's signing PRNG into the browser's
+# `crypto.getRandomValues` via `getrandom/js`. This belongs with the
+# signing crate so direct `cowprotocol-signing` wasm consumers work
+# without the meta crate.
+getrandom = { workspace = true, features = ["js"] }
+
 [dev-dependencies]
 alloy-signer-local.workspace = true
 hex-literal.workspace = true

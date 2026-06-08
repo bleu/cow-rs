@@ -34,12 +34,6 @@ cowprotocol-orderbook = { version = "1.0.0-alpha.3", path = "../cowprotocol-orde
 cowprotocol-primitives = { version = "1.0.0-alpha.3", path = "../cowprotocol-primitives" }
 cowprotocol-signing = { version = "1.0.0-alpha.3", path = "../cowprotocol-signing" }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-# Wires alloy's PRNG into the browser's `crypto.getRandomValues`; this
-# is signing-only, not HTTP-only, so it stays outside the `http-client`
-# gate.
-getrandom = { workspace = true, features = ["js"] }
-
 [dev-dependencies]
 alloy-signer.workspace = true
 alloy-signer-local.workspace = true
