@@ -234,8 +234,8 @@ pub use crate::{
     },
     order_book::{
         AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderCreation,
-        OrderQuote, OrderQuoteResponse, PriceQuality, QuoteRequest, TokenMetadata, TotalSurplus,
-        Trade,
+        OrderQuote, OrderQuoteResponse, OrderSubmission, OrderSubmissionBuilder, PriceQuality,
+        QuoteRequest, TokenMetadata, TotalSurplus, Trade,
     },
     quote_amounts::{
         Amounts as QuoteAmounts, QuoteAmountsAndCosts, QuoteAmountsParams, QuoteCosts,
@@ -248,7 +248,10 @@ pub use crate::{
 };
 
 #[cfg(feature = "http-client")]
-pub use crate::order_book::OrderBookApi;
+pub use crate::order_book::{
+    ChainedQuoteBuilder, NoTarget, OrderBookApi, OrderBookApiBuilder, PendingQuote, SignedOrder,
+    WithTarget,
+};
 
 #[cfg(feature = "http-client")]
 pub use crate::trading::{PostedSwapOrder, SwapOrder, TradingClient};

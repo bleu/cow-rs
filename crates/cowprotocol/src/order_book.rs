@@ -44,6 +44,14 @@ mod api_builder;
 #[cfg(feature = "http-client")]
 pub use api_builder::{NoTarget, OrderBookApiBuilder, WithTarget};
 
+#[cfg(feature = "http-client")]
+mod chain;
+#[cfg(feature = "http-client")]
+pub use chain::{ChainedQuoteBuilder, PendingQuote, SignedOrder};
+
+mod submission;
+pub use submission::{OrderSubmission, OrderSubmissionBuilder};
+
 #[cfg(test)]
 #[path = "order_book/tests.rs"]
 mod tests;
