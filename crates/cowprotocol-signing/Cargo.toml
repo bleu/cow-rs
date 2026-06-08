@@ -1,0 +1,32 @@
+[package]
+name = "cowprotocol-signing"
+version = "1.0.0-alpha.3"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "CoW Protocol signing schemes: EIP-712, EthSign, EIP-1271, PreSign. Sits on top of cowprotocol-primitives."
+homepage = "https://github.com/cowdao-grants/cow-rs"
+documentation = "https://docs.rs/cowprotocol-signing"
+keywords = ["cow-protocol", "ethereum", "defi", "signing", "eip-712"]
+categories = ["cryptography::cryptocurrencies", "wasm"]
+
+[lints]
+workspace = true
+
+[dependencies]
+cowprotocol-primitives = { version = "1.0.0-alpha.3", path = "../cowprotocol-primitives" }
+alloy-primitives.workspace = true
+alloy-signer.workspace = true
+alloy-sol-types.workspace = true
+serde = { workspace = true }
+serde_with.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+alloy-signer-local.workspace = true
+const-hex.workspace = true
+hex-literal.workspace = true
+serde_json.workspace = true

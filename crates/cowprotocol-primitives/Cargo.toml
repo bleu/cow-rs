@@ -1,0 +1,36 @@
+[package]
+name = "cowprotocol-primitives"
+version = "1.0.0-alpha.3"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "CoW Protocol primitives: chain selectors, EIP-712 domain, 12-field order types, contract bindings, EthFlow, cancellation, ComposableCoW, multiplexer, and orderbook fee-composition arithmetic. Pure compute; no HTTP."
+homepage = "https://github.com/cowdao-grants/cow-rs"
+documentation = "https://docs.rs/cowprotocol-primitives"
+keywords = ["cow-protocol", "ethereum", "defi", "alloy", "sdk"]
+categories = ["cryptography::cryptocurrencies", "no-std::no-alloc", "wasm"]
+
+[lints]
+workspace = true
+
+[dependencies]
+alloy-primitives.workspace = true
+alloy-sol-types.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+serde_with.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Wires alloy's PRNG into the browser's `crypto.getRandomValues` via
+# its `js` feature. Pure-compute primitives don't need this themselves;
+# kept here so the sub-crate compiles on wasm32 without callers having
+# to wire `getrandom` in their own manifest.
+getrandom = { workspace = true, features = ["js"] }
+
+[dev-dependencies]
+const-hex.workspace = true
+hex-literal.workspace = true

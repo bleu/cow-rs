@@ -1,0 +1,57 @@
+[package]
+name = "cowprotocol-orderbook"
+version = "1.0.0-alpha.3"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "CoW Protocol orderbook HTTP client, trading facade, and subgraph queries. Sits on top of cowprotocol-primitives, -signing, and -appdata."
+homepage = "https://github.com/cowdao-grants/cow-rs"
+documentation = "https://docs.rs/cowprotocol-orderbook"
+keywords = ["cow-protocol", "orderbook", "ethereum", "defi", "alloy"]
+categories = ["cryptography::cryptocurrencies", "api-bindings", "wasm"]
+
+[lints]
+workspace = true
+
+[features]
+default = ["http-client", "subgraph"]
+# `http-client` enables the orderbook + trading HTTP client. Hashing
+# and signing-only consumers disable it to drop `reqwest` and its
+# transitive graph from the build.
+http-client = ["dep:reqwest"]
+# `subgraph` enables the GraphQL client. It depends on `http-client`
+# because the subgraph executor uses `reqwest` internally.
+subgraph = ["http-client"]
+
+[dependencies]
+cowprotocol-primitives = { version = "1.0.0-alpha.3", path = "../cowprotocol-primitives" }
+cowprotocol-signing = { version = "1.0.0-alpha.3", path = "../cowprotocol-signing" }
+cowprotocol-appdata = { version = "1.0.0-alpha.3", path = "../cowprotocol-appdata" }
+alloy-primitives.workspace = true
+alloy-sol-types.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+serde_with.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { workspace = true, features = ["rustls-tls"], optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+alloy-signer-local.workspace = true
+const-hex.workspace = true
+hex-literal.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+wiremock.workspace = true
+# Builds a `reqwest::Response` from an in-memory body with no
+# `Content-Length` header, to exercise the streaming response cap.
+http = "1"
