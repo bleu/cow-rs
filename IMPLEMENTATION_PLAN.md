@@ -14,7 +14,7 @@
 **Goal**: Move order data, app-data document/hash/CID logic, and signature/cancellation logic into `cowprotocol-appdata` and `cowprotocol-signing`, keeping meta-crate exports stable.
 **Success Criteria**: App-data and signing tests live with their owning crates, while `cowprotocol` still exposes the same ergonomic types and prelude.
 **Tests**: `cargo +1.91.1 test -p cowprotocol-appdata`; `cargo +1.91.1 test -p cowprotocol-signing`; `cargo +1.91.1 test -p cowprotocol`
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 4: Extract Orderbook Client
 **Goal**: Move quote/order DTOs, orderbook HTTP client, quote amount math, and trading helpers into `cowprotocol-orderbook`.
