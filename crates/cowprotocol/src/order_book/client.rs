@@ -90,6 +90,43 @@ impl OrderBookApi {
         }
     }
 
+    /// Start a type-state builder. Equivalent to
+    /// [`OrderBookApiBuilder::new`] but kept on [`OrderBookApi`] for
+    /// discoverability.
+    ///
+    /// [`OrderBookApiBuilder::new`]: super::OrderBookApiBuilder::new
+    pub const fn builder() -> super::OrderBookApiBuilder<super::NoTarget> {
+        super::OrderBookApiBuilder::new()
+    }
+
+    /// Type-state shortcut: start a builder already targeting `chain`.
+    /// Equivalent to `OrderBookApi::builder().chain(chain)`.
+    pub fn with_chain(chain: Chain) -> super::OrderBookApiBuilder<super::WithTarget> {
+        Self::builder().chain(chain)
+    }
+
+    /// Type-state shortcut: start a builder already targeting an
+    /// arbitrary `base_url`. Equivalent to
+    /// `OrderBookApi::builder().base_url(base_url)`.
+    pub fn with_base_url(base_url: url::Url) -> super::OrderBookApiBuilder<super::WithTarget> {
+        Self::builder().base_url(base_url)
+    }
+
+    /// Builder-side constructor. Crate-private so the chain / base-url
+    /// pairing the builder materialises stays the only path that can
+    /// populate every field of [`OrderBookApi`] without going through
+    /// the public [`new`] / [`new_with_base_url`] entry points.
+    ///
+    /// [`new`]: Self::new
+    /// [`new_with_base_url`]: Self::new_with_base_url
+    pub(super) fn from_parts(base_url: url::Url, client: reqwest::Client, chain: Option<Chain>) -> Self {
+        Self {
+            base_url: ensure_trailing_slash(base_url),
+            client,
+            chain,
+        }
+    }
+
     /// Base URL with the trailing slash path joining relies on.
     pub const fn base_url(&self) -> &url::Url {
         &self.base_url

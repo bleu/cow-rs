@@ -39,6 +39,11 @@ mod client;
 #[cfg(feature = "http-client")]
 pub use client::OrderBookApi;
 
+#[cfg(feature = "http-client")]
+mod api_builder;
+#[cfg(feature = "http-client")]
+pub use api_builder::{NoTarget, OrderBookApiBuilder, WithTarget};
+
 #[cfg(test)]
 #[path = "order_book/tests.rs"]
 mod tests;

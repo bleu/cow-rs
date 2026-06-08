@@ -133,7 +133,7 @@ impl<S, B, F, A> QuoteRequestBuilder<S, B, F, A> {
 
     /// Override the receiver of the buy-token. Defaults to `from` on the
     /// orderbook when unset.
-    pub fn receiver(mut self, receiver: Address) -> Self {
+    pub const fn receiver(mut self, receiver: Address) -> Self {
         self.receiver = Some(receiver);
         self
     }
@@ -142,14 +142,14 @@ impl<S, B, F, A> QuoteRequestBuilder<S, B, F, A> {
     /// [`Self::valid_for`]; setting both fails at the signing chokepoint
     /// rather than on the builder so the request is still constructible
     /// from deserialised input.
-    pub fn valid_to(mut self, valid_to: u32) -> Self {
+    pub const fn valid_to(mut self, valid_to: u32) -> Self {
         self.valid_to = Some(valid_to);
         self
     }
 
     /// Pin a relative expiry (seconds from the server clock). See
     /// [`Self::valid_to`] for the mutual-exclusion rule.
-    pub fn valid_for(mut self, valid_for: u32) -> Self {
+    pub const fn valid_for(mut self, valid_for: u32) -> Self {
         self.valid_for = Some(valid_for);
         self
     }
@@ -162,46 +162,46 @@ impl<S, B, F, A> QuoteRequestBuilder<S, B, F, A> {
     }
 
     /// Pin the partial-fill flag.
-    pub fn partially_fillable(mut self, partially_fillable: bool) -> Self {
+    pub const fn partially_fillable(mut self, partially_fillable: bool) -> Self {
         self.partially_fillable = Some(partially_fillable);
         self
     }
 
     /// Pin where the sell token is drawn from (ERC-20 / external / Vault
     /// internal). Defaults server-side to [`SellTokenSource::Erc20`].
-    pub fn sell_token_balance(mut self, source: SellTokenSource) -> Self {
+    pub const fn sell_token_balance(mut self, source: SellTokenSource) -> Self {
         self.sell_token_balance = Some(source);
         self
     }
 
     /// Pin where the buy token is paid to. Defaults server-side to
     /// [`BuyTokenDestination::Erc20`].
-    pub fn buy_token_balance(mut self, destination: BuyTokenDestination) -> Self {
+    pub const fn buy_token_balance(mut self, destination: BuyTokenDestination) -> Self {
         self.buy_token_balance = Some(destination);
         self
     }
 
     /// Pin the signing scheme the orderbook should expect.
-    pub fn signing_scheme(mut self, scheme: SigningScheme) -> Self {
+    pub const fn signing_scheme(mut self, scheme: SigningScheme) -> Self {
         self.signing_scheme = Some(scheme);
         self
     }
 
     /// Gas budget for the on-chain `isValidSignature` callback on
     /// EIP-1271 quotes. Server default is 27_000.
-    pub fn verification_gas_limit(mut self, gas: u64) -> Self {
+    pub const fn verification_gas_limit(mut self, gas: u64) -> Self {
         self.verification_gas_limit = Some(gas);
         self
     }
 
     /// Mark the request as an on-chain order (EIP-1271 / PreSign).
-    pub fn onchain_order(mut self, onchain: bool) -> Self {
+    pub const fn onchain_order(mut self, onchain: bool) -> Self {
         self.onchain_order = Some(onchain);
         self
     }
 
     /// Hint at the requested price quality.
-    pub fn price_quality(mut self, quality: PriceQuality) -> Self {
+    pub const fn price_quality(mut self, quality: PriceQuality) -> Self {
         self.price_quality = Some(quality);
         self
     }
