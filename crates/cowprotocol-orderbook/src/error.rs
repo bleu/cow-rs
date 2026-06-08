@@ -19,6 +19,15 @@ pub enum Error {
     #[error("transport error: {0}")]
     Transport(#[from] reqwest::Error),
 
+    /// A transport-level failure from a non-reqwest [`HttpTransport`]
+    /// backend (e.g. the `cow-sdk-wasm` `fetch` transport): a failed or
+    /// aborted/timed-out request, or a body read error. The message is the
+    /// transport's own description.
+    ///
+    /// [`HttpTransport`]: crate::transport::HttpTransport
+    #[error("transport error: {0}")]
+    TransportFailed(String),
+
     /// JSON serialisation or deserialisation error.
     #[error("serde error: {0}")]
     Serde(#[from] serde_json::Error),

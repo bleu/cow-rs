@@ -127,46 +127,6 @@ pub(crate) fn parse_scheme(value: &str) -> Result<EcdsaSigningScheme, JsValue> {
     }
 }
 
-/// Build an `api/v1/...` URL against the given chain's orderbook base.
-/// Used by every networked endpoint below. Replaces the prior
-/// `OrderBookApi::new(...)` path so the wasm output does not need to
-/// link reqwest. Delegates path resolution to [`url::Url::join`];
-/// [`Chain::orderbook_base_url`] guarantees the trailing slash that
-/// `join` needs to append, rather than replace, the last segment.
-pub(crate) fn endpoint(chain: Chain, path: &str) -> String {
-    // The `expect` is sound because every `path` is a crate-internal
-    // literal (`"api/v1/quote"`, `format!("api/v1/orders/{uid}")`, ...);
-    // no caller-controlled string reaches `join`, so the only way this
-    // could panic is a malformed base URL, which is a build-time bug.
-    chain
-        .orderbook_base_url()
-        .join(path)
-        .expect("orderbook base url + relative path resolves cleanly")
-        .to_string()
-}
-
-/// Append `offset=`/`limit=` query parameters to a path, picking the
-/// `?` or `&` separator by whether the path already carries a query
-/// string. `None` leaves the parameter off so the server default
-/// applies. Shared by [`account_orders`] (no prior query) and the two
-/// trades endpoints (a prior `?owner=`/`?orderUid=`).
-pub(crate) fn push_pagination(path: &mut String, offset: Option<u32>, limit: Option<u32>) {
-    if let Some(offset) = offset {
-        push_query_param(path, "offset", offset);
-    }
-    if let Some(limit) = limit {
-        push_query_param(path, "limit", limit);
-    }
-}
-
-/// Append a single `name=value` query parameter, prefixing `?` if `path`
-/// has no query string yet and `&` otherwise.
-pub(crate) fn push_query_param(path: &mut String, name: &str, value: u32) {
-    let separator = if path.contains('?') { '&' } else { '?' };
-    path.push(separator);
-    path.push_str(&format!("{name}={value}"));
-}
-
 // ===== Pure-compute helpers ============================================
 
 /// Per-chain config: numeric id, settlement / vault-relayer / ETH-flow
@@ -196,69 +156,4 @@ pub fn domain_separator(chain: &str) -> Result<String, JsValue> {
     let c = parse_chain(chain)?;
     let domain = c.settlement_domain();
     Ok(domain.separator().to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Mainnet's base URL ends with `/orderbook/`. The joined path should
-    /// land at `/orderbook/api/v1/quote` with exactly one slash between
-    /// the base and the path, regardless of trailing-slash quirks.
-    #[test]
-    fn endpoint_joins_mainnet_quote_without_double_slash() {
-        let url = endpoint(Chain::Mainnet, "api/v1/quote");
-        assert!(
-            url.ends_with("/api/v1/quote"),
-            "expected /api/v1/quote suffix, got: {url}"
-        );
-        assert!(!url.contains("//api/"), "double-slash in: {url}");
-        assert!(url.starts_with("https://api.cow.fi/"), "wrong host: {url}");
-    }
-
-    /// All ten chains should produce a parseable absolute URL when
-    /// asked for the same path. Catches an accidental missing
-    /// `orderbook_base_url()` impl on a future chain.
-    #[test]
-    fn endpoint_works_for_every_chain() {
-        for chain in [
-            Chain::Mainnet,
-            Chain::Bnb,
-            Chain::Gnosis,
-            Chain::Polygon,
-            Chain::Base,
-            Chain::Plasma,
-            Chain::ArbitrumOne,
-            Chain::Avalanche,
-            Chain::Linea,
-            Chain::Sepolia,
-        ] {
-            let url = endpoint(chain, "api/v1/quote");
-            assert!(url.ends_with("/api/v1/quote"), "{chain:?} -> {url}");
-            assert!(
-                url.starts_with("https://"),
-                "{chain:?} produced a non-https URL: {url}"
-            );
-            // Reject double-slashes in the joined path. Allow exactly one
-            // pair (the `https://` after the scheme).
-            let after_scheme = url.trim_start_matches("https://");
-            assert!(
-                !after_scheme.contains("//"),
-                "{chain:?} double-slash: {url}"
-            );
-        }
-    }
-
-    /// `cancel_order` builds paths of the form `api/v1/orders/{uid}`; the
-    /// uid is hex-prefixed and must not be percent-encoded by us (the
-    /// orderbook decodes it raw).
-    #[test]
-    fn endpoint_preserves_hex_path_segments() {
-        let uid = "0x0000000000000000000000000000000000000000000000000000000000000000\
-                   0000000000000000000000000000000000000000\
-                   00000000";
-        let path = format!("api/v1/orders/{uid}");
-        let url = endpoint(Chain::Mainnet, &path);
-        assert!(url.contains(uid), "uid stripped from: {url}");
-    }
 }
