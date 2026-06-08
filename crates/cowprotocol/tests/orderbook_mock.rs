@@ -14,6 +14,7 @@ use cowprotocol::{
     SignedOrderCancellation, SigningScheme, order_book::AppDataDocument,
 };
 use serde_json::json;
+use std::sync::{Arc, Mutex};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{body_json, body_string_contains, method, path, query_param},
@@ -802,11 +803,18 @@ async fn quote_builder_can_quote_sign_and_submit() {
         .await;
 
     let expected_uid = "0xb74844872ddbadb709629952eab02a9275c5c05426cb195e27029a353909404370997970c51812dc3a010c7d01b50e0d17dc79c86a0513b9";
+    let posted = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+    let posted_handle = posted.clone();
     Mock::given(method("POST"))
         .and(path("/api/v1/orders"))
         .and(body_string_contains("\"quoteId\":99"))
         .and(body_string_contains("\"signingScheme\":\"eip712\""))
-        .respond_with(ResponseTemplate::new(201).set_body_json(json!(expected_uid)))
+        .respond_with(move |req: &wiremock::Request| {
+            let body: serde_json::Value =
+                serde_json::from_slice(&req.body).expect("order body is JSON");
+            posted_handle.lock().unwrap().push(body);
+            ResponseTemplate::new(201).set_body_json(json!(expected_uid))
+        })
         .mount(&server)
         .await;
 
@@ -832,4 +840,14 @@ async fn quote_builder_can_quote_sign_and_submit() {
         .unwrap();
 
     assert_eq!(uid.to_string(), expected_uid);
+
+    // The fluent path applies the default 50 bps slippage to the SELL
+    // buy side before signing: 99_900_000 * (10_000 - 50) / 10_000 =
+    // 99_400_500. The fixed sell side passes through. This locks that
+    // quote_builder().build().sign() routes through the costs projection
+    // (matching TradingClient's defaults) rather than signing the raw
+    // quote with no slippage.
+    let posted_body = posted.lock().unwrap().pop().expect("order was posted");
+    assert_eq!(posted_body["sellAmount"], json!("100000000"));
+    assert_eq!(posted_body["buyAmount"], json!("99400500"));
 }

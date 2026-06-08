@@ -116,6 +116,28 @@ impl OrderBookApiBuilder<builder_state::Set> {
     }
 }
 
+/// Partner-fee, slippage, and protocol-fee inputs threaded from the quote
+/// builder into [`QuotedOrder::sign`]. Defaults match
+/// [`crate::SwapOrder::eip712`] (50 bps slippage, no partner fee), so the
+/// fluent path applies the same protection [`crate::TradingClient`] does
+/// rather than signing the raw quote.
+#[derive(Debug, Clone)]
+struct CostParams {
+    partner_fee_bps: u32,
+    slippage_bps: u32,
+    protocol_fee_bps_override: Option<String>,
+}
+
+impl Default for CostParams {
+    fn default() -> Self {
+        Self {
+            partner_fee_bps: 0,
+            slippage_bps: 50,
+            protocol_fee_bps_override: None,
+        }
+    }
+}
+
 /// Type-state quote builder bound to an [`OrderBookApi`].
 #[derive(Debug, Clone)]
 pub struct OrderBookQuoteBuilder<
@@ -126,14 +148,20 @@ pub struct OrderBookQuoteBuilder<
 > {
     api: OrderBookApi,
     request: QuoteRequestBuilder<SellToken, BuyToken, From, Amount>,
+    costs: CostParams,
 }
 
 impl<SellToken, BuyToken, From, Amount> OrderBookQuoteBuilder<SellToken, BuyToken, From, Amount> {
     const fn new(
         api: OrderBookApi,
         request: QuoteRequestBuilder<SellToken, BuyToken, From, Amount>,
+        costs: CostParams,
     ) -> Self {
-        Self { api, request }
+        Self {
+            api,
+            request,
+            costs,
+        }
     }
 
     /// Set the token the owner sells.
@@ -141,7 +169,7 @@ impl<SellToken, BuyToken, From, Amount> OrderBookQuoteBuilder<SellToken, BuyToke
         self,
         sell_token: Address,
     ) -> OrderBookQuoteBuilder<builder_state::Set, BuyToken, From, Amount> {
-        OrderBookQuoteBuilder::new(self.api, self.request.with_sell_token(sell_token))
+        OrderBookQuoteBuilder::new(self.api, self.request.with_sell_token(sell_token), self.costs)
     }
 
     /// Set the token the owner buys.
@@ -149,7 +177,7 @@ impl<SellToken, BuyToken, From, Amount> OrderBookQuoteBuilder<SellToken, BuyToke
         self,
         buy_token: Address,
     ) -> OrderBookQuoteBuilder<SellToken, builder_state::Set, From, Amount> {
-        OrderBookQuoteBuilder::new(self.api, self.request.with_buy_token(buy_token))
+        OrderBookQuoteBuilder::new(self.api, self.request.with_buy_token(buy_token), self.costs)
     }
 
     /// Set the order owner.
@@ -157,7 +185,7 @@ impl<SellToken, BuyToken, From, Amount> OrderBookQuoteBuilder<SellToken, BuyToke
         self,
         from: Address,
     ) -> OrderBookQuoteBuilder<SellToken, BuyToken, builder_state::Set, Amount> {
-        OrderBookQuoteBuilder::new(self.api, self.request.with_from(from))
+        OrderBookQuoteBuilder::new(self.api, self.request.with_from(from), self.costs)
     }
 
     /// Set a sell-side quote amount before fee deduction.
@@ -165,7 +193,7 @@ impl<SellToken, BuyToken, From, Amount> OrderBookQuoteBuilder<SellToken, BuyToke
         self,
         sell_amount: U256,
     ) -> OrderBookQuoteBuilder<SellToken, BuyToken, From, builder_state::Set> {
-        OrderBookQuoteBuilder::new(self.api, self.request.with_sell_amount(sell_amount))
+        OrderBookQuoteBuilder::new(self.api, self.request.with_sell_amount(sell_amount), self.costs)
     }
 
     /// Set a sell-side quote amount before fee deduction.
@@ -176,6 +204,7 @@ impl<SellToken, BuyToken, From, Amount> OrderBookQuoteBuilder<SellToken, BuyToke
         OrderBookQuoteBuilder::new(
             self.api,
             self.request.with_sell_amount_before_fee(sell_amount),
+            self.costs,
         )
     }
 
@@ -187,6 +216,7 @@ impl<SellToken, BuyToken, From, Amount> OrderBookQuoteBuilder<SellToken, BuyToke
         OrderBookQuoteBuilder::new(
             self.api,
             self.request.with_sell_amount_after_fee(sell_amount),
+            self.costs,
         )
     }
 
@@ -195,7 +225,11 @@ impl<SellToken, BuyToken, From, Amount> OrderBookQuoteBuilder<SellToken, BuyToke
         self,
         buy_amount: U256,
     ) -> OrderBookQuoteBuilder<SellToken, BuyToken, From, builder_state::Set> {
-        OrderBookQuoteBuilder::new(self.api, self.request.with_buy_amount_after_fee(buy_amount))
+        OrderBookQuoteBuilder::new(
+            self.api,
+            self.request.with_buy_amount_after_fee(buy_amount),
+            self.costs,
+        )
     }
 
     /// Apply optional request settings through the inner
@@ -214,6 +248,28 @@ impl<SellToken, BuyToken, From, Amount> OrderBookQuoteBuilder<SellToken, BuyToke
         ) -> QuoteRequestBuilder<SellToken, BuyToken, From, Amount>,
     ) -> Self {
         self.request = f(self.request);
+        self
+    }
+
+    /// Slippage tolerance in basis points, applied to the non-fixed side of
+    /// the signed order (`buy_amount` for SELL, `sell_amount` for BUY).
+    /// Defaults to 50 bps; pass `0` to sign the raw quote with no slippage.
+    pub const fn with_slippage_bps(mut self, bps: u32) -> Self {
+        self.costs.slippage_bps = bps;
+        self
+    }
+
+    /// Partner-fee tier in basis points, charged on the surplus side.
+    /// Defaults to `0` (no partner fee).
+    pub const fn with_partner_fee_bps(mut self, bps: u32) -> Self {
+        self.costs.partner_fee_bps = bps;
+        self
+    }
+
+    /// Override the `protocolFeeBps` echoed by the quote response (decimal
+    /// string, e.g. `"0.3"`). Defaults to the value the quote reports.
+    pub fn with_protocol_fee_bps_override(mut self, value: impl Into<String>) -> Self {
+        self.costs.protocol_fee_bps_override = Some(value.into());
         self
     }
 }
@@ -242,6 +298,7 @@ impl
             response,
             app_data_hash,
             app_data_json,
+            costs: self.costs,
         })
     }
 }
@@ -254,6 +311,7 @@ pub struct QuotedOrder {
     response: OrderQuoteResponse,
     app_data_hash: AppDataHash,
     app_data_json: Option<String>,
+    costs: CostParams,
 }
 
 impl QuotedOrder {
@@ -273,6 +331,11 @@ impl QuotedOrder {
     }
 
     /// Sign with EIP-712 using the chain attached to the [`OrderBookApi`].
+    ///
+    /// The signed amounts apply the builder's partner-fee, protocol-fee and
+    /// slippage composition (defaulting to 50 bps slippage, no partner fee,
+    /// matching [`crate::TradingClient`]); set them via the quote builder's
+    /// `with_slippage_bps` / `with_partner_fee_bps`.
     pub fn sign<S: alloy_signer::SignerSync>(&self, signer: &S) -> Result<SignedOrderSubmission> {
         self.sign_with_scheme(EcdsaSigningScheme::Eip712, signer)
     }
@@ -297,9 +360,13 @@ impl QuotedOrder {
         scheme: EcdsaSigningScheme,
         signer: &S,
     ) -> Result<SignedOrderSubmission> {
-        let order_data = self
-            .response
-            .try_into_signed_order_data(&self.request, self.app_data_hash)?;
+        let order_data = self.response.try_into_signed_order_data_with_costs(
+            &self.request,
+            self.costs.partner_fee_bps,
+            self.costs.slippage_bps,
+            self.costs.protocol_fee_bps_override.as_deref(),
+            self.app_data_hash,
+        )?;
         let signature = order_data.sign(scheme, &chain.settlement_domain(), signer)?;
         let app_data_json = self.app_data_json.clone().ok_or(Error::OrderCreationInvalid {
             field: "app_data",
@@ -374,7 +441,7 @@ impl OrderBookApi {
 
     /// Start a type-state quote builder bound to this client.
     pub fn quote_builder(&self) -> OrderBookQuoteBuilder {
-        OrderBookQuoteBuilder::new(self.clone(), QuoteRequest::builder())
+        OrderBookQuoteBuilder::new(self.clone(), QuoteRequest::builder(), CostParams::default())
     }
 
     /// Client for the production orderbook on `chain`.
