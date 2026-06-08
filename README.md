@@ -21,8 +21,8 @@ every protocol-critical path byte-for-byte against
 
 - **Full order lifecycle**: quote, sign, submit, look up, cancel.
 - **All four signing schemes**: EIP-712, EthSign, EIP-1271, pre-sign.
-- **All eleven chains**: Mainnet, BNB, Gnosis, Polygon, Base, Plasma,
-  Arbitrum One, Avalanche, Ink, Linea, Sepolia, plus their barn
+- **All ten chains**: Mainnet, BNB, Gnosis, Polygon, Base, Plasma,
+  Arbitrum One, Avalanche, Linea, Sepolia, plus their barn
   staging endpoints where the orderbook team publishes them.
 - **Conformance-locked**: 219 native tests (180 lib + 26 wiremock + 5
   schema-drift + 3 source-lock + 1 trading-mock + 4 doctests) plus 12
@@ -128,7 +128,7 @@ assert_eq!(uid.0.len(), 56);
 | `quote_amounts` | `compute()` (the partner-fee + protocol-fee + slippage composition the TS SDK uses, byte-for-byte against `cow-sdk` PR #867); fail-closed via `Error::QuoteFeeMathOverflow { stage }` on every intermediate |
 | `signature` | `Signature` (all four schemes), `EcdsaSignature`, `Recovered`, `SignatureError` |
 | `domain` | `DomainSeparator`, `hashed_eip712_message`, `hashed_ethsign_message` |
-| `chain` | `Chain` (eleven networks) with `orderbook_base_url`, `orderbook_barn_url`, `settlement`, `vault_relayer`, `subgraph_gateway_deployment_id` |
+| `chain` | `Chain` (ten networks) with `orderbook_base_url`, `orderbook_barn_url`, `settlement`, `vault_relayer`, `subgraph_gateway_deployment_id` |
 | `cancellation` | `SignedOrderCancellation` (single), `OrderCancellations` (collection), `SignedOrderCancellations` |
 | `app_data` | `AppDataHash`, `AppDataDoc` (canonical JSON + keccak digest), `AppDataCid` (IPFS CIDv1 derivation), `AppDataDoc::sdk_attribution` for the SDK's `appCode` tag |
 | `eth_flow` | `EthFlowOrder` (non-zero `receiver` enforced at construction), `ETH_FLOW_PRODUCTION`, `ETH_FLOW_STAGING` |
@@ -272,7 +272,7 @@ const uid = await post_order('mainnet', creation);
 **Conformance**. `eip712_payload` produces the digest
 `OrderData::hash_struct` computes server-side; the Rust test suite
 already locks that hash byte-for-byte against ethers's
-`TypedDataEncoder` on all eleven chains. The in-browser harness
+`TypedDataEncoder` on all ten chains. The in-browser harness
 (`test-harness/index.html`, panel 3) re-asserts the equality at
 runtime across the shim, viem, and ethers. `@cowprotocol/cow-sdk`'s
 own typed-data path delegates to ethers's `TypedDataEncoder`, so
@@ -341,7 +341,7 @@ default features              584 KB
 
 cow-rs locks byte-exact equivalence on every protocol-critical path:
 
-- ethers `TypedDataEncoder` for all eleven chains: signed UID, struct
+- ethers `TypedDataEncoder` for all ten chains: signed UID, struct
   hash, domain separator, six order-shape permutations
 - `cowprotocol/services` for signature recovery and cancellation
   struct hashes
@@ -366,7 +366,7 @@ features and bug fixes; breaking changes only on minor or major bumps.
 Production readiness:
 
 - ✅ Byte-conformance with services / contracts / cow-sdk / cow-py
-- ✅ All eleven documented chains
+- ✅ All ten documented chains
 - ✅ All four signing schemes
 - ✅ Mock-server integration coverage for every `OrderBookApi` method
 - ✅ WASM compilation gate in CI plus an in-browser e2e harness

@@ -18,9 +18,9 @@
 //!   by [`alloy_primitives::eip191_hash_message`].
 //! - [`Signature`], [`EcdsaSignature`] and [`SignatureError`] covering
 //!   EIP-712, EthSign, EIP-1271 and PreSign schemes.
-//! - [`Chain`]: all eleven chains the orderbook supports
+//! - [`Chain`]: all ten chains the orderbook supports
 //!   (Mainnet, Bnb, Gnosis, Polygon, Base, Plasma, Arbitrum One, Avalanche,
-//!   Ink, Linea, Sepolia), with their `api.cow.fi` URL slugs.
+//!   Linea, Sepolia), with their `api.cow.fi` URL slugs.
 //! - [`OrderBookApi`]: async client for the orderbook HTTP API, with
 //!   methods for quoting, posting, lookup, cancellation, trade and account
 //!   queries, native-price lookups and app-data pinning.

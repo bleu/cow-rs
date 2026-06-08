@@ -46,7 +46,6 @@ const CHAIN_ENV: &[(Chain, &str)] = &[
     (Chain::Plasma, "COW_RPC_PLASMA"),
     (Chain::ArbitrumOne, "COW_RPC_ARBITRUM"),
     (Chain::Avalanche, "COW_RPC_AVALANCHE"),
-    (Chain::Ink, "COW_RPC_INK"),
     (Chain::Linea, "COW_RPC_LINEA"),
     (Chain::Sepolia, "COW_RPC_SEPOLIA"),
 ];

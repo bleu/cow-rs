@@ -628,12 +628,12 @@ mod tests {
     }
 
     /// Locks the `settlement_domain` separator against ethers
-    /// `TypedDataEncoder.hashDomain` for every one of the eleven chains
+    /// `TypedDataEncoder.hashDomain` for every one of the ten chains
     /// cow-rs supports, using the canonical GPv2Settlement deployment.
     /// Regenerate via `tools/vector-gen`.
     #[test]
     fn cross_chain_domain_separators_match_ethers() {
-        let cases: [(u64, [u8; 32]); 11] = [
+        let cases: [(u64, [u8; 32]); 10] = [
             (
                 1,
                 hex!("c078f884a2676e1345748b1feace7b0abee5d00ecadb6e574dcdd109a63e8943"),
@@ -667,10 +667,6 @@ mod tests {
                 hex!("81fd4ff99b8f80b96c946c146cd5b79181aaf08ecb5808eeee1d047c1de267a5"),
             ),
             (
-                57073,
-                hex!("5aced6090755c424bc1d6bbd39a2cdf57e6abfb4663598f4c3c821fb942d52e0"),
-            ),
-            (
                 59144,
                 hex!("b219bb2b8733b80b7ebef0229e7f0c91436f9a0a5b9705fa519237ae0493addb"),
             ),
@@ -693,7 +689,7 @@ mod tests {
     #[test]
     fn cross_chain_uids_match_ethers() {
         const TAIL: [u8; 24] = hex!("70997970c51812dc3a010c7d01b50e0d17dc79c8ffffffff");
-        let cases: [(u64, [u8; 32]); 11] = [
+        let cases: [(u64, [u8; 32]); 10] = [
             (
                 1,
                 hex!("8295b35c74972663a29a02be0fa8de8a157215b36938caa461fdf183e02cd82e"),
@@ -725,10 +721,6 @@ mod tests {
             (
                 43114,
                 hex!("310880582f800792d606e89b94c8f23529469003cf71da6aa172737702b8a4be"),
-            ),
-            (
-                57073,
-                hex!("7daedf408aec4bacb29278b0febf3c40ce52c7911d0a23eb5c4c116a8dd44852"),
             ),
             (
                 59144,

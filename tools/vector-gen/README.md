@@ -6,9 +6,9 @@ golden assertions.
 
 ## What it computes
 
-For a fixed sample order, and for each of the eleven supported chains
+For a fixed sample order, and for each of the ten supported chains
 (mainnet, BNB, Gnosis, Polygon, Base, Plasma, Arbitrum One, Avalanche,
-Ink, Linea, Sepolia), the script writes the domain separator, the
+Linea, Sepolia), the script writes the domain separator, the
 order's EIP-712 struct hash, the full typed-data digest, and the 56-byte
 order UID. All values come from ethers'
 [`TypedDataEncoder`](https://docs.ethers.org/v6/api/hashing/#TypedDataEncoder)

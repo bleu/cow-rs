@@ -35,16 +35,6 @@ pub enum Chain {
     ArbitrumOne = 42_161,
     /// Avalanche C-Chain (chain id 43114).
     Avalanche = 43_114,
-    /// Ink (chain id 57073).
-    ///
-    /// Unlike the other settlement chains, Ink is not enumerated in
-    /// upstream `cowprotocol/contracts/networks.json`, nor is its
-    /// `GPv2Settlement` deployment cross-confirmable via an eth-flow
-    /// `deployment.prod.json`. Treat [`Chain::settlement`] on Ink as
-    /// best-effort until confirmed on a block explorer; the RPC-gated
-    /// `settlement_and_vault_relayer_are_deployed_on_every_configured_chain`
-    /// probe in `tools/chain-probe` is the canonical on-chain check.
-    Ink = 57_073,
     /// Linea (chain id 59144).
     Linea = 59_144,
     /// Sepolia testnet (chain id 11155111).
@@ -69,7 +59,6 @@ impl Chain {
             Self::Plasma => "plasma",
             Self::ArbitrumOne => "arbitrum_one",
             Self::Avalanche => "avalanche",
-            Self::Ink => "ink",
             Self::Linea => "linea",
             Self::Sepolia => "sepolia",
         }
@@ -167,12 +156,7 @@ impl Chain {
             Self::ArbitrumOne => Some("CQ8g2uJCjdAkUSNkVbd9oqqRP2GALKu1jJCD3fyY5tdc"),
             Self::Base => Some("EYfBtJDj2thuBCVhdpYDpzfsWzDg3qzpEsitqMouU4Rg"),
             Self::Sepolia => Some("31isonmztVX9ejBneP6SaVDQwEtyKCGBb3RTafB9Uf2y"),
-            Self::Bnb
-            | Self::Polygon
-            | Self::Plasma
-            | Self::Avalanche
-            | Self::Ink
-            | Self::Linea => None,
+            Self::Bnb | Self::Polygon | Self::Plasma | Self::Avalanche | Self::Linea => None,
         }
     }
 }
@@ -190,7 +174,6 @@ impl TryFrom<u64> for Chain {
             9745 => Ok(Self::Plasma),
             42_161 => Ok(Self::ArbitrumOne),
             43_114 => Ok(Self::Avalanche),
-            57_073 => Ok(Self::Ink),
             59_144 => Ok(Self::Linea),
             11_155_111 => Ok(Self::Sepolia),
             other => Err(UnsupportedChain(other)),
@@ -227,7 +210,6 @@ impl FromStr for Chain {
             "plasma" => Ok(Self::Plasma),
             "arbitrum" | "arbitrumone" => Ok(Self::ArbitrumOne),
             "avalanche" => Ok(Self::Avalanche),
-            "ink" => Ok(Self::Ink),
             "linea" => Ok(Self::Linea),
             "sepolia" => Ok(Self::Sepolia),
             _ => Err(UnsupportedChain(0)),
@@ -305,7 +287,6 @@ mod tests {
         Chain::Plasma,
         Chain::ArbitrumOne,
         Chain::Avalanche,
-        Chain::Ink,
         Chain::Linea,
         Chain::Sepolia,
     ];
@@ -320,7 +301,6 @@ mod tests {
         assert_eq!(Chain::Plasma.id(), 9745);
         assert_eq!(Chain::ArbitrumOne.id(), 42_161);
         assert_eq!(Chain::Avalanche.id(), 43_114);
-        assert_eq!(Chain::Ink.id(), 57_073);
         assert_eq!(Chain::Linea.id(), 59_144);
         assert_eq!(Chain::Sepolia.id(), 11_155_111);
     }
@@ -337,7 +317,7 @@ mod tests {
 
     #[test]
     fn all_slugs_are_unique_and_parseable_urls() {
-        assert_eq!(ALL.len(), 11, "expected 11 supported chains");
+        assert_eq!(ALL.len(), 10, "expected 10 supported chains");
 
         let mut seen: HashSet<&'static str> = HashSet::new();
         for chain in ALL {
@@ -349,7 +329,7 @@ mod tests {
             assert_eq!(url.scheme(), "https");
             assert_eq!(url.host_str(), Some("api.cow.fi"));
         }
-        assert_eq!(seen.len(), 11);
+        assert_eq!(seen.len(), 10);
     }
 
     #[test]

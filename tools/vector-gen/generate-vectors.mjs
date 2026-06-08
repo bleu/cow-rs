@@ -61,7 +61,6 @@ const CHAINS = [
   { id: 9745, name: "plasma" },
   { id: 42161, name: "arbitrum" },
   { id: 43114, name: "avalanche" },
-  { id: 57073, name: "ink" },
   { id: 59144, name: "linea" },
   { id: 11155111, name: "sepolia" },
 ];

@@ -216,7 +216,7 @@ mod tests {
         assert!(url.starts_with("https://api.cow.fi/"), "wrong host: {url}");
     }
 
-    /// All eleven chains should produce a parseable absolute URL when
+    /// All ten chains should produce a parseable absolute URL when
     /// asked for the same path. Catches an accidental missing
     /// `orderbook_base_url()` impl on a future chain.
     #[test]
@@ -230,7 +230,6 @@ mod tests {
             Chain::Plasma,
             Chain::ArbitrumOne,
             Chain::Avalanche,
-            Chain::Ink,
             Chain::Linea,
             Chain::Sepolia,
         ] {

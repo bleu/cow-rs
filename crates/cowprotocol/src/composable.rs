@@ -645,7 +645,7 @@ mod tests {
             );
             assert_eq!(chain.twap_handler_address(), Some(TWAP_HANDLER));
         }
-        for chain in [Chain::Polygon, Chain::Base, Chain::Avalanche, Chain::Ink] {
+        for chain in [Chain::Polygon, Chain::Base, Chain::Avalanche] {
             assert!(chain.composable_cow_address().is_none());
             assert!(chain.twap_handler_address().is_none());
         }

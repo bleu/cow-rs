@@ -121,7 +121,7 @@ fn chain_info_returns_plain_object() {
     );
 }
 
-/// All eleven chains should yield a parseable info object. Catches an
+/// All ten chains should yield a parseable info object. Catches an
 /// accidentally missing `Chain` arm in `parse_chain`.
 #[wasm_bindgen_test]
 fn chain_info_works_for_every_chain() {
@@ -134,7 +134,6 @@ fn chain_info_works_for_every_chain() {
         "plasma",
         "arbitrum",
         "avalanche",
-        "ink",
         "linea",
         "sepolia",
     ] {

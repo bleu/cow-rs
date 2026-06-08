@@ -576,7 +576,6 @@ mod tests {
             Chain::Polygon,
             Chain::Plasma,
             Chain::Avalanche,
-            Chain::Ink,
             Chain::Linea,
         ] {
             let err = SubgraphClient::for_chain_gateway(chain, "test-key").unwrap_err();
