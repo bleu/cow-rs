@@ -1035,69 +1035,30 @@ dependencies = [
 name = "cowprotocol-appdata"
 version = "1.0.0-alpha.3"
 dependencies = [
- "alloy-primitives",
- "cid",
- "const-hex",
- "cowprotocol-primitives",
- "hex-literal",
- "serde",
- "serde_json",
- "thiserror",
+ "cowprotocol",
 ]
 
 [[package]]
 name = "cowprotocol-orderbook"
 version = "1.0.0-alpha.3"
 dependencies = [
- "alloy-primitives",
- "alloy-signer-local",
- "alloy-sol-types",
- "const-hex",
- "cowprotocol-appdata",
+ "cowprotocol",
  "cowprotocol-primitives",
- "cowprotocol-signing",
- "hex-literal",
- "http",
- "reqwest",
- "serde",
- "serde_json",
- "serde_with",
- "thiserror",
- "tokio",
- "url",
- "wiremock",
 ]
 
 [[package]]
 name = "cowprotocol-primitives"
 version = "1.0.0-alpha.3"
 dependencies = [
- "alloy-primitives",
- "alloy-sol-types",
- "const-hex",
- "getrandom 0.2.17",
- "hex-literal",
- "serde",
- "serde_json",
- "serde_with",
- "thiserror",
+ "cowprotocol",
 ]
 
 [[package]]
 name = "cowprotocol-signing"
 version = "1.0.0-alpha.3"
 dependencies = [
- "alloy-primitives",
- "alloy-signer",
- "alloy-signer-local",
- "alloy-sol-types",
- "const-hex",
+ "cowprotocol",
  "cowprotocol-primitives",
- "hex-literal",
- "serde",
- "serde_json",
- "serde_with",
- "thiserror",
 ]
 
 [[package]]

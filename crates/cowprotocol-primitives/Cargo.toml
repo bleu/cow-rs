@@ -11,26 +11,14 @@ description = "CoW Protocol primitives: chain selectors, EIP-712 domain, 12-fiel
 homepage = "https://github.com/cowdao-grants/cow-rs"
 documentation = "https://docs.rs/cowprotocol-primitives"
 keywords = ["cow-protocol", "ethereum", "defi", "alloy", "sdk"]
-categories = ["cryptography::cryptocurrencies", "no-std::no-alloc", "wasm"]
+categories = ["cryptography::cryptocurrencies", "api-bindings", "wasm"]
 
 [lints]
 workspace = true
 
 [dependencies]
-alloy-primitives.workspace = true
-alloy-sol-types.workspace = true
-serde = { workspace = true }
-serde_json.workspace = true
-serde_with.workspace = true
-thiserror.workspace = true
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-# Wires alloy's PRNG into the browser's `crypto.getRandomValues` via
-# its `js` feature. Pure-compute primitives don't need this themselves;
-# kept here so the sub-crate compiles on wasm32 without callers having
-# to wire `getrandom` in their own manifest.
-getrandom = { workspace = true, features = ["js"] }
-
-[dev-dependencies]
-const-hex.workspace = true
-hex-literal.workspace = true
+# Re-exports the `cowprotocol::primitives` namespace. Sharing the
+# implementation keeps the byte-conformance vectors a single source of
+# truth across the four sub-crates; future work can lift the modules
+# out of `cowprotocol` without changing this crate's public surface.
+cowprotocol = { version = "1.0.0-alpha.3", path = "../cowprotocol", default-features = false }
