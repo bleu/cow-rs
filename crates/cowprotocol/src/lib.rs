@@ -122,6 +122,85 @@ pub mod subgraph;
 #[cfg(feature = "http-client")]
 pub mod trading;
 
+// Domain-grouped namespace re-exports.
+//
+// These mirror the proposed sub-crate split
+// (`cowprotocol-primitives`, `cowprotocol-appdata`, `cowprotocol-signing`,
+// `cowprotocol-orderbook`) suggested upstream. They live as internal
+// modules for now so the published `cowprotocol` 1.0.0-alpha crate
+// identity stays intact and the wasm shim, examples, and downstream
+// callers compile unchanged; the eventual physical split is mechanical
+// from here.
+
+/// Order primitives: chain selectors, EIP-712 domain, `sol!`-generated
+/// contract bindings, the 12-field [`OrderData`] payload, EthFlow,
+/// cancellation, ComposableCoW conditional orders, multiplexer merkle
+/// proofs, and the orderbook fee-composition arithmetic.
+///
+/// [`OrderData`]: crate::order::OrderData
+pub mod primitives {
+    pub use crate::cancellation::*;
+    pub use crate::chain::*;
+    pub use crate::composable::*;
+    pub use crate::contracts::*;
+    pub use crate::domain::*;
+    pub use crate::eth_flow::*;
+    pub use crate::multiplexer::*;
+    pub use crate::order::*;
+    pub use crate::quote_amounts::*;
+    pub use crate::signing_scheme::*;
+}
+
+/// App-data document, keccak digest, CID encoding, and the SDK-attribution
+/// helpers (`COW_RS_APP_CODE`, `COW_RS_WASM_APP_CODE`).
+pub mod appdata {
+    pub use crate::app_data::*;
+}
+
+/// Signing schemes: EIP-712, EthSign, EIP-1271, PreSign.
+pub mod signing {
+    pub use crate::signature::*;
+}
+
+/// Orderbook HTTP client, trading facade, subgraph queries, and the
+/// order-book wire types ([`OrderCreation`], [`QuoteRequest`], …).
+///
+/// `trading::*` is gated behind the `http-client` feature and
+/// `subgraph::*` behind the `subgraph` feature, matching their
+/// underlying modules.
+///
+/// [`OrderCreation`]: crate::order_book::OrderCreation
+/// [`QuoteRequest`]: crate::order_book::QuoteRequest
+pub mod orderbook {
+    pub use crate::order_book::*;
+    #[cfg(feature = "subgraph")]
+    pub use crate::subgraph::*;
+    #[cfg(feature = "http-client")]
+    pub use crate::trading::*;
+}
+
+/// Canonical workflow imports. `use cowprotocol::prelude::*;` brings in
+/// everything needed to build, sign, and submit an order against the
+/// CoW orderbook.
+pub mod prelude {
+    pub use crate::app_data::{
+        AppDataDoc, AppDataHash, COW_RS_APP_CODE, COW_RS_WASM_APP_CODE, EMPTY_APP_DATA_HASH,
+    };
+    pub use crate::chain::Chain;
+    pub use crate::domain::{DomainSeparator, settlement_domain};
+    pub use crate::error::{Error, Result};
+    pub use crate::order::{
+        BuyTokenDestination, Order, OrderData, OrderKind, OrderUid, SellTokenSource,
+    };
+    pub use crate::signature::{EcdsaSignature, Signature, SignatureError};
+    pub use crate::signing_scheme::{EcdsaSigningScheme, SigningScheme};
+
+    #[cfg(feature = "http-client")]
+    pub use crate::order_book::{OrderBookApi, OrderCreation, OrderQuoteResponse, QuoteRequest};
+    #[cfg(feature = "http-client")]
+    pub use crate::trading::{SwapOrder, TradingClient};
+}
+
 pub use crate::{
     app_data::{
         AppDataCid, AppDataCidError, AppDataDoc, AppDataFlashloan, AppDataHash, AppDataMetadata,
