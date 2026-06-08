@@ -17,3 +17,16 @@ categories = ["cryptography::cryptocurrencies", "authentication"]
 workspace = true
 
 [dependencies]
+alloy-primitives.workspace = true
+alloy-signer.workspace = true
+alloy-sol-types.workspace = true
+const-hex.workspace = true
+cowprotocol-primitives = { version = "1.0.0-alpha.3", path = "../cowprotocol-primitives" }
+serde.workspace = true
+serde_json.workspace = true
+serde_with.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+alloy-signer-local.workspace = true
+hex-literal.workspace = true

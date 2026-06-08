@@ -31,7 +31,8 @@ use crate::domain::DomainSeparator;
 /// verifies against uses `string`, and the resulting 32-byte slots are
 /// identical because the bytes32 values are pre-computed `keccak256` of
 /// the same strings.
-pub(crate) mod eip712 {
+#[doc(hidden)]
+pub mod eip712 {
     use alloy_sol_types::sol;
 
     sol! {

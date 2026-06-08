@@ -105,20 +105,17 @@
 use getrandom as _;
 
 pub mod app_data;
-pub mod cancellation;
 pub mod error;
 pub mod eth_flow;
-pub mod order;
 pub mod order_book;
 pub mod quote_amounts;
-pub mod signature;
-pub mod signing_scheme;
 #[cfg(feature = "subgraph")]
 pub mod subgraph;
 #[cfg(feature = "http-client")]
 pub mod trading;
 
 pub use cowprotocol_primitives::{chain, composable, contracts, domain, multiplexer};
+pub use cowprotocol_signing::{cancellation, order, signature, signing_scheme};
 
 pub use crate::{
     app_data::{

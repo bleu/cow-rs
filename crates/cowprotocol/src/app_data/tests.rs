@@ -1,4 +1,7 @@
-use {super::*, alloy_primitives::address};
+use {
+    super::*,
+    alloy_primitives::{address, b256},
+};
 
 #[test]
 fn json_round_trip_zero() {

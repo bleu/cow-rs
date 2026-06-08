@@ -13,28 +13,13 @@
 //! the base32 lower-case (`b`-prefixed) multibase string the orderbook
 //! indexes by.
 
-use alloy_primitives::{Address, B256, Bytes, U256, b256, keccak256};
+use alloy_primitives::{Address, Bytes, U256, keccak256};
 use cid::multihash::Multihash;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_with::{DisplayFromStr, serde_as};
 
 use crate::order::{OrderClass, OrderUid};
-
-/// 32-byte keccak256 digest of an [app-data] document, embedded directly
-/// in the signed order's `appData` field. Type-aliased onto alloy's
-/// [`B256`] so the `Debug` / `Display` / serde / `FromStr` / `AsRef<[u8]>`
-/// surface comes from there for free; call [`app_data_cid`] for the IPFS
-/// CID the orderbook pins the document under.
-///
-/// [app-data]: https://docs.cow.fi/cow-protocol/reference/core/intents/app-data
-pub type AppDataHash = B256;
-
-/// `keccak256("{}")`: digest of the canonical empty app-data document.
-pub const EMPTY_APP_DATA_HASH: AppDataHash =
-    b256!("b48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d");
-
-/// JSON representation of the empty app-data document (`"{}"`).
-pub const EMPTY_APP_DATA_JSON: &str = "{}";
+pub use cowprotocol_primitives::{AppDataHash, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON};
 
 /// SemVer of the schema this crate emits. Bump in lock-step with
 /// upstream; see `cow-protocol/reference/core/intents/app-data.mdx`.

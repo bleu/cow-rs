@@ -30,9 +30,9 @@ subgraph = ["http-client"]
 [dependencies]
 alloy-primitives.workspace = true
 alloy-signer.workspace = true
-alloy-sol-types.workspace = true
 cid.workspace = true
 cowprotocol-primitives = { version = "1.0.0-alpha.3", path = "../cowprotocol-primitives" }
+cowprotocol-signing = { version = "1.0.0-alpha.3", path = "../cowprotocol-signing" }
 serde = { workspace = true }
 serde_json.workspace = true
 serde_with.workspace = true
