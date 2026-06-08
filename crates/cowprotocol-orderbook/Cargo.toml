@@ -1,0 +1,19 @@
+[package]
+name = "cowprotocol-orderbook"
+version = "1.0.0-alpha.3"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "CoW Protocol orderbook DTOs, quote builders, and HTTP client."
+homepage = "https://github.com/cowdao-grants/cow-rs"
+documentation = "https://docs.rs/cowprotocol-orderbook"
+keywords = ["cow-protocol", "ethereum", "defi", "api"]
+categories = ["cryptography::cryptocurrencies", "api-bindings"]
+
+[lints]
+workspace = true
+
+[dependencies]

@@ -1,0 +1,19 @@
+[package]
+name = "cowprotocol-signing"
+version = "1.0.0-alpha.3"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "CoW Protocol signing schemes, signatures, and cancellation helpers."
+homepage = "https://github.com/cowdao-grants/cow-rs"
+documentation = "https://docs.rs/cowprotocol-signing"
+keywords = ["cow-protocol", "ethereum", "defi", "signing"]
+categories = ["cryptography::cryptocurrencies", "authentication"]
+
+[lints]
+workspace = true
+
+[dependencies]
