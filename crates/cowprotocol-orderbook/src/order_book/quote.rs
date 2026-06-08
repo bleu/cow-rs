@@ -274,20 +274,20 @@ impl<SellToken, BuyToken, From, Amount> QuoteRequestBuilder<SellToken, BuyToken,
     }
 
     /// Set an explicit receiver. Omit it to use the owner.
-    pub fn with_receiver(mut self, receiver: Address) -> Self {
+    pub const fn with_receiver(mut self, receiver: Address) -> Self {
         self.receiver = Some(receiver);
         self
     }
 
     /// Pin the absolute order expiry returned by the orderbook.
-    pub fn with_valid_to(mut self, valid_to: u32) -> Self {
+    pub const fn with_valid_to(mut self, valid_to: u32) -> Self {
         self.valid_to = Some(valid_to);
         self.valid_for = None;
         self
     }
 
     /// Ask the orderbook for a server-relative expiry.
-    pub fn with_valid_for(mut self, valid_for: u32) -> Self {
+    pub const fn with_valid_for(mut self, valid_for: u32) -> Self {
         self.valid_for = Some(valid_for);
         self.valid_to = None;
         self
@@ -300,43 +300,43 @@ impl<SellToken, BuyToken, From, Amount> QuoteRequestBuilder<SellToken, BuyToken,
     }
 
     /// Pin the partial-fill setting.
-    pub fn with_partially_fillable(mut self, partially_fillable: bool) -> Self {
+    pub const fn with_partially_fillable(mut self, partially_fillable: bool) -> Self {
         self.partially_fillable = Some(partially_fillable);
         self
     }
 
     /// Pin the sell-token source.
-    pub fn with_sell_token_balance(mut self, balance: SellTokenSource) -> Self {
+    pub const fn with_sell_token_balance(mut self, balance: SellTokenSource) -> Self {
         self.sell_token_balance = Some(balance);
         self
     }
 
     /// Pin the buy-token destination.
-    pub fn with_buy_token_balance(mut self, balance: BuyTokenDestination) -> Self {
+    pub const fn with_buy_token_balance(mut self, balance: BuyTokenDestination) -> Self {
         self.buy_token_balance = Some(balance);
         self
     }
 
     /// Pin the signing scheme expected in the quote response.
-    pub fn with_signing_scheme(mut self, signing_scheme: SigningScheme) -> Self {
+    pub const fn with_signing_scheme(mut self, signing_scheme: SigningScheme) -> Self {
         self.signing_scheme = Some(signing_scheme);
         self
     }
 
     /// Set the EIP-1271 verification gas limit hint.
-    pub fn with_verification_gas_limit(mut self, gas_limit: u64) -> Self {
+    pub const fn with_verification_gas_limit(mut self, gas_limit: u64) -> Self {
         self.verification_gas_limit = Some(gas_limit);
         self
     }
 
     /// Mark whether the order is placed on chain.
-    pub fn with_onchain_order(mut self, onchain_order: bool) -> Self {
+    pub const fn with_onchain_order(mut self, onchain_order: bool) -> Self {
         self.onchain_order = Some(onchain_order);
         self
     }
 
     /// Set the price-quality hint.
-    pub fn with_price_quality(mut self, price_quality: PriceQuality) -> Self {
+    pub const fn with_price_quality(mut self, price_quality: PriceQuality) -> Self {
         self.price_quality = Some(price_quality);
         self
     }

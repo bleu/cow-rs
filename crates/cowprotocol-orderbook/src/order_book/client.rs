@@ -13,14 +13,14 @@ use crate::chain::Chain;
 use crate::error::{ApiError, Error, Result};
 use crate::order::{Order, OrderUid};
 use crate::signature::{EcdsaSignature, ecdsa_wire};
-use crate::signing_scheme::{EcdsaSigningScheme, SigningScheme};
+use crate::signing_scheme::EcdsaSigningScheme;
 
 use super::MAX_RESPONSE_BYTES;
 use super::orders::OrderCreation;
 use super::quote::{OrderQuoteResponse, QuoteRequest, QuoteRequestBuilder, builder_state};
 use super::types::{
-    AppDataDocument, Auction, AuctionStatus, NativePrice, PriceQuality, QuoteAppData,
-    TokenMetadata, TotalSurplus, Trade,
+    AppDataDocument, Auction, AuctionStatus, NativePrice, QuoteAppData, TokenMetadata,
+    TotalSurplus, Trade,
 };
 // Only consumed by `ClientBuilder::timeout`, which is gated out on wasm.
 #[cfg(not(target_arch = "wasm32"))]
@@ -129,7 +129,7 @@ pub struct OrderBookQuoteBuilder<
 }
 
 impl<SellToken, BuyToken, From, Amount> OrderBookQuoteBuilder<SellToken, BuyToken, From, Amount> {
-    fn new(
+    const fn new(
         api: OrderBookApi,
         request: QuoteRequestBuilder<SellToken, BuyToken, From, Amount>,
     ) -> Self {
@@ -198,69 +198,22 @@ impl<SellToken, BuyToken, From, Amount> OrderBookQuoteBuilder<SellToken, BuyToke
         OrderBookQuoteBuilder::new(self.api, self.request.with_buy_amount_after_fee(buy_amount))
     }
 
-    /// Set an explicit receiver. Omit it to use the owner.
-    pub fn with_receiver(mut self, receiver: Address) -> Self {
-        self.request = self.request.with_receiver(receiver);
-        self
-    }
-
-    /// Pin the absolute order expiry returned by the orderbook.
-    pub fn with_valid_to(mut self, valid_to: u32) -> Self {
-        self.request = self.request.with_valid_to(valid_to);
-        self
-    }
-
-    /// Ask the orderbook for a server-relative expiry.
-    pub fn with_valid_for(mut self, valid_for: u32) -> Self {
-        self.request = self.request.with_valid_for(valid_for);
-        self
-    }
-
-    /// Pin app-data by hash or by full canonical JSON.
-    pub fn with_app_data(mut self, app_data: impl Into<QuoteAppData>) -> Self {
-        self.request = self.request.with_app_data(app_data);
-        self
-    }
-
-    /// Pin the partial-fill setting.
-    pub fn with_partially_fillable(mut self, partially_fillable: bool) -> Self {
-        self.request = self.request.with_partially_fillable(partially_fillable);
-        self
-    }
-
-    /// Pin the sell-token source.
-    pub fn with_sell_token_balance(mut self, balance: crate::SellTokenSource) -> Self {
-        self.request = self.request.with_sell_token_balance(balance);
-        self
-    }
-
-    /// Pin the buy-token destination.
-    pub fn with_buy_token_balance(mut self, balance: crate::BuyTokenDestination) -> Self {
-        self.request = self.request.with_buy_token_balance(balance);
-        self
-    }
-
-    /// Pin the signing scheme expected in the quote response.
-    pub fn with_signing_scheme(mut self, signing_scheme: SigningScheme) -> Self {
-        self.request = self.request.with_signing_scheme(signing_scheme);
-        self
-    }
-
-    /// Set the EIP-1271 verification gas limit hint.
-    pub fn with_verification_gas_limit(mut self, gas_limit: u64) -> Self {
-        self.request = self.request.with_verification_gas_limit(gas_limit);
-        self
-    }
-
-    /// Mark whether the order is placed on chain.
-    pub fn with_onchain_order(mut self, onchain_order: bool) -> Self {
-        self.request = self.request.with_onchain_order(onchain_order);
-        self
-    }
-
-    /// Set the price-quality hint.
-    pub fn with_price_quality(mut self, price_quality: PriceQuality) -> Self {
-        self.request = self.request.with_price_quality(price_quality);
+    /// Apply optional request settings through the inner
+    /// [`QuoteRequestBuilder`] without this api-bound builder having to
+    /// re-declare every setter. The closure receives the request builder
+    /// in its current type-state and must return it in the same state, so
+    /// the required-field tracking that gates [`Self::build`] is preserved.
+    /// Use it for receiver, expiry (`with_valid_to` / `with_valid_for`),
+    /// app-data, balances, signing scheme, partial-fill, gas limit and
+    /// price-quality hints, for example
+    /// `.configure(|q| q.with_valid_for(1800).with_partially_fillable(true))`.
+    pub fn configure(
+        mut self,
+        f: impl FnOnce(
+            QuoteRequestBuilder<SellToken, BuyToken, From, Amount>,
+        ) -> QuoteRequestBuilder<SellToken, BuyToken, From, Amount>,
+    ) -> Self {
+        self.request = f(self.request);
         self
     }
 }
