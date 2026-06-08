@@ -28,6 +28,9 @@ pub use types::*;
 mod quote;
 pub use quote::*;
 
+mod builder;
+pub use builder::{Missing, QuoteRequestBuilder, Set};
+
 mod orders;
 pub use orders::OrderCreation;
 

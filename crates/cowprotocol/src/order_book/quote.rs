@@ -168,6 +168,33 @@ impl QuoteRequest {
         self
     }
 
+    /// Builder-side projection. Crate-private so the kind/amount
+    /// invariant lives behind the same module barrier as the private
+    /// fields. Reached only from the type-state builder, which has
+    /// already paired one amount with the matching `OrderKind`.
+    pub(super) fn from_builder_parts(parts: super::builder::BuiltParts) -> Self {
+        Self {
+            sell_token: parts.sell_token,
+            buy_token: parts.buy_token,
+            from: parts.from,
+            receiver: parts.receiver,
+            kind: parts.kind,
+            sell_amount_before_fee: parts.sell_amount_before_fee,
+            sell_amount_after_fee: parts.sell_amount_after_fee,
+            buy_amount_after_fee: parts.buy_amount_after_fee,
+            valid_to: parts.valid_to,
+            valid_for: parts.valid_for,
+            app_data: parts.app_data,
+            partially_fillable: parts.partially_fillable,
+            sell_token_balance: parts.sell_token_balance,
+            buy_token_balance: parts.buy_token_balance,
+            signing_scheme: parts.signing_scheme,
+            verification_gas_limit: parts.verification_gas_limit,
+            onchain_order: parts.onchain_order,
+            price_quality: parts.price_quality,
+        }
+    }
+
     /// Order side the request was built for. The amount fields are kept
     /// private and in step with this; read it here rather than off the
     /// (now private) field.
