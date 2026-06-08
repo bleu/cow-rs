@@ -59,6 +59,31 @@ fn fixture_quote_request() -> QuoteRequest {
 }
 
 #[test]
+fn quote_request_builder_matches_constructor_wire_shape() {
+    let request = QuoteRequest::builder()
+        .with_sell_token(USDC)
+        .with_buy_token(DAI)
+        .with_from(OWNER)
+        .with_sell_amount(U256::from(100_000_000_u64))
+        .build_request();
+
+    assert_eq!(request.kind(), OrderKind::Sell);
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        serde_json::to_value(fixture_quote_request()).unwrap()
+    );
+}
+
+#[cfg(feature = "http-client")]
+#[test]
+fn orderbook_api_builder_with_chain_sets_chain_and_url() {
+    let api = OrderBookApi::with_chain(Chain::Gnosis).build();
+
+    assert_eq!(api.chain(), Some(Chain::Gnosis));
+    assert_eq!(api.base_url().as_str(), "https://api.cow.fi/xdai/");
+}
+
+#[test]
 fn quote_request_emits_app_data_hash_form() {
     let mut request = fixture_quote_request();
     request.app_data = Some(QuoteAppData::Hash(crate::EMPTY_APP_DATA_HASH));

@@ -58,42 +58,25 @@ MSRV `1.91`, edition `2024`.
 ## Quick start: quote, sign, submit
 
 ```rust,no_run
-use cowprotocol::{
-    Chain, DomainSeparator, EcdsaSigningScheme, EMPTY_APP_DATA_HASH,
-    EMPTY_APP_DATA_JSON, OrderBookApi, OrderCreation, QuoteRequest,
-};
+use cowprotocol::{Chain, OrderBookApi};
 use alloy_primitives::{U256, address};
 use alloy_signer_local::PrivateKeySigner;
 
 # async fn run(signer: PrivateKeySigner) -> cowprotocol::Result<()> {
-let api = OrderBookApi::new(Chain::Mainnet);
+let owner = alloy_signer::Signer::address(&signer);
+let uid = OrderBookApi::with_chain(Chain::Mainnet)
+    .build()
+    .quote_builder()
+    .with_sell_token(address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")) // USDC
+    .with_buy_token(address!("6B175474E89094C44Da98b954EedeAC495271d0F")) // DAI
+    .with_from(owner)
+    .with_sell_amount(U256::from(100_000_000_u64))
+    .build()
+    .await?
+    .sign(&signer)?
+    .submit()
+    .await?;
 
-// 1. Quote.
-let request = QuoteRequest::sell_before_fee(
-    address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"), // USDC
-    address!("6B175474E89094C44Da98b954EedeAC495271d0F"), // DAI
-    signer.address(),
-    U256::from(100_000_000_u64),
-);
-let quote = api.quote(&request).await?;
-
-// 2. Build the order, sign it under the chain's GPv2Settlement domain.
-//    The SDK cross-checks the response against `request` (sellToken,
-//    buyToken, receiver, from, kind, plus any field the caller pinned)
-//    and refuses to project mismatched fields into signable bytes.
-let order_data = quote.try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)?;
-let domain = DomainSeparator::new(Chain::Mainnet.id(), Chain::Mainnet.settlement());
-let signature = order_data.sign(EcdsaSigningScheme::Eip712, &domain, &signer)?;
-
-// 3. Submit.
-let creation = OrderCreation::from_signed_order_data(
-    order_data,
-    signature,
-    signer.address(),
-    EMPTY_APP_DATA_JSON.to_owned(),
-    Some(quote.id),
-)?;
-let uid = api.post_order(&creation).await?;
 println!("https://explorer.cow.fi/orders/{uid}");
 # Ok(()) }
 ```

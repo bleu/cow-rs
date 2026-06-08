@@ -57,19 +57,20 @@
 //! ```no_run
 //! # #[cfg(feature = "http-client")]
 //! # mod example {
-//! use cowprotocol::{Chain, OrderBookApi, QuoteRequest};
-//! use alloy_primitives::{Address, U256, address};
+//! use cowprotocol::{Chain, OrderBookApi};
+//! use alloy_primitives::{U256, address};
 //!
 //! # pub async fn run() -> cowprotocol::Result<()> {
-//! let api = OrderBookApi::new(Chain::Mainnet);
-//! let request = QuoteRequest::sell_before_fee(
-//!     address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"), // USDC
-//!     address!("6B175474E89094C44Da98b954EedeAC495271d0F"), // DAI
-//!     address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
-//!     U256::from(100_000_000_u64),
-//! );
-//! let response = api.quote(&request).await?;
-//! println!("buy amount: {}", response.quote.buy_amount);
+//! let quote = OrderBookApi::with_chain(Chain::Mainnet)
+//!     .build()
+//!     .quote_builder()
+//!     .with_sell_token(address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")) // USDC
+//!     .with_buy_token(address!("6B175474E89094C44Da98b954EedeAC495271d0F")) // DAI
+//!     .with_from(address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"))
+//!     .with_sell_amount(U256::from(100_000_000_u64))
+//!     .build()
+//!     .await?;
+//! println!("buy amount: {}", quote.response().quote.buy_amount);
 //! # Ok(()) }
 //! # }
 //! ```
@@ -155,8 +156,8 @@ pub use crate::{
     },
     order_book::{
         AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderCreation,
-        OrderQuote, OrderQuoteResponse, PriceQuality, QuoteRequest, TokenMetadata, TotalSurplus,
-        Trade,
+        OrderQuote, OrderQuoteResponse, PriceQuality, QuoteAppData, QuoteRequest,
+        QuoteRequestBuilder, TokenMetadata, TotalSurplus, Trade,
     },
     quote_amounts::{
         Amounts as QuoteAmounts, QuoteAmountsAndCosts, QuoteAmountsParams, QuoteCosts,
@@ -169,10 +170,34 @@ pub use crate::{
 };
 
 #[cfg(feature = "http-client")]
-pub use crate::order_book::OrderBookApi;
+pub use crate::order_book::{
+    OrderBookApi, OrderBookApiBuilder, OrderBookQuoteBuilder, QuotedOrder, SignedOrderSubmission,
+};
 
 #[cfg(feature = "http-client")]
 pub use crate::trading::{PostedSwapOrder, SwapOrder, TradingClient};
+
+/// Commonly-used SDK imports for quote, sign, and submit flows.
+///
+/// This is intentionally small: it re-exports the ergonomic client/builders,
+/// core order types, chain/domain helpers, app-data defaults, and signing
+/// schemes without glob-exporting every low-level DTO.
+pub mod prelude {
+    pub use crate::{
+        AppDataDoc, AppDataHash, Chain, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON, Error,
+        OrderCreation, OrderData, OrderKind, OrderQuoteResponse, OrderUid, PriceQuality,
+        QuoteAppData, QuoteRequest, QuoteRequestBuilder, Result, Signature, SigningScheme,
+        settlement_domain,
+    };
+
+    #[cfg(feature = "http-client")]
+    pub use crate::{
+        OrderBookApi, OrderBookApiBuilder, OrderBookQuoteBuilder, QuotedOrder,
+        SignedOrderSubmission,
+    };
+
+    pub use crate::EcdsaSigningScheme;
+}
 
 #[cfg(feature = "subgraph")]
 pub use crate::subgraph::{

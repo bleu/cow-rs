@@ -759,3 +759,77 @@ async fn unused_optional_quote_fields_are_omitted_from_request_body() {
     let _ = SigningScheme::default();
     let _ = (SellTokenSource::Erc20, BuyTokenDestination::Erc20);
 }
+
+#[tokio::test]
+async fn quote_builder_can_quote_sign_and_submit() {
+    let signer =
+        alloy_signer_local::PrivateKeySigner::from_bytes(&U256::from(1u64).to_be_bytes().into())
+            .unwrap();
+    let owner = alloy_signer::Signer::address(&signer);
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/api/v1/quote"))
+        .and(body_json(json!({
+            "sellToken": format!("{USDC:#x}"),
+            "buyToken": format!("{DAI:#x}"),
+            "from": format!("{owner:#x}"),
+            "kind": "sell",
+            "sellAmountBeforeFee": "100000000",
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "quote": {
+                "sellToken": format!("{USDC:#x}"),
+                "buyToken": format!("{DAI:#x}"),
+                "receiver": null,
+                "sellAmount": "100000000",
+                "buyAmount": "99900000",
+                "validTo": 1_900_000_000_u32,
+                "appData": format!("{:#x}", cowprotocol::EMPTY_APP_DATA_HASH),
+                "feeAmount": "0",
+                "kind": "sell",
+                "partiallyFillable": false,
+                "sellTokenBalance": "erc20",
+                "buyTokenBalance": "erc20",
+                "signingScheme": "eip712"
+            },
+            "from": format!("{owner:#x}"),
+            "expiration": "2099-12-31T23:59:59Z",
+            "id": 99,
+            "verified": true
+        })))
+        .mount(&server)
+        .await;
+
+    let expected_uid = "0xb74844872ddbadb709629952eab02a9275c5c05426cb195e27029a353909404370997970c51812dc3a010c7d01b50e0d17dc79c86a0513b9";
+    Mock::given(method("POST"))
+        .and(path("/api/v1/orders"))
+        .and(body_string_contains("\"quoteId\":99"))
+        .and(body_string_contains("\"signingScheme\":\"eip712\""))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!(expected_uid)))
+        .mount(&server)
+        .await;
+
+    let uid = OrderBookApi::builder()
+        .with_base_url(server.uri().parse().unwrap())
+        .build()
+        .quote_builder()
+        .with_sell_token(USDC)
+        .with_buy_token(DAI)
+        .with_from(owner)
+        .with_sell_amount(U256::from(100_000_000_u64))
+        .build()
+        .await
+        .unwrap()
+        .sign_for_chain(
+            Chain::Mainnet,
+            cowprotocol::EcdsaSigningScheme::Eip712,
+            &signer,
+        )
+        .unwrap()
+        .submit()
+        .await
+        .unwrap();
+
+    assert_eq!(uid.to_string(), expected_uid);
+}

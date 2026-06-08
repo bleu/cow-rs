@@ -4,22 +4,23 @@
 //! This module is gated behind the `http-client` feature; the DTO types
 //! it returns live in the feature-independent sibling modules.
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, U256, keccak256};
 use serde::{Deserialize, Serialize};
 
-use crate::app_data::AppDataHash;
+use crate::app_data::{AppDataHash, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON};
 use crate::cancellation::{SignedOrderCancellation, SignedOrderCancellations};
 use crate::chain::Chain;
 use crate::error::{ApiError, Error, Result};
 use crate::order::{Order, OrderUid};
 use crate::signature::{EcdsaSignature, ecdsa_wire};
-use crate::signing_scheme::EcdsaSigningScheme;
+use crate::signing_scheme::{EcdsaSigningScheme, SigningScheme};
 
 use super::MAX_RESPONSE_BYTES;
 use super::orders::OrderCreation;
-use super::quote::{OrderQuoteResponse, QuoteRequest};
+use super::quote::{OrderQuoteResponse, QuoteRequest, QuoteRequestBuilder, builder_state};
 use super::types::{
-    AppDataDocument, Auction, AuctionStatus, NativePrice, TokenMetadata, TotalSurplus, Trade,
+    AppDataDocument, Auction, AuctionStatus, NativePrice, PriceQuality, QuoteAppData,
+    TokenMetadata, TotalSurplus, Trade,
 };
 // Only consumed by `ClientBuilder::timeout`, which is gated out on wasm.
 #[cfg(not(target_arch = "wasm32"))]
@@ -43,6 +44,358 @@ struct CancellationPayload {
     signing_scheme: EcdsaSigningScheme,
 }
 
+/// Type-state builder for [`OrderBookApi`].
+#[derive(Debug, Clone)]
+pub struct OrderBookApiBuilder<Target = builder_state::Missing> {
+    chain: Option<Chain>,
+    base_url: Option<url::Url>,
+    client: Option<reqwest::Client>,
+    _state: core::marker::PhantomData<Target>,
+}
+
+impl OrderBookApiBuilder {
+    const fn new() -> Self {
+        Self {
+            chain: None,
+            base_url: None,
+            client: None,
+            _state: core::marker::PhantomData,
+        }
+    }
+}
+
+impl<Target> OrderBookApiBuilder<Target> {
+    fn cast<NextTarget>(self) -> OrderBookApiBuilder<NextTarget> {
+        OrderBookApiBuilder {
+            chain: self.chain,
+            base_url: self.base_url,
+            client: self.client,
+            _state: core::marker::PhantomData,
+        }
+    }
+
+    /// Use a pre-configured [`reqwest::Client`] for the orderbook API.
+    pub fn with_client(mut self, client: reqwest::Client) -> Self {
+        self.client = Some(client);
+        self
+    }
+
+    /// Target the production orderbook for a supported chain.
+    pub fn with_chain(self, chain: Chain) -> OrderBookApiBuilder<builder_state::Set> {
+        let mut next = self.cast::<builder_state::Set>();
+        next.chain = Some(chain);
+        next.base_url = Some(chain.orderbook_base_url());
+        next
+    }
+
+    /// Target an arbitrary orderbook base URL, such as barn or a mock.
+    pub fn with_base_url(self, base_url: url::Url) -> OrderBookApiBuilder<builder_state::Set> {
+        let mut next = self.cast::<builder_state::Set>();
+        next.chain = None;
+        next.base_url = Some(base_url);
+        next
+    }
+}
+
+impl OrderBookApiBuilder<builder_state::Set> {
+    /// Build the [`OrderBookApi`].
+    pub fn build(self) -> OrderBookApi {
+        let base_url = self.base_url.expect("target typestate sets base_url");
+        match self.client {
+            Some(client) => OrderBookApi {
+                base_url: ensure_trailing_slash(base_url),
+                client,
+                chain: self.chain,
+            },
+            None => {
+                let mut api = OrderBookApi::new_with_base_url(base_url);
+                api.chain = self.chain;
+                api
+            }
+        }
+    }
+}
+
+/// Type-state quote builder bound to an [`OrderBookApi`].
+#[derive(Debug, Clone)]
+pub struct OrderBookQuoteBuilder<
+    SellToken = builder_state::Missing,
+    BuyToken = builder_state::Missing,
+    From = builder_state::Missing,
+    Amount = builder_state::Missing,
+> {
+    api: OrderBookApi,
+    request: QuoteRequestBuilder<SellToken, BuyToken, From, Amount>,
+}
+
+impl<SellToken, BuyToken, From, Amount> OrderBookQuoteBuilder<SellToken, BuyToken, From, Amount> {
+    fn new(
+        api: OrderBookApi,
+        request: QuoteRequestBuilder<SellToken, BuyToken, From, Amount>,
+    ) -> Self {
+        Self { api, request }
+    }
+
+    /// Set the token the owner sells.
+    pub fn with_sell_token(
+        self,
+        sell_token: Address,
+    ) -> OrderBookQuoteBuilder<builder_state::Set, BuyToken, From, Amount> {
+        OrderBookQuoteBuilder::new(self.api, self.request.with_sell_token(sell_token))
+    }
+
+    /// Set the token the owner buys.
+    pub fn with_buy_token(
+        self,
+        buy_token: Address,
+    ) -> OrderBookQuoteBuilder<SellToken, builder_state::Set, From, Amount> {
+        OrderBookQuoteBuilder::new(self.api, self.request.with_buy_token(buy_token))
+    }
+
+    /// Set the order owner.
+    pub fn with_from(
+        self,
+        from: Address,
+    ) -> OrderBookQuoteBuilder<SellToken, BuyToken, builder_state::Set, Amount> {
+        OrderBookQuoteBuilder::new(self.api, self.request.with_from(from))
+    }
+
+    /// Set a sell-side quote amount before fee deduction.
+    pub fn with_sell_amount(
+        self,
+        sell_amount: U256,
+    ) -> OrderBookQuoteBuilder<SellToken, BuyToken, From, builder_state::Set> {
+        OrderBookQuoteBuilder::new(self.api, self.request.with_sell_amount(sell_amount))
+    }
+
+    /// Set a sell-side quote amount before fee deduction.
+    pub fn with_sell_amount_before_fee(
+        self,
+        sell_amount: U256,
+    ) -> OrderBookQuoteBuilder<SellToken, BuyToken, From, builder_state::Set> {
+        OrderBookQuoteBuilder::new(
+            self.api,
+            self.request.with_sell_amount_before_fee(sell_amount),
+        )
+    }
+
+    /// Set a sell-side quote amount after fee deduction.
+    pub fn with_sell_amount_after_fee(
+        self,
+        sell_amount: U256,
+    ) -> OrderBookQuoteBuilder<SellToken, BuyToken, From, builder_state::Set> {
+        OrderBookQuoteBuilder::new(
+            self.api,
+            self.request.with_sell_amount_after_fee(sell_amount),
+        )
+    }
+
+    /// Set a buy-side quote amount after fee deduction.
+    pub fn with_buy_amount_after_fee(
+        self,
+        buy_amount: U256,
+    ) -> OrderBookQuoteBuilder<SellToken, BuyToken, From, builder_state::Set> {
+        OrderBookQuoteBuilder::new(self.api, self.request.with_buy_amount_after_fee(buy_amount))
+    }
+
+    /// Set an explicit receiver. Omit it to use the owner.
+    pub fn with_receiver(mut self, receiver: Address) -> Self {
+        self.request = self.request.with_receiver(receiver);
+        self
+    }
+
+    /// Pin the absolute order expiry returned by the orderbook.
+    pub fn with_valid_to(mut self, valid_to: u32) -> Self {
+        self.request = self.request.with_valid_to(valid_to);
+        self
+    }
+
+    /// Ask the orderbook for a server-relative expiry.
+    pub fn with_valid_for(mut self, valid_for: u32) -> Self {
+        self.request = self.request.with_valid_for(valid_for);
+        self
+    }
+
+    /// Pin app-data by hash or by full canonical JSON.
+    pub fn with_app_data(mut self, app_data: impl Into<QuoteAppData>) -> Self {
+        self.request = self.request.with_app_data(app_data);
+        self
+    }
+
+    /// Pin the partial-fill setting.
+    pub fn with_partially_fillable(mut self, partially_fillable: bool) -> Self {
+        self.request = self.request.with_partially_fillable(partially_fillable);
+        self
+    }
+
+    /// Pin the sell-token source.
+    pub fn with_sell_token_balance(mut self, balance: crate::SellTokenSource) -> Self {
+        self.request = self.request.with_sell_token_balance(balance);
+        self
+    }
+
+    /// Pin the buy-token destination.
+    pub fn with_buy_token_balance(mut self, balance: crate::BuyTokenDestination) -> Self {
+        self.request = self.request.with_buy_token_balance(balance);
+        self
+    }
+
+    /// Pin the signing scheme expected in the quote response.
+    pub fn with_signing_scheme(mut self, signing_scheme: SigningScheme) -> Self {
+        self.request = self.request.with_signing_scheme(signing_scheme);
+        self
+    }
+
+    /// Set the EIP-1271 verification gas limit hint.
+    pub fn with_verification_gas_limit(mut self, gas_limit: u64) -> Self {
+        self.request = self.request.with_verification_gas_limit(gas_limit);
+        self
+    }
+
+    /// Mark whether the order is placed on chain.
+    pub fn with_onchain_order(mut self, onchain_order: bool) -> Self {
+        self.request = self.request.with_onchain_order(onchain_order);
+        self
+    }
+
+    /// Set the price-quality hint.
+    pub fn with_price_quality(mut self, price_quality: PriceQuality) -> Self {
+        self.request = self.request.with_price_quality(price_quality);
+        self
+    }
+}
+
+impl
+    OrderBookQuoteBuilder<
+        builder_state::Set,
+        builder_state::Set,
+        builder_state::Set,
+        builder_state::Set,
+    >
+{
+    /// Build the request DTO without sending it.
+    pub fn build_request(self) -> QuoteRequest {
+        self.request.build_request()
+    }
+
+    /// Send the quote request and keep enough context to bind, sign, and submit it.
+    pub async fn build(self) -> Result<QuotedOrder> {
+        let request = self.request.build_request();
+        let (app_data_hash, app_data_json) = app_data_for_submission(&request);
+        let response = self.api.quote(&request).await?;
+        Ok(QuotedOrder {
+            api: self.api,
+            request,
+            response,
+            app_data_hash,
+            app_data_json,
+        })
+    }
+}
+
+/// Quote response plus the request context needed to sign and submit it safely.
+#[derive(Debug, Clone)]
+pub struct QuotedOrder {
+    api: OrderBookApi,
+    request: QuoteRequest,
+    response: OrderQuoteResponse,
+    app_data_hash: AppDataHash,
+    app_data_json: Option<String>,
+}
+
+impl QuotedOrder {
+    /// Request that produced this quote.
+    pub const fn request(&self) -> &QuoteRequest {
+        &self.request
+    }
+
+    /// Raw orderbook quote response.
+    pub const fn response(&self) -> &OrderQuoteResponse {
+        &self.response
+    }
+
+    /// Consume the context and return the raw orderbook quote response.
+    pub fn into_response(self) -> OrderQuoteResponse {
+        self.response
+    }
+
+    /// Sign with EIP-712 using the chain attached to the [`OrderBookApi`].
+    pub fn sign<S: alloy_signer::SignerSync>(&self, signer: &S) -> Result<SignedOrderSubmission> {
+        self.sign_with_scheme(EcdsaSigningScheme::Eip712, signer)
+    }
+
+    /// Sign with an ECDSA scheme using the chain attached to the [`OrderBookApi`].
+    pub fn sign_with_scheme<S: alloy_signer::SignerSync>(
+        &self,
+        scheme: EcdsaSigningScheme,
+        signer: &S,
+    ) -> Result<SignedOrderSubmission> {
+        let chain = self.api.chain.ok_or(Error::OrderCreationInvalid {
+            field: "chain",
+            reason: "quote builder can only infer the signing domain when OrderBookApi was built with a chain; use sign_for_chain",
+        })?;
+        self.sign_for_chain(chain, scheme, signer)
+    }
+
+    /// Sign with an explicit chain, useful for clients built from custom URLs.
+    pub fn sign_for_chain<S: alloy_signer::SignerSync>(
+        &self,
+        chain: Chain,
+        scheme: EcdsaSigningScheme,
+        signer: &S,
+    ) -> Result<SignedOrderSubmission> {
+        let order_data = self
+            .response
+            .try_into_signed_order_data(&self.request, self.app_data_hash)?;
+        let signature = order_data.sign(scheme, &chain.settlement_domain(), signer)?;
+        let app_data_json = self.app_data_json.clone().ok_or(Error::OrderCreationInvalid {
+            field: "app_data",
+            reason: "full app-data JSON is required to submit a quote pinned by a non-empty hash",
+        })?;
+        let order = OrderCreation::from_signed_order_data(
+            &order_data,
+            signature,
+            self.response.from,
+            app_data_json,
+            Some(self.response.id),
+        )?;
+        Ok(SignedOrderSubmission {
+            api: self.api.clone(),
+            order,
+        })
+    }
+}
+
+/// Signed order plus the orderbook client that should receive it.
+#[derive(Debug, Clone)]
+pub struct SignedOrderSubmission {
+    api: OrderBookApi,
+    order: OrderCreation,
+}
+
+impl SignedOrderSubmission {
+    /// Wire body that will be posted.
+    pub const fn order(&self) -> &OrderCreation {
+        &self.order
+    }
+
+    /// Submit the signed order to `POST /api/v1/orders`.
+    pub async fn submit(&self) -> Result<OrderUid> {
+        self.api.post_order(&self.order).await
+    }
+}
+
+fn app_data_for_submission(request: &QuoteRequest) -> (AppDataHash, Option<String>) {
+    match request.app_data.as_ref() {
+        Some(QuoteAppData::Hash(hash)) if *hash == EMPTY_APP_DATA_HASH => {
+            (*hash, Some(EMPTY_APP_DATA_JSON.to_owned()))
+        }
+        Some(QuoteAppData::Hash(hash)) => (*hash, None),
+        Some(QuoteAppData::Full(json)) => (keccak256(json.as_bytes()), Some(json.clone())),
+        None => (EMPTY_APP_DATA_HASH, Some(EMPTY_APP_DATA_JSON.to_owned())),
+    }
+}
+
 /// Thin client for the CoW Protocol orderbook.
 #[derive(Debug, Clone)]
 pub struct OrderBookApi {
@@ -56,6 +409,21 @@ pub struct OrderBookApi {
 }
 
 impl OrderBookApi {
+    /// Start a type-state builder for an orderbook client.
+    pub const fn builder() -> OrderBookApiBuilder {
+        OrderBookApiBuilder::new()
+    }
+
+    /// Start a type-state builder targeting the production orderbook on `chain`.
+    pub fn with_chain(chain: Chain) -> OrderBookApiBuilder<builder_state::Set> {
+        Self::builder().with_chain(chain)
+    }
+
+    /// Start a type-state quote builder bound to this client.
+    pub fn quote_builder(&self) -> OrderBookQuoteBuilder {
+        OrderBookQuoteBuilder::new(self.clone(), QuoteRequest::builder())
+    }
+
     /// Client for the production orderbook on `chain`.
     /// [`Chain::orderbook_base_url`] already includes the trailing slash
     /// [`url::Url::join`] needs to append, not replace, path segments.

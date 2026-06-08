@@ -34,7 +34,9 @@ pub use orders::OrderCreation;
 #[cfg(feature = "http-client")]
 mod client;
 #[cfg(feature = "http-client")]
-pub use client::OrderBookApi;
+pub use client::{
+    OrderBookApi, OrderBookApiBuilder, OrderBookQuoteBuilder, QuotedOrder, SignedOrderSubmission,
+};
 
 #[cfg(test)]
 #[path = "order_book/tests.rs"]
