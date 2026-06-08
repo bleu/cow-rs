@@ -1018,6 +1018,7 @@ dependencies = [
  "alloy-sol-types",
  "cid",
  "const-hex",
+ "cowprotocol-primitives",
  "getrandom 0.2.17",
  "hex-literal",
  "http",
@@ -1042,6 +1043,14 @@ version = "1.0.0-alpha.3"
 [[package]]
 name = "cowprotocol-primitives"
 version = "1.0.0-alpha.3"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "url",
+]
 
 [[package]]
 name = "cowprotocol-signing"

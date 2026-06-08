@@ -17,3 +17,11 @@ categories = ["cryptography::cryptocurrencies", "data-structures"]
 workspace = true
 
 [dependencies]
+alloy-primitives.workspace = true
+alloy-sol-types.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -5,13 +5,13 @@
 **Status**: Complete
 
 ## Stage 2: Extract Primitive Types
-**Goal**: Move chain, domain, contract, order, and related low-level value types behind `cowprotocol-primitives`, with `cowprotocol` re-exporting the existing public API.
-**Success Criteria**: Existing `cowprotocol::{Chain, OrderData, OrderUid, DomainSeparator, ...}` imports keep working, and primitive-only consumers can depend on `cowprotocol-primitives`.
+**Goal**: Move chain, domain, contract ABI, composable-order, and multiplexer primitives behind `cowprotocol-primitives`, with `cowprotocol` re-exporting the existing public API.
+**Success Criteria**: Existing `cowprotocol::{Chain, DomainSeparator, ComposableCoW, Multiplexer, ...}` imports keep working, and primitive-only consumers can depend on `cowprotocol-primitives`.
 **Tests**: `cargo +1.91.1 test -p cowprotocol-primitives`; `cargo +1.91.1 test -p cowprotocol`
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Extract App-Data And Signing
-**Goal**: Move app-data document/hash/CID logic into `cowprotocol-appdata` and signature/cancellation logic into `cowprotocol-signing`, keeping meta-crate exports stable.
+**Goal**: Move order data, app-data document/hash/CID logic, and signature/cancellation logic into `cowprotocol-appdata` and `cowprotocol-signing`, keeping meta-crate exports stable.
 **Success Criteria**: App-data and signing tests live with their owning crates, while `cowprotocol` still exposes the same ergonomic types and prelude.
 **Tests**: `cargo +1.91.1 test -p cowprotocol-appdata`; `cargo +1.91.1 test -p cowprotocol-signing`; `cargo +1.91.1 test -p cowprotocol`
 **Status**: Not Started
