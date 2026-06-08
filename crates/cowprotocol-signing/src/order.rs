@@ -10,7 +10,7 @@
 //!
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/model/src/order.rs
 
-use alloy_primitives::{Address, B256, FixedBytes, U256, b256, keccak256};
+use alloy_primitives::{Address, B256, FixedBytes, U256, b256};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::fmt::{self, Display};
@@ -356,13 +356,18 @@ impl OrderKind {
 
     /// Parse the 32-byte on-chain marker (as returned by `GPv2Order.Data.kind`)
     /// into a Rust enum. Returns `None` for unknown markers; the contract
-    /// itself only ever writes `BUY` or `SELL`. The marker is derived as
-    /// `keccak256(as_str())` so the wire mapping has a single source of
-    /// truth rather than a re-pasted `b256!` table.
+    /// itself only ever writes `BUY` or `SELL`. Compares against the
+    /// precomputed [`Self::BUY`] / [`Self::SELL`] constants (locked to
+    /// `keccak256(as_str())` by `order_kind_keccak_constants`), so a lookup
+    /// does no per-call hashing.
     pub fn from_contract_bytes(bytes: B256) -> Option<Self> {
-        [Self::Buy, Self::Sell]
-            .into_iter()
-            .find(|variant| bytes == keccak256(variant.as_str()))
+        if bytes == Self::BUY {
+            Some(Self::Buy)
+        } else if bytes == Self::SELL {
+            Some(Self::Sell)
+        } else {
+            None
+        }
     }
 }
 
@@ -406,13 +411,20 @@ impl SellTokenSource {
     }
 
     /// Parse the on-chain `GPv2Order.Data.sellTokenBalance` marker.
-    /// Returns `None` for unknown values. The marker is derived as
-    /// `keccak256(as_str())` so the wire mapping has a single source of
-    /// truth rather than a re-pasted `b256!` table.
+    /// Returns `None` for unknown values. Compares against the precomputed
+    /// [`Self::ERC20`] / [`Self::EXTERNAL`] / [`Self::INTERNAL`] constants
+    /// (locked to `keccak256(as_str())` by `sell_token_source_keccak_constants`),
+    /// so a lookup does no per-call hashing.
     pub fn from_contract_bytes(bytes: B256) -> Option<Self> {
-        [Self::Erc20, Self::External, Self::Internal]
-            .into_iter()
-            .find(|variant| bytes == keccak256(variant.as_str()))
+        if bytes == Self::ERC20 {
+            Some(Self::Erc20)
+        } else if bytes == Self::EXTERNAL {
+            Some(Self::External)
+        } else if bytes == Self::INTERNAL {
+            Some(Self::Internal)
+        } else {
+            None
+        }
     }
 }
 
@@ -445,13 +457,18 @@ impl BuyTokenDestination {
     }
 
     /// Parse the on-chain `GPv2Order.Data.buyTokenBalance` marker.
-    /// Returns `None` for unknown values. The marker is derived as
-    /// `keccak256(as_str())` so the wire mapping has a single source of
-    /// truth rather than a re-pasted `b256!` table.
+    /// Returns `None` for unknown values. Compares against the precomputed
+    /// [`Self::ERC20`] / [`Self::INTERNAL`] constants (locked to
+    /// `keccak256(as_str())` by `buy_token_destination_keccak_constants`), so
+    /// a lookup does no per-call hashing.
     pub fn from_contract_bytes(bytes: B256) -> Option<Self> {
-        [Self::Erc20, Self::Internal]
-            .into_iter()
-            .find(|variant| bytes == keccak256(variant.as_str()))
+        if bytes == Self::ERC20 {
+            Some(Self::Erc20)
+        } else if bytes == Self::INTERNAL {
+            Some(Self::Internal)
+        } else {
+            None
+        }
     }
 }
 
@@ -520,7 +537,7 @@ impl OrderUidParts for OrderUid {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::address;
+    use alloy_primitives::{address, keccak256};
     use hex_literal::hex;
     use std::str::FromStr;
 
