@@ -1,5 +1,8 @@
 //! Primitive CoW Protocol chain, domain, order, and contract types.
 
+#![forbid(unsafe_code)]
+#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
+
 use alloy_primitives::{B256, b256};
 
 pub mod chain;

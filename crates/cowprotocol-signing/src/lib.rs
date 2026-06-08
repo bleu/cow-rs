@@ -1,5 +1,8 @@
 //! CoW Protocol signing schemes, signatures, and cancellation helpers.
 
+#![forbid(unsafe_code)]
+#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
+
 pub mod cancellation;
 pub mod order;
 pub mod signature;

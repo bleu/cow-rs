@@ -1,5 +1,8 @@
 //! CoW Protocol orderbook DTOs, quote builders, and HTTP client.
 
+#![forbid(unsafe_code)]
+#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
+
 pub use cowprotocol_appdata::{
     AppDataDoc, AppDataHash, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON, app_data,
 };
