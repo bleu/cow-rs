@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::collections::BTreeMap;
 
-use crate::app_data::AppDataHash;
+use crate::app_data::{AppDataDoc, AppDataHash};
 use crate::order::OrderUid;
 
 /// `appData` field on a quote request: 32-byte digest or canonical
@@ -24,20 +24,17 @@ pub enum QuoteAppData {
     Full(String),
 }
 
-impl QuoteAppData {
-    /// Construct from a pre-computed digest.
-    pub const fn hash(digest: AppDataHash) -> Self {
-        Self::Hash(digest)
-    }
-    /// Construct from a canonical-JSON document.
-    pub const fn full(full: String) -> Self {
-        Self::Full(full)
-    }
-}
-
 impl From<AppDataHash> for QuoteAppData {
     fn from(digest: AppDataHash) -> Self {
         Self::Hash(digest)
+    }
+}
+
+impl From<&AppDataDoc> for QuoteAppData {
+    /// Pin the document's canonical JSON, so the orderbook computes
+    /// the digest from the exact bytes the SDK would sign against.
+    fn from(doc: &AppDataDoc) -> Self {
+        Self::Full(doc.canonical_json())
     }
 }
 

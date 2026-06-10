@@ -14,7 +14,7 @@
 //! [`OrderBookApi`] directly: this module is intentionally narrow.
 
 use alloy_primitives::Address;
-use alloy_signer::SignerSync;
+use cowprotocol_signing::SignerSync;
 
 use crate::{
     AppDataDoc, Chain, Error, OrderBookApi, OrderCreation, OrderData, OrderQuoteResponse, OrderUid,

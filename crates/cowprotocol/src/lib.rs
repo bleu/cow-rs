@@ -139,8 +139,8 @@ pub use crate::{
     },
     order_book::{
         AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderBookApi,
-        OrderCreation, OrderQuote, OrderQuoteResponse, PriceQuality, QuoteAppData, QuoteRequest,
-        QuoteRequestBuilder, TokenMetadata, TotalSurplus, Trade,
+        OrderCreation, OrderQuote, OrderQuoteResponse, OrderSubmission, PriceQuality, QuoteAppData,
+        QuoteRequest, QuoteRequestBuilder, QuotedOrder, TokenMetadata, TotalSurplus, Trade,
     },
     quote_amounts::{
         Amounts as QuoteAmounts, DEFAULT_SLIPPAGE_BPS, OrderCosts, ProtocolFeeBps,
@@ -155,10 +155,7 @@ pub use crate::{
 };
 
 #[cfg(feature = "http-client")]
-pub use crate::order_book::{
-    OrderBookApiBuilder, OrderBookQuoteBuilder, QuotedOrder, ReqwestTransport,
-    SignedOrderSubmission,
-};
+pub use crate::order_book::{OrderBookApiBuilder, ReqwestTransport};
 
 #[cfg(feature = "http-client")]
 pub use crate::trading::{PostedSwapOrder, SwapOrder, TradingClient};
@@ -171,16 +168,13 @@ pub use crate::trading::{PostedSwapOrder, SwapOrder, TradingClient};
 pub mod prelude {
     pub use crate::{
         AppDataDoc, AppDataHash, Chain, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON, Error,
-        OrderCreation, OrderData, OrderKind, OrderQuoteResponse, OrderUid, PriceQuality,
-        QuoteAppData, QuoteRequest, QuoteRequestBuilder, Result, Signature, SigningScheme,
-        settlement_domain,
+        OrderBookApi, OrderCreation, OrderData, OrderKind, OrderQuoteResponse, OrderSubmission,
+        OrderUid, PriceQuality, QuoteAppData, QuoteRequest, QuoteRequestBuilder, QuotedOrder,
+        Result, Signature, SigningScheme, settlement_domain,
     };
 
     #[cfg(feature = "http-client")]
-    pub use crate::{
-        OrderBookApi, OrderBookApiBuilder, OrderBookQuoteBuilder, QuotedOrder,
-        SignedOrderSubmission,
-    };
+    pub use crate::OrderBookApiBuilder;
 
     pub use crate::EcdsaSigningScheme;
 }

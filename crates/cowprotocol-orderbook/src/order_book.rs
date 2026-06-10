@@ -22,6 +22,19 @@ pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 /// [`Error::ResponseTooLarge`]: crate::Error::ResponseTooLarge
 pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
+/// Marker types used by this module's type-state builders
+/// ([`QuoteRequestBuilder`], `OrderBookApiBuilder`) to track required
+/// fields.
+pub mod builder_state {
+    /// Required field has not been supplied yet.
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct Missing;
+
+    /// Required field has been supplied.
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct Set;
+}
+
 mod types;
 pub use types::*;
 
@@ -34,13 +47,13 @@ pub use orders::OrderCreation;
 mod api;
 pub use api::OrderBookApi;
 
+mod flow;
+pub use flow::{OrderSubmission, QuoteRequestBuilder, QuotedOrder};
+
 #[cfg(feature = "http-client")]
 mod client;
 #[cfg(feature = "http-client")]
-pub use client::{
-    OrderBookApiBuilder, OrderBookQuoteBuilder, QuotedOrder, ReqwestTransport,
-    SignedOrderSubmission,
-};
+pub use client::{OrderBookApiBuilder, ReqwestTransport};
 
 #[cfg(test)]
 #[path = "order_book/tests.rs"]

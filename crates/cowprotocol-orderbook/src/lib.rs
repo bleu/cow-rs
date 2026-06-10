@@ -11,7 +11,7 @@ pub use cowprotocol_signing::{
     BUY_ETH_ADDRESS, BuyTokenDestination, EcdsaSignature, EcdsaSigningScheme, Order,
     OrderCancellations, OrderClass, OrderData, OrderKind, OrderStatus, OrderUid,
     OrderUidParseError, OrderUidParts, Recovered, SellTokenSource, Signature, SignatureError,
-    SignedOrderCancellation, SignedOrderCancellations, SigningScheme, cancellation,
+    SignedOrderCancellation, SignedOrderCancellations, SignerSync, SigningScheme, cancellation,
     ecdsa_from_components, ecdsa_recover, order, order_typed_data, parse_ecdsa, parse_order_uid,
     sign_ecdsa, signature, signing_scheme,
 };
@@ -31,8 +31,8 @@ pub use self::{
     eth_flow::{ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowOrder},
     order_book::{
         AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderBookApi,
-        OrderCreation, OrderQuote, OrderQuoteResponse, PriceQuality, QuoteAppData, QuoteRequest,
-        QuoteRequestBuilder, TokenMetadata, TotalSurplus, Trade,
+        OrderCreation, OrderQuote, OrderQuoteResponse, OrderSubmission, PriceQuality, QuoteAppData,
+        QuoteRequest, QuoteRequestBuilder, QuotedOrder, TokenMetadata, TotalSurplus, Trade,
     },
     quote_amounts::{
         Amounts as QuoteAmounts, DEFAULT_SLIPPAGE_BPS, OrderCosts, ProtocolFeeBps,
@@ -43,10 +43,7 @@ pub use self::{
 
 #[cfg(feature = "http-client")]
 pub use self::{
-    order_book::{
-        OrderBookApiBuilder, OrderBookQuoteBuilder, QuotedOrder, ReqwestTransport,
-        SignedOrderSubmission,
-    },
+    order_book::{OrderBookApiBuilder, ReqwestTransport},
     trading::{PostedSwapOrder, SwapOrder, TradingClient},
 };
 

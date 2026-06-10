@@ -1059,7 +1059,6 @@ name = "cowprotocol-orderbook"
 version = "1.0.0-alpha.3"
 dependencies = [
  "alloy-primitives",
- "alloy-signer",
  "alloy-signer-local",
  "const-hex",
  "cowprotocol-appdata",

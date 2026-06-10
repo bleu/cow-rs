@@ -10,6 +10,12 @@ pub mod signing_scheme;
 
 pub use cowprotocol_primitives::{contracts, domain};
 
+// Re-exported so downstream crates (the orderbook pipeline, integrator
+// code) can name the signer bound without a direct alloy-signer
+// dependency; this crate already owns the alloy-signer edge for
+// `OrderData::sign`.
+pub use alloy_signer::SignerSync;
+
 pub mod app_data {
     //! Shared app-data digest primitives used by signed orders.
 

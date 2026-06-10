@@ -18,18 +18,15 @@ workspace = true
 
 [features]
 default = ["http-client", "subgraph"]
-# `alloy-signer` is named by this crate's own code only in the HTTP
-# client (`QuotedOrder::sign`) and `TradingClient`, both gated here, so
-# the manifest declares it only under `http-client`. Note it is still
-# pulled transitively by `cowprotocol-signing` (which owns
-# `OrderData::sign`); fully dropping it from a `--no-default-features`
-# build would require gating it there too.
-http-client = ["dep:reqwest", "dep:alloy-signer"]
+# The quote pipeline's signer bound comes through
+# `cowprotocol_signing::SignerSync` (that crate owns the alloy-signer
+# edge for `OrderData::sign`), so this feature only gates the reqwest
+# transport.
+http-client = ["dep:reqwest"]
 subgraph = ["http-client"]
 
 [dependencies]
 alloy-primitives.workspace = true
-alloy-signer = { workspace = true, optional = true }
 cowprotocol-appdata = { version = "1.0.0-alpha.3", path = "../cowprotocol-appdata" }
 cowprotocol-primitives = { version = "1.0.0-alpha.3", path = "../cowprotocol-primitives" }
 cowprotocol-signing = { version = "1.0.0-alpha.3", path = "../cowprotocol-signing" }

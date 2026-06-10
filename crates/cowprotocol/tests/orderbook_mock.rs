@@ -829,7 +829,7 @@ async fn quote_builder_can_quote_sign_and_submit() {
         .build()
         .await
         .unwrap()
-        .sign_for_chain(
+        .sign_with(
             Chain::Mainnet,
             cowprotocol::EcdsaSigningScheme::Eip712,
             &signer,

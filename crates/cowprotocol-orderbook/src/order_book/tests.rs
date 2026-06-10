@@ -61,12 +61,13 @@ fn fixture_quote_request() -> QuoteRequest {
 
 #[test]
 fn quote_request_builder_matches_constructor_wire_shape() {
-    let request = QuoteRequest::builder()
+    let request = pipeline::mock_api(&pipeline::MockTransport::default())
+        .quote_builder()
         .with_sell_token(USDC)
         .with_buy_token(DAI)
         .with_from(OWNER)
         .with_sell_amount(U256::from(100_000_000_u64))
-        .build_request();
+        .into_request();
 
     assert_eq!(request.kind(), OrderKind::Sell);
     assert_eq!(
@@ -1225,4 +1226,380 @@ async fn upload_app_data_accepts_matching_server_digest() {
     let api = OrderBookApi::new_with_base_url(server.uri().parse().expect("mock URI must parse"));
     let returned = api.upload_app_data(&document).await.unwrap();
     assert_eq!(returned, computed);
+}
+
+/// Pipeline tests driven through a canned-response mock transport: the
+/// quote -> sign -> submit flow is transport-generic, so none of these
+/// need reqwest or an HTTP stack.
+mod pipeline {
+    use super::*;
+    use crate::app_data::{APP_DATA_SIZE_LIMIT, AppDataDoc, AppDataError};
+    use crate::chain::Chain;
+    use crate::transport::{HttpMethod, HttpRequest, HttpResponse, HttpTransport};
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    /// Canned-response transport: pops one `(status, body)` per request
+    /// and records every request it executes, so tests can assert which
+    /// endpoints were (or were not) reached.
+    #[derive(Clone, Debug, Default)]
+    pub(super) struct MockTransport {
+        responses: Arc<Mutex<VecDeque<(u16, String)>>>,
+        seen: Arc<Mutex<Vec<(HttpMethod, String)>>>,
+    }
+
+    impl MockTransport {
+        pub(super) fn enqueue(&self, status: u16, body: impl Into<String>) {
+            self.responses
+                .lock()
+                .unwrap()
+                .push_back((status, body.into()));
+        }
+
+        pub(super) fn seen(&self) -> Vec<(HttpMethod, String)> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    impl HttpTransport for MockTransport {
+        async fn execute(&self, request: HttpRequest) -> crate::error::Result<HttpResponse> {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((request.method, request.url.path().to_owned()));
+            let (status, body) = self
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("mock transport received an unexpected request");
+            Ok(HttpResponse { status, body })
+        }
+    }
+
+    pub(super) fn mock_api(transport: &MockTransport) -> OrderBookApi<MockTransport> {
+        OrderBookApi::new_with_transport(
+            "https://orderbook.invalid/".parse().unwrap(),
+            transport.clone(),
+        )
+    }
+
+    const SELL: u128 = 1_000_000_000_000_000_000;
+    const BUY: u128 = 2_000_000_000_000_000_000;
+    const UID_BODY: &str = "\"0xb74844872ddbadb709629952eab02a9275c5c05426cb195e27029a353909404370997970c51812dc3a010c7d01b50e0d17dc79c86a0513b9\"";
+
+    fn quote_body(from: Address) -> String {
+        serde_json::json!({
+            "quote": {
+                "sellToken": format!("{USDC:#x}"),
+                "buyToken": format!("{DAI:#x}"),
+                "receiver": null,
+                "sellAmount": SELL.to_string(),
+                "buyAmount": BUY.to_string(),
+                "validTo": 1_900_000_000_u32,
+                "appData": format!("{EMPTY_APP_DATA_HASH:#x}"),
+                "feeAmount": "0",
+                "kind": "sell",
+                "partiallyFillable": false,
+                "sellTokenBalance": "erc20",
+                "buyTokenBalance": "erc20",
+                "signingScheme": "eip712",
+            },
+            "from": format!("{from:#x}"),
+            "expiration": "2099-12-31T23:59:59Z",
+            "id": 42,
+            "verified": true,
+        })
+        .to_string()
+    }
+
+    fn signer() -> alloy_signer_local::PrivateKeySigner {
+        alloy_signer_local::PrivateKeySigner::from_bytes(&U256::from(1u64).to_be_bytes().into())
+            .unwrap()
+    }
+
+    async fn quoted(
+        api: &OrderBookApi<MockTransport>,
+        transport: &MockTransport,
+        owner: Address,
+    ) -> QuotedOrder<MockTransport> {
+        transport.enqueue(200, quote_body(owner));
+        api.quote_builder()
+            .with_sell_token(USDC)
+            .with_buy_token(DAI)
+            .with_from(owner)
+            .with_sell_amount(U256::from(SELL))
+            .build()
+            .await
+            .expect("matching mock quote must bind")
+    }
+
+    /// `build()` rejects a zero `from` before any request leaves the
+    /// client: the precondition the deleted `TradingClient` enforced.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn build_rejects_zero_from_before_any_request() {
+        let transport = MockTransport::default();
+        let err = mock_api(&transport)
+            .quote_builder()
+            .with_sell_token(USDC)
+            .with_buy_token(DAI)
+            .with_from(Address::ZERO)
+            .with_sell_amount(U256::from(SELL))
+            .build()
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::QuoteRequestInvalid { field: "from", .. }),
+            "got: {err:?}"
+        );
+        assert!(transport.seen().is_empty(), "no request may reach the wire");
+    }
+
+    /// `build()` surfaces an oversized caller-supplied app-data document
+    /// as an error before any network call, mirroring the deleted
+    /// `TradingClient::post_swap_order` guard.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn build_rejects_oversize_app_data_before_any_request() {
+        let transport = MockTransport::default();
+        let doc = AppDataDoc {
+            app_code: Some("x".repeat(APP_DATA_SIZE_LIMIT + 1)),
+            ..AppDataDoc::default()
+        };
+        let err = mock_api(&transport)
+            .quote_builder()
+            .with_sell_token(USDC)
+            .with_buy_token(DAI)
+            .with_from(OWNER)
+            .with_sell_amount(U256::from(SELL))
+            .with_app_data(&doc)
+            .build()
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::AppData(AppDataError::DocumentTooLarge { .. })),
+            "got: {err:?}"
+        );
+        assert!(transport.seen().is_empty(), "no request may reach the wire");
+    }
+
+    /// `QuotedOrder` is born response-bound: a hostile orderbook that
+    /// echoes a swapped `sellToken` fails at quote time, inside
+    /// `build()`, not later at signing time.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn build_binds_response_to_request() {
+        let transport = MockTransport::default();
+        // The mock echoes DAI as the sell token while the request asks
+        // for USDC.
+        transport.enqueue(
+            200,
+            quote_body(OWNER).replace(&format!("{USDC:#x}"), &format!("{DAI:#x}")),
+        );
+        let err = mock_api(&transport)
+            .quote_builder()
+            .with_sell_token(USDC)
+            .with_buy_token(DAI)
+            .with_from(OWNER)
+            .with_sell_amount(U256::from(SELL))
+            .build()
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::QuoteFieldMismatch {
+                    field: "sellToken",
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    /// R24 fail-fast: when `from` does not match the signer, `sign()`
+    /// rejects with `SignerMismatch` and `POST /api/v1/orders` is never
+    /// reached. Ported from `TradingClient`'s signer-mismatch test.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn sign_fails_fast_on_signer_mismatch_without_posting() {
+        let transport = MockTransport::default();
+        let api = mock_api(&transport).with_chain_hint(Chain::Mainnet);
+        let declared_from = address!("dead0000dead0000dead0000dead0000dead0000");
+        assert_ne!(signer().address(), declared_from);
+
+        let quoted = quoted(&api, &transport, declared_from).await;
+        let err = quoted.sign(signer()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::Signature(crate::signature::SignatureError::SignerMismatch { .. })
+            ),
+            "got: {err:?}"
+        );
+        assert_eq!(
+            transport.seen(),
+            vec![(HttpMethod::Post, "/api/v1/quote".to_owned())],
+            "POST /api/v1/orders must not be reached on a signer mismatch"
+        );
+    }
+
+    /// `sign_with` refuses a chain that disagrees with the client's
+    /// chain hint, so a caller cannot sign for one chain and post to
+    /// another's orderbook. Ported from `TradingClient::from_orderbook`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn sign_with_rejects_chain_mismatch() {
+        let transport = MockTransport::default();
+        let api = mock_api(&transport).with_chain_hint(Chain::Gnosis);
+        let quoted = quoted(&api, &transport, signer().address()).await;
+        let err = quoted
+            .sign_with(Chain::Mainnet, EcdsaSigningScheme::Eip712, signer())
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::ChainMismatch {
+                    client: Chain::Mainnet,
+                    api: Chain::Gnosis,
+                }
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    /// Matching chains (and chainless clients, whose chain is unknown)
+    /// are accepted; the signer works both by value and by reference.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn sign_with_accepts_matching_and_unknown_chain() {
+        let wallet = signer();
+        let owner = wallet.address();
+
+        let transport = MockTransport::default();
+        let api = mock_api(&transport).with_chain_hint(Chain::Mainnet);
+        let quoted_hinted = quoted(&api, &transport, owner).await;
+        // By reference, against the matching chain.
+        quoted_hinted
+            .sign_with(Chain::Mainnet, EcdsaSigningScheme::Eip712, &wallet)
+            .expect("matching chain must be accepted");
+
+        let chainless = mock_api(&transport);
+        let quoted_chainless = quoted(&chainless, &transport, owner).await;
+        // By value, against a caller-supplied chain.
+        quoted_chainless
+            .sign_with(Chain::Gnosis, EcdsaSigningScheme::Eip712, wallet)
+            .expect("chainless client must trust the caller's chain");
+    }
+
+    /// `sign()` needs the chain hint to infer the signing domain;
+    /// chainless clients are pointed at `sign_with`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn sign_requires_chain_hint() {
+        let transport = MockTransport::default();
+        let api = mock_api(&transport);
+        let quoted = quoted(&api, &transport, signer().address()).await;
+        let err = quoted.sign(signer()).unwrap_err();
+        assert!(
+            matches!(err, Error::OrderCreationInvalid { field: "chain", .. }),
+            "got: {err:?}"
+        );
+    }
+
+    /// The empty app-data document is universally known to the
+    /// orderbook, so `submit()` skips the pinning PUT and goes straight
+    /// to `POST /api/v1/orders`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn submit_skips_app_data_put_for_empty_document() {
+        let wallet = signer();
+        let transport = MockTransport::default();
+        let api = mock_api(&transport).with_chain_hint(Chain::Mainnet);
+        let quoted = quoted(&api, &transport, wallet.address()).await;
+        transport.enqueue(201, UID_BODY);
+        quoted.sign(&wallet).unwrap().submit().await.unwrap();
+        assert_eq!(
+            transport.seen(),
+            vec![
+                (HttpMethod::Post, "/api/v1/quote".to_owned()),
+                (HttpMethod::Post, "/api/v1/orders".to_owned()),
+            ],
+            "no PUT for the empty app-data sentinel"
+        );
+    }
+
+    /// A non-empty app-data document is pinned via
+    /// `PUT /api/v1/app_data/{hash}` before the order is posted, so the
+    /// index never carries the digest without the document.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn submit_pins_app_data_before_posting() {
+        let wallet = signer();
+        let owner = wallet.address();
+        let doc = AppDataDoc::sdk_attribution("cow-rs");
+        let doc_hash = doc.hash();
+
+        let transport = MockTransport::default();
+        let api = mock_api(&transport).with_chain_hint(Chain::Mainnet);
+        transport.enqueue(200, quote_body(owner));
+        let quoted = api
+            .quote_builder()
+            .with_sell_token(USDC)
+            .with_buy_token(DAI)
+            .with_from(owner)
+            .with_sell_amount(U256::from(SELL))
+            .with_app_data(&doc)
+            .build()
+            .await
+            .unwrap();
+        transport.enqueue(200, ""); // PUT app_data
+        transport.enqueue(201, UID_BODY); // POST orders
+        quoted.sign(&wallet).unwrap().submit().await.unwrap();
+        assert_eq!(
+            transport.seen(),
+            vec![
+                (HttpMethod::Post, "/api/v1/quote".to_owned()),
+                (HttpMethod::Put, format!("/api/v1/app_data/{doc_hash}")),
+                (HttpMethod::Post, "/api/v1/orders".to_owned()),
+            ],
+            "the document must be pinned before the order is posted"
+        );
+    }
+
+    /// A quote pinned by a bare non-empty digest carries no document,
+    /// so signing fails until the caller supplies the JSON.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn signing_a_quote_pinned_by_bare_hash_requires_document() {
+        let wallet = signer();
+        let owner = wallet.address();
+        let pinned = AppDataHash::from([0x42; 32]);
+
+        let transport = MockTransport::default();
+        let api = mock_api(&transport).with_chain_hint(Chain::Mainnet);
+        transport.enqueue(200, quote_body(owner));
+        let quoted = api
+            .quote_builder()
+            .with_sell_token(USDC)
+            .with_buy_token(DAI)
+            .with_from(owner)
+            .with_sell_amount(U256::from(SELL))
+            .with_app_data(pinned)
+            .build()
+            .await
+            .unwrap();
+        let err = quoted.sign(&wallet).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::OrderCreationInvalid {
+                    field: "app_data",
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
+    }
 }
