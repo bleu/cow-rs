@@ -5,7 +5,7 @@
 //! URL slug used by that orderbook deployment.
 
 use alloy_primitives::Address;
-use serde::{Deserialize, Deserializer, de};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::fmt;
 use std::str::FromStr;
 
@@ -176,7 +176,7 @@ impl TryFrom<u64> for Chain {
             43_114 => Ok(Self::Avalanche),
             59_144 => Ok(Self::Linea),
             11_155_111 => Ok(Self::Sepolia),
-            other => Err(UnsupportedChain(other)),
+            other => Err(UnsupportedChain::Id(other)),
         }
     }
 }
@@ -189,9 +189,10 @@ impl FromStr for Chain {
     /// historically accepted (e.g. `"arbitrum"`, `"arbitrum-one"`). The
     /// input is matched case-insensitively after stripping dashes and
     /// underscores so `"arbitrum-one"`, `"arbitrum_one"` and `"ArbitrumOne"`
-    /// all resolve to [`Chain::ArbitrumOne`]. Slug failure returns
-    /// `UnsupportedChain(0)`: `0` is not a valid chain id, so it doubles
-    /// as a sentinel for "input was not a recognised slug".
+    /// all resolve to [`Chain::ArbitrumOne`]. Numeric input that names no
+    /// supported deployment fails with [`UnsupportedChain::Id`];
+    /// non-numeric input that matches no slug fails with
+    /// [`UnsupportedChain::Slug`], carrying the input verbatim.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Ok(id) = s.parse::<u64>() {
             return Self::try_from(id);
@@ -212,7 +213,7 @@ impl FromStr for Chain {
             "avalanche" => Ok(Self::Avalanche),
             "linea" => Ok(Self::Linea),
             "sepolia" => Ok(Self::Sepolia),
-            _ => Err(UnsupportedChain(0)),
+            _ => Err(UnsupportedChain::Slug(s.into())),
         }
     }
 }
@@ -226,10 +227,29 @@ impl fmt::Display for Chain {
     }
 }
 
-/// Returned when a chain id is not in [`Chain`].
-#[derive(Clone, Copy, Debug, thiserror::Error, Eq, PartialEq)]
-#[error("unsupported chain id {0}")]
-pub struct UnsupportedChain(pub u64);
+/// Returned when an input names a chain that is not in [`Chain`].
+#[derive(Clone, Debug, thiserror::Error, Eq, PartialEq)]
+pub enum UnsupportedChain {
+    /// A numeric chain id with no supported orderbook deployment.
+    #[error("unsupported chain id {0}")]
+    Id(u64),
+    /// A string that is neither a numeric chain id nor a recognised
+    /// orderbook slug or alias. Carries the input verbatim.
+    #[error("unsupported chain slug {0:?}")]
+    Slug(Box<str>),
+}
+
+impl Serialize for Chain {
+    /// Serialises as the canonical integer chain id (e.g.
+    /// [`Chain::Mainnet`] as `1`), the inverse of the integer arm of
+    /// the [`Deserialize`] impl below.
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u64(self.id())
+    }
+}
 
 impl<'de> Deserialize<'de> for Chain {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -241,7 +261,9 @@ impl<'de> Deserialize<'de> for Chain {
             type Value = Chain;
 
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a chain id as integer or stringified integer")
+                f.write_str(
+                    "a chain id as an integer, a stringified chain id, or an orderbook slug",
+                )
             }
 
             fn visit_u64<E>(self, v: u64) -> Result<Chain, E>
@@ -365,7 +387,18 @@ mod tests {
 
     #[test]
     fn try_from_rejects_unsupported_id() {
-        assert_eq!(Chain::try_from(999_999), Err(UnsupportedChain(999_999)));
+        let err = Chain::try_from(999_999).unwrap_err();
+        assert_eq!(err, UnsupportedChain::Id(999_999));
+        assert_eq!(err.to_string(), "unsupported chain id 999999");
+    }
+
+    /// An unrecognised slug must name itself in the error instead of
+    /// masquerading as a numeric id.
+    #[test]
+    fn from_str_rejects_unknown_slug_with_slug_error() {
+        let err = "optimism".parse::<Chain>().unwrap_err();
+        assert_eq!(err, UnsupportedChain::Slug("optimism".into()));
+        assert_eq!(err.to_string(), "unsupported chain slug \"optimism\"");
     }
 
     #[test]
@@ -376,5 +409,26 @@ mod tests {
             Chain::Gnosis
         );
         assert!(serde_json::from_str::<Chain>("999").is_err());
+    }
+
+    /// Slug strings are accepted by the deserialiser, not just integer
+    /// ids, because the visitor delegates strings to `FromStr`.
+    #[test]
+    fn deserialise_accepts_orderbook_slug() {
+        assert_eq!(
+            serde_json::from_str::<Chain>("\"mainnet\"").unwrap(),
+            Chain::Mainnet
+        );
+    }
+
+    /// Serialisation is the integer chain id, and deserialisation reads
+    /// it back: the boundary is symmetric for every supported chain.
+    #[test]
+    fn serialise_round_trips_as_integer_id() {
+        for chain in ALL {
+            let json = serde_json::to_string(chain).unwrap();
+            assert_eq!(json, chain.id().to_string());
+            assert_eq!(serde_json::from_str::<Chain>(&json).unwrap(), *chain);
+        }
     }
 }
