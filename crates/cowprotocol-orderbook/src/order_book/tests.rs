@@ -22,6 +22,14 @@ use crate::chain::Chain;
 #[cfg(feature = "http-client")]
 use crate::order::OrderUid;
 
+/// All-zero EIP-712 placeholder signature for wire-shape tests. Not
+/// recoverable; never pass it to recovery paths.
+fn zero_eip712_signature() -> Signature {
+    Signature::Eip712(crate::signature::EcdsaSignature::from_bytes_and_parity(
+        &[0u8; 64], false,
+    ))
+}
+
 /// Token addresses used by [`fixture_quote_request`]: USDC and DAI on
 /// Ethereum mainnet.
 const USDC: Address = address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
@@ -413,7 +421,7 @@ fn order_creation_serialises_to_expected_wire_shape() {
             &OrderCosts::default(),
         )
         .unwrap();
-    let signature = Signature::empty_for(SigningScheme::Eip712);
+    let signature = zero_eip712_signature();
     let creation = OrderCreation::from_signed_order_data(
         &signed,
         signature,
@@ -476,7 +484,7 @@ fn round_trip_with_signature(signature: Signature) -> OrderCreation {
 
 #[test]
 fn order_creation_json_round_trip() {
-    let parsed = round_trip_with_signature(Signature::empty_for(SigningScheme::Eip712));
+    let parsed = round_trip_with_signature(zero_eip712_signature());
     assert!(matches!(parsed.signature, Signature::Eip712(_)));
 }
 
@@ -1086,7 +1094,7 @@ fn order_creation_skips_optional_quote_id() {
         .unwrap();
     let creation = OrderCreation::from_signed_order_data(
         &signed,
-        Signature::empty_for(SigningScheme::Eip712),
+        zero_eip712_signature(),
         quote.from,
         EMPTY_APP_DATA_JSON.to_owned(),
         None,

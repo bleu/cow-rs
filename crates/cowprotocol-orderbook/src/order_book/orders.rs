@@ -299,6 +299,14 @@ mod tests {
 
     const SETTLEMENT: Address = address!("9008D19f58AAbD9eD0D60971565AA8510560ab41");
 
+    /// All-zero EIP-712 placeholder signature for wire-shape tests. Not
+    /// recoverable; never pass it to recovery paths.
+    fn zero_eip712_signature() -> Signature {
+        Signature::Eip712(crate::signature::EcdsaSignature::from_bytes_and_parity(
+            &[0u8; 64], false,
+        ))
+    }
+
     /// `OrderData` whose `app_data` is `EMPTY_APP_DATA_HASH`, so the
     /// canonical `EMPTY_APP_DATA_JSON` document hashes to match it.
     fn empty_app_data_order() -> OrderData {
@@ -328,7 +336,7 @@ mod tests {
     fn from_signed_order_data_rejects_zero_from_address() {
         let err = OrderCreation::from_signed_order_data(
             &OrderData::default(),
-            Signature::empty_for(SigningScheme::Eip712),
+            zero_eip712_signature(),
             Address::ZERO,
             EMPTY_APP_DATA_JSON.to_owned(),
             None,
@@ -347,7 +355,7 @@ mod tests {
     fn from_signed_order_data_rejects_app_data_digest_mismatch() {
         let err = OrderCreation::from_signed_order_data(
             &empty_app_data_order(),
-            Signature::empty_for(SigningScheme::Eip712),
+            zero_eip712_signature(),
             address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
             // Document does NOT hash to `EMPTY_APP_DATA_HASH`.
             r#"{"version":"1.6.0","metadata":{}}"#.to_owned(),
@@ -375,7 +383,7 @@ mod tests {
     fn deserialise_rejects_app_data_digest_mismatch() {
         let creation = OrderCreation::from_signed_order_data(
             &empty_app_data_order(),
-            Signature::empty_for(SigningScheme::Eip712),
+            zero_eip712_signature(),
             address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
             EMPTY_APP_DATA_JSON.to_owned(),
             None,

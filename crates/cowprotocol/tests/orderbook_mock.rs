@@ -28,6 +28,14 @@ fn api(server: &MockServer) -> OrderBookApi {
     OrderBookApi::new_with_base_url(server.uri().parse().unwrap())
 }
 
+/// All-zero EIP-712 placeholder signature for wire-shape tests. Not
+/// recoverable; never pass it to recovery paths.
+fn zero_eip712_signature() -> Signature {
+    Signature::Eip712(cowprotocol::EcdsaSignature::from_bytes_and_parity(
+        &[0u8; 64], false,
+    ))
+}
+
 const fn mainnet_quote_fixture() -> &'static str {
     include_str!("fixtures/quote-mainnet.json")
 }
@@ -81,7 +89,7 @@ async fn post_order_returns_assigned_uid() {
     };
     let creation = OrderCreation::from_signed_order_data(
         &order,
-        Signature::empty_for(SigningScheme::Eip712),
+        zero_eip712_signature(),
         OWNER,
         cowprotocol::EMPTY_APP_DATA_JSON.to_owned(),
         Some(123),
@@ -109,7 +117,7 @@ async fn post_order_surfaces_orderbook_api_error() {
             app_data: cowprotocol::EMPTY_APP_DATA_HASH,
             ..OrderData::default()
         },
-        Signature::empty_for(SigningScheme::Eip712),
+        zero_eip712_signature(),
         OWNER,
         cowprotocol::EMPTY_APP_DATA_JSON.to_owned(),
         None,

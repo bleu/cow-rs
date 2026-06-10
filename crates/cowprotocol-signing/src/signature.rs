@@ -119,20 +119,6 @@ impl Debug for Signature {
 }
 
 impl Signature {
-    /// Build an empty signature payload for `scheme`. ECDSA variants
-    /// get an all-zero (r, s, parity=false) sentinel; mirrors what the
-    /// orderbook accepts when a real signature is filled in later. That
-    /// all-zero ECDSA value is a fill-in placeholder only: it is not a
-    /// recoverable signature, so do not pass it to [`Signature::recover`].
-    pub fn empty_for(scheme: SigningScheme) -> Self {
-        match scheme {
-            SigningScheme::Eip712 => Self::Eip712(zero_ecdsa()),
-            SigningScheme::EthSign => Self::EthSign(zero_ecdsa()),
-            SigningScheme::Eip1271 => Self::Eip1271(Vec::new()),
-            SigningScheme::PreSign => Self::PreSign,
-        }
-    }
-
     /// Lift an ECDSA signature into the scheme-tagged [`Signature`]
     /// enum. Pairs with [`sign_ecdsa`] / [`ecdsa_from_components`].
     pub const fn from_ecdsa(sig: EcdsaSignature, scheme: EcdsaSigningScheme) -> Self {
@@ -291,13 +277,6 @@ pub fn ecdsa_recover<T: SolStruct>(
     Ok(Recovered { message, signer })
 }
 
-/// All-zero (r, s, parity=false) sentinel used by [`Signature::empty_for`].
-/// A fill-in placeholder only: it is not a recoverable signature, so it
-/// must never be passed to [`ecdsa_recover`] / [`Signature::recover`].
-fn zero_ecdsa() -> EcdsaSignature {
-    PrimSignature::from_bytes_and_parity(&[0u8; 64], false)
-}
-
 /// Compute the message bytes the owner actually signs for the given
 /// scheme. `Eip712` returns the typed-data hash supplied directly by
 /// [`SolStruct::eip712_signing_hash`]; `EthSign` wraps that hash in the
@@ -440,7 +419,8 @@ mod tests {
     #[test]
     fn ecdsa_default_zero_signature_round_trips() {
         let sig = Signature::from_bytes(SigningScheme::Eip712, &[0u8; 65]).unwrap();
-        assert_eq!(sig, Signature::empty_for(SigningScheme::Eip712));
+        let zero = Signature::Eip712(PrimSignature::from_bytes_and_parity(&[0u8; 64], false));
+        assert_eq!(sig, zero);
     }
 
     #[test]
