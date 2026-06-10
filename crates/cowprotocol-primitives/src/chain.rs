@@ -181,6 +181,29 @@ impl TryFrom<u64> for Chain {
     }
 }
 
+impl TryFrom<alloy_chains::NamedChain> for Chain {
+    type Error = UnsupportedChain;
+
+    /// Convert an [`alloy_chains::NamedChain`] through its canonical
+    /// chain id. Fails with [`UnsupportedChain::Id`] when the named
+    /// chain has no CoW Protocol orderbook deployment. `NamedChain` is
+    /// deliberately not re-exported; import it from `alloy_chains`.
+    ///
+    /// ```
+    /// use alloy_chains::NamedChain;
+    /// use cowprotocol_primitives::{Chain, UnsupportedChain};
+    ///
+    /// # fn main() -> Result<(), UnsupportedChain> {
+    /// let chain: Chain = NamedChain::Gnosis.try_into()?;
+    /// assert_eq!(chain, Chain::Gnosis);
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn try_from(chain: alloy_chains::NamedChain) -> Result<Self, Self::Error> {
+        Self::try_from(chain as u64)
+    }
+}
+
 impl FromStr for Chain {
     type Err = UnsupportedChain;
 
@@ -390,6 +413,21 @@ mod tests {
         let err = Chain::try_from(999_999).unwrap_err();
         assert_eq!(err, UnsupportedChain::Id(999_999));
         assert_eq!(err.to_string(), "unsupported chain id 999999");
+    }
+
+    /// `NamedChain` converts through its chain id, so supported ids
+    /// map and unsupported ids surface the id-shaped error.
+    #[test]
+    fn named_chain_converts_via_chain_id() {
+        use alloy_chains::NamedChain;
+
+        assert_eq!(Chain::try_from(NamedChain::Mainnet), Ok(Chain::Mainnet));
+        assert_eq!(Chain::try_from(NamedChain::Gnosis), Ok(Chain::Gnosis));
+        assert_eq!(Chain::try_from(NamedChain::Base), Ok(Chain::Base));
+        assert_eq!(
+            Chain::try_from(NamedChain::Optimism),
+            Err(UnsupportedChain::Id(10))
+        );
     }
 
     /// An unrecognised slug must name itself in the error instead of

@@ -17,6 +17,7 @@ categories = ["cryptography::cryptocurrencies", "data-structures"]
 workspace = true
 
 [dependencies]
+alloy-chains.workspace = true
 alloy-primitives.workspace = true
 alloy-sol-types.workspace = true
 serde.workspace = true
