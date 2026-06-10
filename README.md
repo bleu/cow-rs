@@ -132,7 +132,7 @@ assert_eq!(uid.0.len(), 56);
 | `cancellation` | `SignedOrderCancellation` (single), `OrderCancellations` (collection), `SignedOrderCancellations` |
 | `app_data` | `AppDataHash`, `AppDataDoc` (canonical JSON + keccak digest), `AppDataCid` (IPFS CIDv1 derivation), `AppDataDoc::sdk_attribution` for the SDK's `appCode` tag |
 | `eth_flow` | `EthFlowOrder` (non-zero `receiver` enforced at construction), `ETH_FLOW_PRODUCTION`, `ETH_FLOW_STAGING` |
-| `composable` | `ConditionalOrderParams`, `Proof`, `PollOutcome`, `ComposableCoW` events, `TwapData` + `TwapStaticInput`, plus deployment addresses |
+| `composable` | `ConditionalOrderParams`, `Proof`, `ComposableCoW` events, `TwapData` + `TwapStaticInput`, plus deployment addresses |
 | `multiplexer` | OZ-style commutative double-hashed merkle leaves, watch-tower-side proof verification |
 | `contracts` | `GPv2Settlement` (settle + events), `CoWSwapOnchainOrders` (ETH-flow events), `ERC20`, `WETH9`, `GPV2_SETTLEMENT`, `GPV2_VAULT_RELAYER` |
 | `subgraph` | `SubgraphClient` typed access to CoW's subgraph; totals, daily / hourly volume; opt-in bearer-token auth for the gateway URL |

@@ -34,7 +34,7 @@
 //! - [`GPv2Settlement`] and [`GPv2OrderData`] for typed contract bindings,
 //!   plus [`GPV2_SETTLEMENT`], [`GPV2_VAULT_RELAYER`], [`WETH9`] and
 //!   [`ERC20`] address constants.
-//! - [`ConditionalOrderParams`], [`Proof`] and [`PollOutcome`] for the
+//! - [`ConditionalOrderParams`] and [`Proof`] for the
 //!   `ComposableCoW` conditional-order primitives, plus the
 //!   [`COMPOSABLE_COW`], [`EXTENSIBLE_FALLBACK_HANDLER`] and
 //!   [`CURRENT_BLOCK_TIMESTAMP_FACTORY`] address constants. Dispatch
@@ -118,9 +118,8 @@ pub use crate::{
     chain::{Chain, UnsupportedChain},
     composable::{
         COMPOSABLE_COW, CURRENT_BLOCK_TIMESTAMP_FACTORY, ComposableCoW, ConditionalOrderParams,
-        EXTENSIBLE_FALLBACK_HANDLER, PayloadStruct, PollOutcome, Proof, TWAP_HANDLER, TwapData,
-        TwapDuration, TwapError, TwapStart, TwapStaticInput, forwarder_signature,
-        safe_handler_signature,
+        EXTENSIBLE_FALLBACK_HANDLER, PayloadStruct, Proof, TWAP_HANDLER, TwapData, TwapDuration,
+        TwapError, TwapStart, TwapStaticInput, forwarder_signature, safe_handler_signature,
     },
     contracts::{
         CoWSwapOnchainOrders, ERC20, GPV2_ORDER_TYPE_HASH, GPV2_SETTLEMENT, GPV2_VAULT_RELAYER,

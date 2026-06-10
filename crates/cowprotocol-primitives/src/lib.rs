@@ -26,9 +26,8 @@ pub use self::{
     chain::{Chain, UnsupportedChain},
     composable::{
         COMPOSABLE_COW, CURRENT_BLOCK_TIMESTAMP_FACTORY, ComposableCoW, ConditionalOrderParams,
-        EXTENSIBLE_FALLBACK_HANDLER, PayloadStruct, PollOutcome, Proof, TWAP_HANDLER, TwapData,
-        TwapDuration, TwapError, TwapStart, TwapStaticInput, forwarder_signature,
-        safe_handler_signature,
+        EXTENSIBLE_FALLBACK_HANDLER, PayloadStruct, Proof, TWAP_HANDLER, TwapData, TwapDuration,
+        TwapError, TwapStart, TwapStaticInput, forwarder_signature, safe_handler_signature,
     },
     contracts::{
         CoWSwapOnchainOrders, ERC20, GPV2_ORDER_TYPE_HASH, GPV2_SETTLEMENT, GPV2_VAULT_RELAYER,

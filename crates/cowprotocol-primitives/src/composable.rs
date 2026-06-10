@@ -6,17 +6,15 @@
 //! `(handler, salt, staticInput)` ([`ConditionalOrderParams`]); a watch
 //! tower polls the handler on every block and either gets back a
 //! discrete `GPv2Order` to submit or one of the custom-error signals
-//! captured by [`PollOutcome`].
+//! declared in `IConditionalOrder.sol`.
 //!
-//! Three layers live here:
+//! Two layers live here:
 //!
 //! - [`ConditionalOrderParams`]: the 3-tuple ABI-encoded the same way as
 //!   the Solidity counterpart, suitable for `ComposableCoW.create` and
 //!   for hashing into the single-order or merkle-root index.
 //! - [`Proof`]: the `(location, data)` pointer the contract stores
 //!   alongside a merkle root in `ComposableCoW.setRoot`.
-//! - [`PollOutcome`]: typed mapping of the five custom errors
-//!   `IConditionalOrder.verify` reverts with.
 //!
 //! Handler-specific `staticInput` payloads (TWAP, GoodAfterTime, etc.)
 //! land in follow-up modules; the canonical `TWAP` handler is the first,
@@ -252,38 +250,6 @@ pub fn safe_handler_signature(
 /// Solidity's two-argument `abi.encode`).
 pub fn forwarder_signature(order: &GPv2OrderData, payload: &PayloadStruct) -> Vec<u8> {
     (order.clone(), payload.clone()).abi_encode_params()
-}
-
-/// Outcome of a single watch-tower poll, mapped from the custom errors
-/// `IConditionalOrder.verify` reverts with.
-///
-/// See `composable-cow/src/interfaces/IConditionalOrder.sol`.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PollOutcome {
-    /// `OrderNotValid(string)`: the order condition is permanently not
-    /// met. Watch tower should drop the order.
-    OrderNotValid(String),
-    /// `PollTryNextBlock(string)`: try again on the next block.
-    TryNextBlock(String),
-    /// `PollTryAtBlock(uint256, string)`: try again at or after a
-    /// specific block number.
-    TryAtBlock {
-        /// Earliest block at which the order may become tradeable.
-        block: u64,
-        /// Reason carried alongside the revert.
-        reason: String,
-    },
-    /// `PollTryAtEpoch(uint256, string)`: try again at or after a
-    /// specific Unix timestamp (seconds).
-    TryAtEpoch {
-        /// Earliest timestamp at which the order may become tradeable.
-        timestamp: u64,
-        /// Reason carried alongside the revert.
-        reason: String,
-    },
-    /// `PollNever(string)`: the conditional order is dead; do not poll
-    /// it again.
-    Never(String),
 }
 
 /// Canonical CREATE2 address of the `ComposableCoW` contract.
