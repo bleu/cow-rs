@@ -70,8 +70,8 @@ pub enum SignatureError {
     /// Owned message so attacker-controllable bytes are never leaked.
     #[error("signer error: {0}")]
     SignerOther(String),
-    /// Recovered signer ≠ declared. Raised by
-    /// [`crate::OrderCreation::verify_owner`].
+    /// Recovered signer ≠ declared. Raised by the orderbook crate's
+    /// `OrderCreation::verify_owner`.
     #[error("signer mismatch: declared {declared}, recovered {recovered}")]
     SignerMismatch {
         /// Owner the order claims to be signed by.
@@ -90,8 +90,8 @@ pub enum Signature {
     EthSign(EcdsaSignature),
     /// EIP-1271 contract signature payload, in the **orderbook wire
     /// form**: the raw verifier bytes only. The orderbook re-prepends the
-    /// owner from [`OrderCreation::from`](crate::OrderCreation) before
-    /// settlement. This is *not* the on-chain calldata form:
+    /// owner from the submission body's `from` field (the orderbook
+    /// crate's `OrderCreation`) before settlement. This is *not* the on-chain calldata form:
     /// `GPv2Signing.recoverEip1271Signer` expects
     /// `abi.encodePacked(owner, signature)` (owner in the first 20
     /// bytes), so feeding these bytes straight into
@@ -168,8 +168,8 @@ impl Signature {
     /// owner address (legacy 20-byte encoding accepted by services). The
     /// 20-byte legacy form is accepted for services compatibility, but its
     /// address payload is intentionally not validated against the order's
-    /// `from`: the owner is carried explicitly on
-    /// [`OrderCreation`](crate::OrderCreation).
+    /// `from`: the owner is carried explicitly on the orderbook crate's
+    /// `OrderCreation` submission body.
     pub fn from_bytes(scheme: SigningScheme, bytes: &[u8]) -> Result<Self, SignatureError> {
         match scheme {
             SigningScheme::Eip712 => Ok(Self::from_ecdsa(

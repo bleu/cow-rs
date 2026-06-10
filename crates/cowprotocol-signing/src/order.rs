@@ -104,7 +104,8 @@ pub struct OrderData {
     /// `None` means the owner receives the buy token. `Some(Address::ZERO)`
     /// is semantically equal to `None`, but raw `OrderData` you build and
     /// sign yourself is not normalised: the `Some(ZERO)` to `None` collapse
-    /// only happens when you go through [`crate::OrderCreation::from_signed_order_data`].
+    /// only happens when you go through the orderbook crate's
+    /// `OrderCreation::from_signed_order_data`.
     #[serde(default)]
     pub receiver: Option<Address>,
     /// Atomic units of `sell_token`.

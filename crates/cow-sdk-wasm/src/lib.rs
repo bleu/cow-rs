@@ -11,7 +11,7 @@
 //!
 //! 1. **In-shim signing** (gated behind the `in_shim_signing` cargo
 //!    feature; *test- and script-only*): pass a 0x-prefixed 32-byte
-//!    private-key hex string to [`sign_eip712`] / [`sign_ethsign`].
+//!    private-key hex string to `sign_eip712` / `sign_ethsign`.
 //!    The signer stays in wasm linear memory rather than crossing
 //!    the JS boundary, but the **hex string itself is owned by JS**
 //!    and is not zeroised after it crosses into wasm. Any other code

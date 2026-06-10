@@ -177,9 +177,9 @@ const fn scheme_to_str(scheme: EcdsaSigningScheme) -> &'static str {
 }
 
 /// Build a `POST /orders` payload from a signed order. Accepts a
-/// signature object produced by [`sign_eip712`] / [`sign_ethsign`], or
-/// an externally signed `{ signingScheme, r, s, v }` bag with matching
-/// shape.
+/// signature object produced by `sign_eip712` / `sign_ethsign`
+/// (`in_shim_signing` feature), or an externally signed
+/// `{ signingScheme, r, s, v }` bag with matching shape.
 ///
 /// `chain` selects the EIP-712 domain (chain id + settlement
 /// `verifyingContract`) used to recover the signer; the assembled

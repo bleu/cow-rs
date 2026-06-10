@@ -144,10 +144,10 @@ impl Chain {
     /// Returns `None` for chains with no published deployment. Compose
     /// the production URL as
     /// `https://gateway.thegraph.com/api/subgraphs/id/<id>` and pass your
-    /// API key as a bearer token via
-    /// [`crate::SubgraphClient::with_bearer_token`]; the
-    /// [`crate::SubgraphClient::for_chain_gateway`] constructor does this
-    /// for you. These are CoW DAO's production deployment ids, not a
+    /// API key as a bearer token via the orderbook crate's
+    /// `SubgraphClient::with_bearer_token`; its
+    /// `SubgraphClient::for_chain_gateway` constructor does this for
+    /// you. These are CoW DAO's production deployment ids, not a
     /// personal Graph Studio account.
     pub const fn subgraph_gateway_deployment_id(self) -> Option<&'static str> {
         match self {

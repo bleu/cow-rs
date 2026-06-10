@@ -12,10 +12,10 @@
 //!   [`OrderData::uid`] for the 56-byte order identifier and
 //!   [`OrderData::sign`] for ECDSA signing.
 //! - [`DomainSeparator`] (a type alias for
-//!   [`alloy_sol_types::Eip712Domain`]) and [`settlement_domain`] for the
+//!   `alloy_sol_types::Eip712Domain`) and [`settlement_domain`] for the
 //!   `GPv2Settlement` EIP-712 domain. The typed-data envelope is supplied
-//!   by [`alloy_sol_types::SolStruct`] and the EIP-191 personal-sign wrap
-//!   by [`alloy_primitives::eip191_hash_message`].
+//!   by `alloy_sol_types::SolStruct` and the EIP-191 personal-sign wrap
+//!   by `alloy_primitives::eip191_hash_message`.
 //! - [`Signature`], [`EcdsaSignature`] and [`SignatureError`] covering
 //!   EIP-712, EthSign, EIP-1271 and PreSign schemes.
 //! - [`Chain`]: all ten chains the orderbook supports

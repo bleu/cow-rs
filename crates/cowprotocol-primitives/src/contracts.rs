@@ -42,11 +42,11 @@
 //!
 //! `kind`, `sellTokenBalance` and `buyTokenBalance` are `bytes32` markers in
 //! the on-chain Solidity struct, even though the EIP-712 type string hashes
-//! them as `string`. The signing-side view lives in
-//! `crate::order::eip712::Order` and is routed through
+//! them as `string`. The signing-side view lives in the signing crate's
+//! `order::eip712::Order` and is routed through
 //! [`alloy_sol_types::SolStruct`]. The bindings here mirror the on-chain
-//! layout: callers that need the EIP-712 view should use
-//! [`crate::OrderData`] instead.
+//! layout: callers that need the EIP-712 view should use the signing
+//! crate's `OrderData` instead.
 
 use alloy_primitives::{Address, B256, address, b256};
 use alloy_sol_types::sol;
