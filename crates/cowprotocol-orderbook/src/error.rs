@@ -14,13 +14,15 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// HTTP transport, redirect, body or response error. Only present
-    /// when the `http-client` feature is enabled.
-    #[cfg(feature = "http-client")]
+    /// when the `http-client` feature is enabled on a non-wasm32 target
+    /// (wasm32 builds carry no reqwest at all and report transport
+    /// failures via [`Self::TransportFailed`]).
+    #[cfg(all(feature = "http-client", not(target_arch = "wasm32")))]
     #[error("transport error: {0}")]
     Transport(#[from] reqwest::Error),
 
     /// A transport-level failure from a non-reqwest [`HttpTransport`]
-    /// backend (e.g. the `cow-sdk-wasm` `fetch` transport): a failed or
+    /// backend (e.g. the wasm32 `FetchTransport`): a failed or
     /// aborted/timed-out request, or a body read error. The message is the
     /// transport's own description.
     ///

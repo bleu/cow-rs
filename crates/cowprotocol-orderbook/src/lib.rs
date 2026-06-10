@@ -39,8 +39,12 @@ pub use self::{
     transport::{HttpMethod, HttpRequest, HttpResponse, HttpTransport},
 };
 
+#[cfg(all(feature = "http-client", target_arch = "wasm32"))]
+pub use self::transport::FetchTransport;
+#[cfg(all(feature = "http-client", not(target_arch = "wasm32")))]
+pub use self::transport::ReqwestTransport;
 #[cfg(feature = "http-client")]
-pub use self::{order_book::OrderBookApiBuilder, transport::ReqwestTransport};
+pub use self::{order_book::OrderBookApiBuilder, transport::DefaultTransport};
 
 #[cfg(feature = "subgraph")]
 pub use self::subgraph::{

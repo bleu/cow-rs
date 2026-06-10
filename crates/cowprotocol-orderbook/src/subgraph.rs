@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::{
     chain::Chain,
     error::{Error, Result},
-    transport::{HttpMethod, HttpRequest, HttpTransport, ReqwestTransport},
+    transport::{DefaultTransport, HttpMethod, HttpRequest, HttpTransport},
 };
 
 /// Returned by [`SubgraphClient::for_chain_gateway`] when the chain has
@@ -187,10 +187,10 @@ struct FirstVariables {
 /// Thin GraphQL client for the CoW subgraph.
 ///
 /// `T` is the [`HttpTransport`] backend the queries ride on; it defaults
-/// to [`ReqwestTransport`]. The transport applies the shared
+/// to the target's [`DefaultTransport`]. The transport applies the shared
 /// [`MAX_RESPONSE_BYTES`](crate::order_book::MAX_RESPONSE_BYTES) body cap.
 #[derive(Clone)]
-pub struct SubgraphClient<T = ReqwestTransport> {
+pub struct SubgraphClient<T = DefaultTransport> {
     url: url::Url,
     transport: T,
     bearer: Option<String>,
@@ -225,24 +225,24 @@ impl<T> std::fmt::Debug for SubgraphClient<T> {
 impl SubgraphClient {
     /// Build a client against an explicit subgraph URL. No authorisation
     /// header is attached: use [`SubgraphClient::with_bearer_token`] for
-    /// the production gateway. The default reqwest transport enforces
-    /// [`DEFAULT_HTTP_TIMEOUT`] on native targets.
+    /// the production gateway. The [`DefaultTransport`] enforces
+    /// [`DEFAULT_HTTP_TIMEOUT`].
     ///
     /// [`DEFAULT_HTTP_TIMEOUT`]: crate::order_book::DEFAULT_HTTP_TIMEOUT
     pub fn new(url: url::Url) -> Self {
-        Self::new_with_transport(url, ReqwestTransport::default())
+        Self::new_with_transport(url, DefaultTransport::default())
     }
 
     /// Build a client that sends `Authorization: Bearer <token>` with
     /// every request. The Graph's production gateway
-    /// (`gateway.thegraph.com`) requires this. The default reqwest
-    /// transport enforces [`DEFAULT_HTTP_TIMEOUT`] on native targets.
+    /// (`gateway.thegraph.com`) requires this. The [`DefaultTransport`]
+    /// enforces [`DEFAULT_HTTP_TIMEOUT`].
     ///
     /// [`DEFAULT_HTTP_TIMEOUT`]: crate::order_book::DEFAULT_HTTP_TIMEOUT
     pub fn with_bearer_token(url: url::Url, token: impl Into<String>) -> Self {
         Self {
             url,
-            transport: ReqwestTransport::default(),
+            transport: DefaultTransport::default(),
             bearer: Some(token.into()),
         }
     }

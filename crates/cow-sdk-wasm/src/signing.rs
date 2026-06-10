@@ -3,18 +3,16 @@
 //! the `OrderCreation` assemblers fed back from external wallets.
 
 use {
-    crate::{from_js, js_err, parse_address, parse_b256, parse_chain, parse_scheme, to_js},
-    cowprotocol::{OrderData, Signature, SigningScheme, ecdsa_from_components},
+    crate::{from_js, js_err, parse_address, parse_b256, parse_chain, to_js},
+    cowprotocol::{EcdsaSigningScheme, OrderData, Signature, SigningScheme, ecdsa_from_components},
     serde::Deserialize,
     wasm_bindgen::prelude::*,
 };
 
 #[cfg(feature = "in_shim_signing")]
 use {
-    crate::parse_uid,
-    alloy_primitives::B256,
-    alloy_signer_local::PrivateKeySigner,
-    cowprotocol::{EcdsaSigningScheme, SignedOrderCancellation},
+    crate::parse_uid, alloy_primitives::B256, alloy_signer_local::PrivateKeySigner,
+    cowprotocol::SignedOrderCancellation,
 };
 
 #[cfg(feature = "in_shim_signing")]
@@ -158,22 +156,16 @@ fn sign_with_scheme(
     let bytes = ecdsa.as_bytes();
     let r = B256::from_slice(&bytes[..32]);
     let s = B256::from_slice(&bytes[32..64]);
+    // `EcdsaSigningScheme` serialises to its wire names ("eip712" /
+    // "ethsign") directly.
     let payload = serde_json::json!({
-        "signingScheme": scheme_to_str(scheme),
+        "signingScheme": scheme,
         "r": r.to_string(),
         "s": s.to_string(),
         "v": bytes[64],
         "owner": signer.address().to_string(),
     });
     to_js(&payload)
-}
-
-#[cfg(feature = "in_shim_signing")]
-const fn scheme_to_str(scheme: EcdsaSigningScheme) -> &'static str {
-    match scheme {
-        EcdsaSigningScheme::Eip712 => "eip712",
-        EcdsaSigningScheme::EthSign => "ethsign",
-    }
 }
 
 /// Build a `POST /orders` payload from a signed order. Accepts a
@@ -208,13 +200,16 @@ pub fn build_order_creation(
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct SigInput {
-        signing_scheme: String,
+        // Deserialised straight into the enum: serde owns the
+        // "eip712" / "ethsign" wire names, so the shim no longer
+        // duplicates them. The scheme strings are case-sensitive.
+        signing_scheme: EcdsaSigningScheme,
         r: String,
         s: String,
         v: u8,
     }
     let sig: SigInput = from_js(signature)?;
-    let scheme = parse_scheme(&sig.signing_scheme)?;
+    let scheme = sig.signing_scheme;
     let r = parse_b256(&sig.r)?;
     let s = parse_b256(&sig.s)?;
     let ecdsa = ecdsa_from_components(r, s, sig.v).map_err(js_err("invalid signature"))?;

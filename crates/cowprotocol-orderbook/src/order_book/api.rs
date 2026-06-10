@@ -2,11 +2,11 @@
 //! orderbook and the request/response plumbing behind its endpoints.
 //!
 //! This module is feature-independent: it is generic over an
-//! [`HttpTransport`] and never names a concrete backend. The reqwest
-//! backend, the ergonomic constructors, and the typed quote builders live
-//! in the `http-client`-gated [`client`](super::client) sibling; the
-//! `cow-sdk-wasm` crate supplies a `fetch` transport. Both drive the same
-//! endpoint logic here.
+//! [`HttpTransport`] and never names a concrete backend. The per-target
+//! backends (reqwest natively, browser `fetch` on wasm32) live in
+//! [`crate::transport`], and the ergonomic constructors in the
+//! `http-client`-gated [`client`](super::client) sibling. Every backend
+//! drives the same endpoint logic here.
 
 use alloy_primitives::{Address, B256};
 use serde::{Deserialize, Serialize};
@@ -27,7 +27,7 @@ use super::types::{
 };
 
 #[cfg(feature = "http-client")]
-use crate::transport::ReqwestTransport;
+use crate::transport::DefaultTransport;
 
 /// Wire body for `POST /api/v1/orders/by_uids`.
 #[derive(Serialize)]
@@ -50,12 +50,12 @@ struct CancellationPayload {
 
 /// Transport-generic client for the CoW Protocol orderbook.
 ///
-/// `T` is the [`HttpTransport`] backend. On native targets with the
-/// `http-client` feature it defaults to `ReqwestTransport`; the
-/// `cow-sdk-wasm` crate instantiates it with a `fetch` transport.
+/// `T` is the [`HttpTransport`] backend. With the `http-client` feature
+/// it defaults to the target's [`DefaultTransport`]: reqwest natively,
+/// browser `fetch` on wasm32.
 #[cfg(feature = "http-client")]
 #[derive(Debug, Clone)]
-pub struct OrderBookApi<T = ReqwestTransport> {
+pub struct OrderBookApi<T = DefaultTransport> {
     base_url: url::Url,
     transport: T,
     // `Some` when built from a [`Chain`]; `None` when built from an

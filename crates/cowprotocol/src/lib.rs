@@ -5,6 +5,19 @@
 //!
 //! Rust SDK for the [CoW Protocol](https://cow.fi).
 //!
+//! ## One entry point, native and wasm
+//!
+//! This meta crate is the single entry point for every Rust consumer,
+//! native and wasm alike: `cargo add cowprotocol` gives the same API on
+//! both targets, with the `http-client` feature resolving to a
+//! reqwest-backed transport natively and a browser-`fetch`-backed one on
+//! `wasm32-unknown-unknown` (see [`transport::DefaultTransport`]; reqwest
+//! never enters a wasm build). Rust-in-the-browser stacks (for example a
+//! Flutter or Yew app driving Rust compiled to wasm) should depend on
+//! this crate directly. The sibling `cow-sdk-wasm` crate is JS bindings
+//! only: a thin `wasm-bindgen` shim over this crate, published to npm
+//! for JavaScript consumers, not for Rust ones.
+//!
 //! ## What this crate exposes
 //!
 //! - [`OrderData`]: the 12-field signed payload, with
@@ -152,8 +165,12 @@ pub use crate::{
     transport::{HttpMethod, HttpRequest, HttpResponse, HttpTransport},
 };
 
+#[cfg(all(feature = "http-client", target_arch = "wasm32"))]
+pub use crate::transport::FetchTransport;
+#[cfg(all(feature = "http-client", not(target_arch = "wasm32")))]
+pub use crate::transport::ReqwestTransport;
 #[cfg(feature = "http-client")]
-pub use crate::{order_book::OrderBookApiBuilder, transport::ReqwestTransport};
+pub use crate::{order_book::OrderBookApiBuilder, transport::DefaultTransport};
 
 /// Commonly-used SDK imports for quote, sign, and submit flows.
 ///

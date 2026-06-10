@@ -169,7 +169,7 @@ fn app_data_cid_from_hash_is_base32_cid() {
 // Replace `globalThis.fetch` with a closure that returns a synthetic
 // Response, then call a transport-touching export and assert it parses
 // the body correctly. This exercises the full lifecycle:
-//   wasm export -> serde encode body -> transport::fetch_text
+//   wasm export -> serde encode body -> cowprotocol's FetchTransport
 //     -> JS fetch (mock) -> Promise resolve -> text() -> Promise resolve
 //     -> serde decode -> JsValue back to the test.
 
@@ -409,6 +409,25 @@ async fn version_surfaces_http_error_status() {
     let err = version("mainnet").await.expect_err("expected error on 503");
     let msg = err.as_string().unwrap_or_default();
     assert!(msg.contains("503"), "error should mention status: {msg}");
+    restore_real_fetch();
+}
+
+/// Subgraph-on-wasm, end to end: `SubgraphClient` defaults to the core
+/// crate's `FetchTransport` on wasm32, so its queries ride the same
+/// stubbed `fetch` as the orderbook bindings. The `subgraph` feature is
+/// a dev-dependency: the shim's own npm bindings leave it off.
+#[wasm_bindgen_test]
+async fn subgraph_client_totals_via_mock_fetch() {
+    let _mock = install_mock_fetch(
+        200,
+        r#"{"data":{"totals":[{"tokens":"10","orders":"42","traders":"7","settlements":"5"}]}}"#,
+    );
+    let client = cowprotocol::subgraph::SubgraphClient::new(
+        "https://example.invalid/subgraphs/cow".parse().unwrap(),
+    );
+    let totals = client.totals().await.expect("totals over fetch transport");
+    assert_eq!(totals.orders, "42");
+    assert_eq!(totals.settlements, "5");
     restore_real_fetch();
 }
 

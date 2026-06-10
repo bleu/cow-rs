@@ -1,21 +1,21 @@
 //! Networked endpoint bindings.
 //!
-//! Every binding drives a shared [`cowprotocol::OrderBookApi`] backed by
-//! the JS [`FetchTransport`](crate::transport::FetchTransport), so request
-//! shaping, pagination, status handling and JSON decoding come from the
-//! core crate rather than being re-implemented here. reqwest stays out of
-//! the wasm output because `OrderBookApi<FetchTransport>` never links the
-//! native `ReqwestTransport` (gated behind the `http-client` feature, which
-//! this crate leaves off).
+//! Every binding drives a [`cowprotocol::OrderBookApi`], which on wasm32
+//! defaults to the core crate's `fetch`-backed transport
+//! (`cowprotocol::FetchTransport`), so request shaping, pagination,
+//! status handling and JSON decoding all come from the core crate rather
+//! than being re-implemented here. reqwest stays out of the wasm output
+//! because the core crate's `http-client` feature resolves to the fetch
+//! transport on wasm32 and never links reqwest there.
+//!
+//! Clients are cheap to build per call: the fetch transport is a unit
+//! struct and the base URL is a single join.
 
 use {
-    crate::{
-        from_js, js_err, parse_address, parse_chain, parse_typed, parse_uid, to_js,
-        transport::FetchTransport,
-    },
+    crate::{from_js, js_err, parse_address, parse_chain, parse_typed, parse_uid, to_js},
     alloy_primitives::U256,
     cowprotocol::{
-        Chain, EMPTY_APP_DATA_HASH, OrderBookApi, OrderCosts, OrderCreation, QuoteRequest,
+        EMPTY_APP_DATA_HASH, OrderBookApi, OrderCosts, OrderCreation, QuoteRequest,
         SignedOrderCancellation,
     },
     wasm_bindgen::prelude::*,
@@ -23,13 +23,6 @@ use {
 
 fn parse_u256(value: &str) -> Result<U256, JsValue> {
     parse_typed(value, "u256")
-}
-
-/// A `fetch`-backed orderbook client for `chain`. Cheap to build per call:
-/// [`FetchTransport`] is a unit struct and the base URL is a single join.
-fn client(chain: Chain) -> OrderBookApi<FetchTransport> {
-    OrderBookApi::new_with_transport(chain.orderbook_base_url(), FetchTransport)
-        .with_chain_hint(chain)
 }
 
 /// `POST /api/v1/quote`. Accepts a `QuoteRequest` JSON object.
@@ -47,7 +40,7 @@ fn client(chain: Chain) -> OrderBookApi<FetchTransport> {
 #[wasm_bindgen]
 pub async fn get_quote(chain: &str, request: JsValue) -> Result<JsValue, JsValue> {
     let request: QuoteRequest = from_js(request)?;
-    let response = client(parse_chain(chain)?)
+    let response = OrderBookApi::new(parse_chain(chain)?)
         .quote(&request)
         .await
         .map_err(js_err("quote request failed"))?;
@@ -73,7 +66,7 @@ pub async fn get_quote_simple(
         parse_u256(sell_amount_before_fee)?,
     );
     let c = parse_chain(chain)?;
-    let response = client(c)
+    let response = OrderBookApi::new(c)
         .quote(&request)
         .await
         .map_err(js_err("quote request failed"))?;
@@ -91,7 +84,7 @@ pub async fn get_quote_simple(
 
 /// `POST /api/v1/orders`. Returns the assigned 56-byte UID.
 ///
-/// The shared client carries the chain hint, so
+/// The client carries the chain hint, so
 /// [`cowprotocol::OrderBookApi::post_order`] owner-verifies the body
 /// ([`cowprotocol::OrderCreation::verify_owner`]) before any network
 /// call: a hand-assembled body with a typo'd `from` is rejected
@@ -101,7 +94,7 @@ pub async fn get_quote_simple(
 #[wasm_bindgen]
 pub async fn post_order(chain: &str, creation: JsValue) -> Result<String, JsValue> {
     let creation: OrderCreation = from_js(creation)?;
-    client(parse_chain(chain)?)
+    OrderBookApi::new(parse_chain(chain)?)
         .post_order(&creation)
         .await
         .map(|uid| uid.to_string())
@@ -111,7 +104,7 @@ pub async fn post_order(chain: &str, creation: JsValue) -> Result<String, JsValu
 /// `GET /api/v1/orders/{uid}`.
 #[wasm_bindgen]
 pub async fn get_order(chain: &str, uid: &str) -> Result<JsValue, JsValue> {
-    let order = client(parse_chain(chain)?)
+    let order = OrderBookApi::new(parse_chain(chain)?)
         .order(&parse_uid(uid)?)
         .await
         .map_err(js_err("get_order failed"))?;
@@ -121,7 +114,7 @@ pub async fn get_order(chain: &str, uid: &str) -> Result<JsValue, JsValue> {
 /// `GET /api/v1/orders/{uid}/status`.
 #[wasm_bindgen]
 pub async fn get_order_status(chain: &str, uid: &str) -> Result<JsValue, JsValue> {
-    let status = client(parse_chain(chain)?)
+    let status = OrderBookApi::new(parse_chain(chain)?)
         .order_status(&parse_uid(uid)?)
         .await
         .map_err(js_err("get_order_status failed"))?;
@@ -136,7 +129,7 @@ pub async fn account_orders(
     offset: Option<u32>,
     limit: Option<u32>,
 ) -> Result<JsValue, JsValue> {
-    let orders = client(parse_chain(chain)?)
+    let orders = OrderBookApi::new(parse_chain(chain)?)
         .account_orders(parse_address(owner)?, offset, limit)
         .await
         .map_err(js_err("account_orders failed"))?;
@@ -152,7 +145,7 @@ pub async fn trades_by_owner(
     offset: Option<u32>,
     limit: Option<u32>,
 ) -> Result<JsValue, JsValue> {
-    let trades = client(parse_chain(chain)?)
+    let trades = OrderBookApi::new(parse_chain(chain)?)
         .trades_by_owner(parse_address(owner)?, offset, limit)
         .await
         .map_err(js_err("trades_by_owner failed"))?;
@@ -168,7 +161,7 @@ pub async fn trades_by_order_uid(
     offset: Option<u32>,
     limit: Option<u32>,
 ) -> Result<JsValue, JsValue> {
-    let trades = client(parse_chain(chain)?)
+    let trades = OrderBookApi::new(parse_chain(chain)?)
         .trades_by_order_uid(&parse_uid(uid)?, offset, limit)
         .await
         .map_err(js_err("trades_by_order_uid failed"))?;
@@ -178,7 +171,7 @@ pub async fn trades_by_order_uid(
 /// `GET /api/v1/token/{token}/native_price`.
 #[wasm_bindgen]
 pub async fn native_price(chain: &str, token: &str) -> Result<JsValue, JsValue> {
-    let price = client(parse_chain(chain)?)
+    let price = OrderBookApi::new(parse_chain(chain)?)
         .native_price(parse_address(token)?)
         .await
         .map_err(js_err("native_price failed"))?;
@@ -188,7 +181,7 @@ pub async fn native_price(chain: &str, token: &str) -> Result<JsValue, JsValue> 
 /// `GET /api/v1/version`.
 #[wasm_bindgen]
 pub async fn version(chain: &str) -> Result<String, JsValue> {
-    client(parse_chain(chain)?)
+    OrderBookApi::new(parse_chain(chain)?)
         .version()
         .await
         .map_err(js_err("version failed"))
@@ -199,7 +192,7 @@ pub async fn version(chain: &str) -> Result<String, JsValue> {
 #[wasm_bindgen]
 pub async fn cancel_order(chain: &str, cancellation: JsValue) -> Result<(), JsValue> {
     let cancellation: SignedOrderCancellation = from_js(cancellation)?;
-    client(parse_chain(chain)?)
+    OrderBookApi::new(parse_chain(chain)?)
         .cancel_order(&cancellation)
         .await
         .map_err(js_err("cancel_order failed"))

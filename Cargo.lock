@@ -1065,6 +1065,7 @@ dependencies = [
  "cowprotocol-signing",
  "hex-literal",
  "http",
+ "js-sys",
  "reqwest",
  "serde",
  "serde_json",
@@ -1072,6 +1073,8 @@ dependencies = [
  "thiserror",
  "tokio",
  "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wiremock",
 ]
 

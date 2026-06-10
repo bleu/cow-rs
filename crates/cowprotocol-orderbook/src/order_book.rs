@@ -7,16 +7,19 @@
 
 use std::time::Duration;
 
-/// Default per-request timeout. A stuck or hostile orderbook cannot
-/// hold a caller's task open longer; override via
-/// [`OrderBookApi::with_client`]. Exposed feature-independently so the
-/// `cow-sdk-wasm` fetch transport can reuse it without pulling in the
-/// `http-client` stack.
+/// Default per-request timeout, enforced by both bundled transports
+/// (reqwest natively, browser `fetch` on wasm32). A stuck or hostile
+/// orderbook cannot hold a caller's task open longer; on native targets,
+/// override it by passing a pre-configured client to
+/// `OrderBookApi::with_client`. Exposed feature-independently so
+/// out-of-tree [`HttpTransport`](crate::transport::HttpTransport)
+/// backends can reuse it without pulling in the `http-client` stack.
 pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Maximum HTTP response body. Larger payloads return
 /// [`Error::ResponseTooLarge`] before allocating. Exposed
-/// feature-independently so the `cow-sdk-wasm` fetch transport can reuse
+/// feature-independently so out-of-tree
+/// [`HttpTransport`](crate::transport::HttpTransport) backends can reuse
 /// it without pulling in the `http-client` stack.
 ///
 /// [`Error::ResponseTooLarge`]: crate::Error::ResponseTooLarge

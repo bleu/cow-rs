@@ -70,8 +70,23 @@ jobs:
         with:
           toolchain: "1.91.1"
           targets: wasm32-unknown-unknown
+          components: clippy
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
       - run: cargo check --workspace --all-features --target wasm32-unknown-unknown
+      # The meta crate must also build hashing/signing-only (no
+      # http-client, no transports) on wasm32.
+      - run: cargo check -p cowprotocol --no-default-features --target wasm32-unknown-unknown
+      - run: cargo clippy -p cowprotocol -p cowprotocol-orderbook --all-features --target wasm32-unknown-unknown -- -Dwarnings
+      - name: Assert reqwest stays out of the wasm32 cowprotocol graph
+        # The `http-client` feature must resolve to FetchTransport on
+        # wasm32; reqwest re-entering the graph would silently bloat
+        # the shim and re-introduce a native HTTP stack in browsers.
+        run: |
+          tree="$(cargo tree -p cowprotocol --all-features --target wasm32-unknown-unknown -e normal)"
+          if grep -q 'reqwest v' <<<"$tree"; then
+            echo '::error::reqwest leaked into the wasm32 cowprotocol dependency graph'
+            exit 1
+          fi
 
   wasm-size:
     name: wasm-size

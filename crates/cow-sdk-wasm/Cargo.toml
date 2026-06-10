@@ -28,25 +28,20 @@ default = []
 in_shim_signing = ["dep:alloy-signer-local"]
 
 [dependencies]
-# `default-features = false` drops the orderbook/trading HTTP client and
-# subgraph GraphQL client from the `cowprotocol` facade. The shim talks
-# to the orderbook via the JS `fetch` global (see `src/transport.rs`),
-# so `reqwest` is never linked into the wasm binary. The DTOs those
-# endpoints consume (`OrderCreation`, `OrderQuoteResponse`,
-# `QuoteRequest`, `Trade`, ...) remain available through the facade.
-cowprotocol = { path = "../cowprotocol", version = "1.0.0-alpha.3", default-features = false }
+# `http-client` (without default features) gives the facade's
+# orderbook client over the core crate's `fetch`-backed wasm32
+# transport, so `reqwest` is never linked into the wasm binary and the
+# shim ships no HTTP plumbing of its own. The subgraph GraphQL client
+# stays off.
+cowprotocol = { path = "../cowprotocol", version = "1.0.0-alpha.3", default-features = false, features = ["http-client"] }
 alloy-primitives.workspace = true
 alloy-signer-local = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
 serde-wasm-bindgen = "0.6"
 console_error_panic_hook = "0.1"
-# Used to invoke the JS global `fetch` directly via Reflect, side-stepping
-# `reqwest` (~150 KB on the wire). `web-sys` is intentionally avoided to
-# keep the binding overhead minimal.
-js-sys = "0.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Tiny global allocator (~5 KB) to replace dlmalloc on wasm32. The shim
@@ -61,6 +56,14 @@ lol_alloc = "0.4"
 # on the host, not wasm32). Gated to wasm32 so plain `cargo test` on
 # native does not try to pull it in.
 wasm-bindgen-test = "0.3"
+# tests/browser.rs stubs `globalThis.fetch` via Reflect; the shim's own
+# sources no longer touch js-sys (the fetch transport lives in
+# `cowprotocol-orderbook` now), so it is a dev-dependency only.
+js-sys.workspace = true
+# tests/browser.rs drives `SubgraphClient` over the stubbed fetch to
+# lock in subgraph-on-wasm; the shim's own bindings leave `subgraph`
+# off, so the release wasm binary never carries it.
+cowprotocol = { path = "../cowprotocol", version = "1.0.0-alpha.3", default-features = false, features = ["subgraph"] }
 
 [package.metadata.wasm-pack.profile.release]
 # -Oz biases binaryen for binary size over speed (~30% smaller than

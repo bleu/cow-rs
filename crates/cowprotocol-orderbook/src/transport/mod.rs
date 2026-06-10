@@ -22,10 +22,32 @@ use crate::error::{ApiError, Error, Result};
 
 // Pathed as `self::reqwest` so the submodule never shadows the extern
 // crate of the same name under uniform paths.
-#[cfg(feature = "http-client")]
+#[cfg(all(feature = "http-client", not(target_arch = "wasm32")))]
 pub(crate) mod reqwest;
-#[cfg(feature = "http-client")]
+#[cfg(all(feature = "http-client", not(target_arch = "wasm32")))]
 pub use self::reqwest::ReqwestTransport;
+
+#[cfg(all(feature = "http-client", target_arch = "wasm32"))]
+mod fetch;
+#[cfg(all(feature = "http-client", target_arch = "wasm32"))]
+pub use self::fetch::FetchTransport;
+
+/// The HTTP backend the `http-client` feature ships for the build
+/// target: [`ReqwestTransport`] natively, `FetchTransport` on wasm32.
+/// [`OrderBookApi`](crate::OrderBookApi) and
+/// [`SubgraphClient`](crate::subgraph::SubgraphClient) default to it, so
+/// `cowprotocol` consumers get a working client on either target without
+/// naming a transport.
+#[cfg(all(feature = "http-client", not(target_arch = "wasm32")))]
+pub type DefaultTransport = ReqwestTransport;
+/// The HTTP backend the `http-client` feature ships for the build
+/// target: `ReqwestTransport` natively, [`FetchTransport`] on wasm32.
+/// [`OrderBookApi`](crate::OrderBookApi) and
+/// [`SubgraphClient`](crate::subgraph::SubgraphClient) default to it, so
+/// `cowprotocol` consumers get a working client on either target without
+/// naming a transport.
+#[cfg(all(feature = "http-client", target_arch = "wasm32"))]
+pub type DefaultTransport = FetchTransport;
 
 /// HTTP method for an orderbook request. Kept minimal: the orderbook only
 /// uses these four verbs.
@@ -84,9 +106,9 @@ pub struct HttpResponse {
 }
 
 /// HTTP backend [`OrderBookApi`](crate::OrderBookApi) issues requests
-/// through. Implemented by `ReqwestTransport` on native targets (behind the
-/// `http-client` feature) and by `cow-sdk-wasm`'s fetch transport on
-/// wasm32.
+/// through. The `http-client` feature ships one implementation per build
+/// target (see [`DefaultTransport`]): `ReqwestTransport` natively and the
+/// browser-`fetch`-backed `FetchTransport` on wasm32.
 ///
 /// The method is `async fn` rather than `-> impl Future + Send` on purpose:
 /// the wasm `fetch` transport's future is `!Send`, so requiring `Send`

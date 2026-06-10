@@ -1,13 +1,16 @@
 //! Ergonomic [`OrderBookApi`] constructors and their type-state builder.
 //!
-//! This module is gated behind the `http-client` feature; the
-//! transport-generic [`OrderBookApi`], its endpoint logic, and the
-//! quote pipeline live in the feature-independent
-//! [`api`](super::api) / [`flow`](super::flow) siblings. The reqwest
-//! [`HttpTransport`](crate::transport::HttpTransport) backend lives in
+//! This module is gated behind the `http-client` feature and works on
+//! both targets: it builds clients over the target's
+//! [`DefaultTransport`] (reqwest natively, browser `fetch` on wasm32).
+//! The transport-generic [`OrderBookApi`], its endpoint logic, and the
+//! quote pipeline live in the feature-independent [`api`](super::api) /
+//! [`flow`](super::flow) siblings; the transport backends live in
 //! [`crate::transport`].
 
 use crate::chain::Chain;
+use crate::transport::DefaultTransport;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::transport::ReqwestTransport;
 
 use super::api::OrderBookApi;
@@ -18,7 +21,7 @@ use super::builder_state;
 pub struct OrderBookApiBuilder<Target = builder_state::Missing> {
     chain: Option<Chain>,
     base_url: Option<url::Url>,
-    client: Option<reqwest::Client>,
+    transport: Option<DefaultTransport>,
     _state: core::marker::PhantomData<Target>,
 }
 
@@ -27,7 +30,7 @@ impl OrderBookApiBuilder {
         Self {
             chain: None,
             base_url: None,
-            client: None,
+            transport: None,
             _state: core::marker::PhantomData,
         }
     }
@@ -38,14 +41,25 @@ impl<Target> OrderBookApiBuilder<Target> {
         OrderBookApiBuilder {
             chain: self.chain,
             base_url: self.base_url,
-            client: self.client,
+            transport: self.transport,
             _state: core::marker::PhantomData,
         }
     }
 
-    /// Use a pre-configured [`reqwest::Client`] for the orderbook API.
+    /// Use a pre-configured [`reqwest::Client`] for the orderbook API
+    /// (native targets only; wasm32 builds drive the browser's `fetch`).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_client(mut self, client: reqwest::Client) -> Self {
-        self.client = Some(client);
+        self.transport = Some(ReqwestTransport::new(client));
+        self
+    }
+
+    /// Use a pre-built [`DefaultTransport`].
+    // const-eligible only on wasm32, where `DefaultTransport` is a unit
+    // struct with no drop glue; keep one non-const signature per target.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn with_transport(mut self, transport: DefaultTransport) -> Self {
+        self.transport = Some(transport);
         self
     }
 
@@ -70,9 +84,7 @@ impl OrderBookApiBuilder<builder_state::Set> {
     /// Build the [`OrderBookApi`].
     pub fn build(self) -> OrderBookApi {
         let base_url = self.base_url.expect("target typestate sets base_url");
-        let transport = self
-            .client
-            .map_or_else(ReqwestTransport::default, ReqwestTransport::new);
+        let transport = self.transport.unwrap_or_default();
         let api = OrderBookApi::new_with_transport(base_url, transport);
         match self.chain {
             Some(chain) => api.with_chain_hint(chain),
@@ -81,7 +93,7 @@ impl OrderBookApiBuilder<builder_state::Set> {
     }
 }
 
-impl OrderBookApi<ReqwestTransport> {
+impl OrderBookApi {
     /// Start a type-state builder for an orderbook client.
     pub const fn builder() -> OrderBookApiBuilder {
         OrderBookApiBuilder::new()
@@ -92,27 +104,30 @@ impl OrderBookApi<ReqwestTransport> {
         Self::builder().with_chain(chain)
     }
 
-    /// Client for the production orderbook on `chain`.
+    /// Client for the production orderbook on `chain`, over the target's
+    /// [`DefaultTransport`].
     /// [`Chain::orderbook_base_url`] already includes the trailing slash
     /// [`url::Url::join`] needs to append, not replace, path segments.
     pub fn new(chain: Chain) -> Self {
-        Self::new_with_transport(chain.orderbook_base_url(), ReqwestTransport::default())
+        Self::new_with_transport(chain.orderbook_base_url(), DefaultTransport::default())
             .with_chain_hint(chain)
     }
 
     /// Client against an arbitrary base URL (staging, recorded mock,
-    /// etc.). The default reqwest client enforces
-    /// [`DEFAULT_HTTP_TIMEOUT`]. The chain is left unknown; prefer
-    /// [`Self::new`] when targeting a production chain so the quote
-    /// pipeline can infer the signing domain and cross-check it.
+    /// etc.). The default transport enforces [`DEFAULT_HTTP_TIMEOUT`].
+    /// The chain is left unknown; prefer [`Self::new`] when targeting a
+    /// production chain so the quote pipeline can infer the signing
+    /// domain and cross-check it.
     ///
     /// [`DEFAULT_HTTP_TIMEOUT`]: super::DEFAULT_HTTP_TIMEOUT
     pub fn new_with_base_url(base_url: url::Url) -> Self {
-        Self::new_with_transport(base_url, ReqwestTransport::default())
+        Self::new_with_transport(base_url, DefaultTransport::default())
     }
 
-    /// Client around a pre-configured [`reqwest::Client`]. Use for
-    /// custom timeouts, proxies, TLS roots, or auth middleware.
+    /// Client around a pre-configured [`reqwest::Client`] (native targets
+    /// only; wasm32 builds drive the browser's `fetch`). Use for custom
+    /// timeouts, proxies, TLS roots, or auth middleware.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_client(base_url: url::Url, client: reqwest::Client) -> Self {
         Self::new_with_transport(base_url, ReqwestTransport::new(client))
     }

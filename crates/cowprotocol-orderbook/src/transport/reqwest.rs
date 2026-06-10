@@ -1,15 +1,14 @@
 //! The reqwest [`HttpTransport`] backend and its capped body readers.
 //!
-//! Gated behind the `http-client` feature. The transport-generic
+//! Gated behind the `http-client` feature on non-wasm32 targets; wasm32
+//! builds ship `FetchTransport` instead, so reqwest never enters their
+//! dependency graph. The transport-generic
 //! [`OrderBookApi`](crate::OrderBookApi) endpoint logic and the
 //! [`HttpTransport`] trait live feature-independently in the parent
 //! [`transport`](crate::transport) module.
 
 use crate::error::{Error, Result};
-use crate::order_book::MAX_RESPONSE_BYTES;
-// Only consumed by the default reqwest client's `timeout`, gated out on wasm.
-#[cfg(not(target_arch = "wasm32"))]
-use crate::order_book::DEFAULT_HTTP_TIMEOUT;
+use crate::order_book::{DEFAULT_HTTP_TIMEOUT, MAX_RESPONSE_BYTES};
 use crate::transport::{HttpMethod, HttpRequest, HttpResponse, HttpTransport};
 
 /// The reqwest-backed [`HttpTransport`]. Wraps a [`reqwest::Client`] and
@@ -26,16 +25,12 @@ impl ReqwestTransport {
         Self { client }
     }
 
-    /// The default reqwest client, enforcing
-    /// [`DEFAULT_HTTP_TIMEOUT`](crate::order_book::DEFAULT_HTTP_TIMEOUT)
-    /// on native targets (wasm defers to the browser's fetch timeout).
+    /// The default reqwest client, enforcing [`DEFAULT_HTTP_TIMEOUT`].
     fn default_client() -> reqwest::Client {
-        // `ClientBuilder::timeout` is non-wasm32 only; the wasm backend
-        // defers to the browser's fetch timeout.
-        let builder = reqwest::Client::builder();
-        #[cfg(not(target_arch = "wasm32"))]
-        let builder = builder.timeout(DEFAULT_HTTP_TIMEOUT);
-        builder.build().expect("reqwest defaults cannot fail")
+        reqwest::Client::builder()
+            .timeout(DEFAULT_HTTP_TIMEOUT)
+            .build()
+            .expect("reqwest defaults cannot fail")
     }
 }
 
@@ -88,7 +83,6 @@ async fn read_capped_text(response: reqwest::Response) -> Result<String> {
 /// length would exceed [`MAX_RESPONSE_BYTES`]. This is the stream-bounded
 /// guard the `Content-Length` early-reject cannot provide for chunked
 /// transfers.
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn read_capped_body(mut response: reqwest::Response) -> Result<String> {
     let mut body: Vec<u8> = Vec::new();
     while let Some(chunk) = response.chunk().await? {
@@ -103,18 +97,4 @@ pub(crate) async fn read_capped_body(mut response: reqwest::Response) -> Result<
     // pathological and would fail the downstream `serde_json` parse
     // anyway, so a lossy decode is acceptable and avoids a panic.
     Ok(String::from_utf8_lossy(&body).into_owned())
-}
-
-/// wasm's `reqwest` backend has no streaming body API, so fall back to a
-/// buffered read plus the post-read backstop. The `Content-Length`
-/// early-reject in [`read_capped_text`] still applies.
-#[cfg(target_arch = "wasm32")]
-pub(crate) async fn read_capped_body(response: reqwest::Response) -> Result<String> {
-    let text = response.text().await?;
-    if text.len() > MAX_RESPONSE_BYTES {
-        return Err(Error::ResponseTooLarge {
-            max: MAX_RESPONSE_BYTES,
-        });
-    }
-    Ok(text)
 }

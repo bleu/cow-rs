@@ -34,7 +34,6 @@ mod allocator;
 mod app_data;
 mod endpoints;
 mod signing;
-mod transport;
 
 #[doc(inline)]
 pub use {
@@ -58,7 +57,7 @@ pub use signing::{cancel_order_signed, sign_eip712, sign_ethsign};
 
 use {
     alloy_primitives::{Address, B256},
-    cowprotocol::{Chain, EcdsaSigningScheme, OrderUid},
+    cowprotocol::{Chain, OrderUid},
     serde::{Deserialize, Serialize},
     wasm_bindgen::prelude::*,
 };
@@ -115,16 +114,6 @@ pub(crate) fn parse_b256(value: &str) -> Result<B256, JsValue> {
 
 pub(crate) fn parse_chain(value: &str) -> Result<Chain, JsValue> {
     parse_typed(value, "chain")
-}
-
-pub(crate) fn parse_scheme(value: &str) -> Result<EcdsaSigningScheme, JsValue> {
-    match value.to_ascii_lowercase().as_str() {
-        "eip712" => Ok(EcdsaSigningScheme::Eip712),
-        "ethsign" => Ok(EcdsaSigningScheme::EthSign),
-        other => Err(JsValue::from_str(&format!(
-            "unknown signing scheme {other}; expected eip712 or ethsign"
-        ))),
-    }
 }
 
 // ===== Pure-compute helpers ============================================

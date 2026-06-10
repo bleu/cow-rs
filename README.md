@@ -25,8 +25,9 @@ every protocol-critical path byte-for-byte against
   Arbitrum One, Avalanche, Linea, Sepolia, plus their barn
   staging endpoints where the orderbook team publishes them.
 - **Conformance-locked**: 219 native tests (180 lib + 26 wiremock + 5
-  schema-drift + 3 source-lock + 1 trading-mock + 4 doctests) plus 12
-  headless-Firefox wasm-bindgen cases, with byte-exact goldens
+  schema-drift + 3 source-lock + 1 trading-mock + 4 doctests) plus 15
+  headless-Firefox wasm-bindgen cases (16 with `in_shim_signing`), with
+  byte-exact goldens
   cross-checked against `cowprotocol/services`, `cowprotocol/contracts`,
   ethers, cow-sdk and cow-py.
 - **Hostile-orderbook hardened**: every quote response is bound to the
@@ -52,6 +53,16 @@ cowprotocol = "1.0.0-alpha.3"
 The crate is published as `cowprotocol` on crates.io (the `cow-rs` name was already taken on
 crates.io by an unrelated publisher before this SDK existed); the source lives at
 [`cowdao-grants/cow-rs`](https://github.com/cowdao-grants/cow-rs).
+
+The `cowprotocol` meta crate is the single entry point for every Rust
+consumer, native and wasm alike: the same `cargo add cowprotocol` works on
+`wasm32-unknown-unknown`, where the `http-client` feature resolves to a
+browser-`fetch`-backed transport instead of reqwest (which never enters a
+wasm build). Rust-in-the-browser stacks (for example a Flutter or Yew app
+driving Rust compiled to wasm) should depend on it directly. The
+`cow-sdk-wasm` crate is JS bindings only: a thin `wasm-bindgen` shim over
+`cowprotocol`, published to npm for JavaScript consumers, not for Rust
+ones.
 
 MSRV `1.91`, edition `2024`.
 
