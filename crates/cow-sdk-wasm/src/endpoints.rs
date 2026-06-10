@@ -35,14 +35,15 @@ fn client(chain: Chain) -> OrderBookApi<FetchTransport> {
 /// `POST /api/v1/quote`. Accepts a `QuoteRequest` JSON object.
 ///
 /// [`OrderBookApi::quote`] re-asserts the request-shape invariants
-/// ([`QuoteRequest::validate`]) before issuing the request, and this
-/// binding additionally cross-checks the response against the request via
-/// [`cowprotocol::OrderQuoteResponse::try_into_signed_order_data`], so a
-/// hostile orderbook cannot hand JS callers a swapped `sellToken` /
-/// `buyToken` / `receiver` / `from` / `kind`. The empty-document app-data
-/// hash is used for the bind check; the caller's eventual signing-time
-/// digest is checked again when they call
-/// [`to_signed_order_data`](crate::app_data::to_signed_order_data).
+/// ([`QuoteRequest::validate`]) before issuing the request. The
+/// hostile-orderbook response binding (cross-checking `sellToken` /
+/// `buyToken` / `receiver` / `from` / `kind` / pinned `appData`
+/// against the request) runs at the projection chokepoint instead:
+/// [`to_signed_order_data`](crate::app_data::to_signed_order_data) and
+/// [`build_order_creation`](crate::signing::build_order_creation) both
+/// re-run it with the caller's real app-data digest, so checking here
+/// with a guessed digest would only reject requests that pin a
+/// non-empty `appData`.
 #[wasm_bindgen]
 pub async fn get_quote(chain: &str, request: JsValue) -> Result<JsValue, JsValue> {
     let request: QuoteRequest = from_js(request)?;
@@ -50,9 +51,6 @@ pub async fn get_quote(chain: &str, request: JsValue) -> Result<JsValue, JsValue
         .quote(&request)
         .await
         .map_err(js_err("quote request failed"))?;
-    response
-        .try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)
-        .map_err(js_err("quote response binding failed"))?;
     to_js(&response)
 }
 

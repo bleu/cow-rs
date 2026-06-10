@@ -90,13 +90,15 @@ fn domain_separator_is_32_byte_hex() {
 
 /// `empty_app_data_hash` is the keccak-256 of `"{}"`, hard-coded across
 /// the codebase. The exact value is
-/// `0xe7e95e6cb40eea2a5e1ee72d7d6fb27c8c0b32a64a6e3a3a44d4c54e10c4dafc`;
+/// `0xb48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d`;
 /// it must not drift between native and wasm.
 #[wasm_bindgen_test]
 fn empty_app_data_hash_stable() {
     let hex = empty_app_data_hash();
-    assert!(hex.starts_with("0x"));
-    assert_eq!(hex.len(), 2 + 64);
+    assert_eq!(
+        hex,
+        "0xb48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d",
+    );
 }
 
 /// `chain_info` returns a JS object (not a Map, thanks to
@@ -291,25 +293,25 @@ async fn get_quote_simple_parses_response_via_mock_fetch() {
     restore_real_fetch();
 }
 
-/// `get_quote` cross-checks the response against the request before
-/// returning. A hostile orderbook that swaps `sellToken` between
-/// request and response gets rejected at the wasm boundary, so JS
-/// callers cannot feed a swapped-token response into
-/// `to_signed_order_data` / `build_order_creation` downstream.
+/// Regression: `get_quote` must accept a request that pins a non-empty
+/// `appData` digest. It used to run the response binding eagerly with a
+/// hard-coded empty-document hash, which spuriously rejected every
+/// pinned-appData quote with an `appData` mismatch. The binding now
+/// runs at the projection chokepoint (`to_signed_order_data` /
+/// `build_order_creation`) with the caller's real digest; the
+/// hostile-response rejection is locked by
+/// `to_signed_order_data_rejects_tampered_response` below.
 #[wasm_bindgen_test]
-async fn get_quote_rejects_swapped_sell_token_in_response() {
-    // Request asks for USDC -> DAI, but the mocked response returns
-    // WETH as `sellToken`. The native `OrderQuoteResponse::try_into_signed_order_data`
-    // guard fires through the wasm boundary as a `JsValue` error.
+async fn get_quote_accepts_pinned_app_data() {
     let body = r#"{
         "quote": {
-            "sellToken": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+            "sellToken": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
             "buyToken": "0x6b175474e89094c44da98b954eedeac495271d0f",
             "receiver": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
             "sellAmount": "99500000",
             "buyAmount": "99000000000000000000",
             "validTo": 4294967295,
-            "appData": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "appData": "0x1111111111111111111111111111111111111111111111111111111111111111",
             "feeAmount": "500000",
             "kind": "sell",
             "partiallyFillable": false,
@@ -329,17 +331,22 @@ async fn get_quote_rejects_swapped_sell_token_in_response() {
             "buyToken":  "0x6b175474e89094c44da98b954eedeac495271d0f",
             "from":      "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
             "kind":      "sell",
-            "sellAmountBeforeFee": "100000000"
+            "sellAmountBeforeFee": "100000000",
+            "appData": "0x1111111111111111111111111111111111111111111111111111111111111111"
         }"#,
     )
     .unwrap();
-    let err = get_quote("mainnet", request)
+    let response = get_quote("mainnet", request)
         .await
-        .expect_err("expected QuoteFieldMismatch on swapped sellToken");
-    let msg = err.as_string().unwrap_or_default();
-    assert!(
-        msg.contains("sellToken") && msg.contains("mismatch"),
-        "expected sellToken mismatch error, got: {msg}",
+        .unwrap_or_else(|err| panic!("get_quote: {}", err.as_string().unwrap_or_default()));
+    let quote = Reflect::get(&response, &JsValue::from_str("quote")).expect("quote present");
+    let app_data = Reflect::get(&quote, &JsValue::from_str("appData"))
+        .expect("appData")
+        .as_string()
+        .expect("appData string");
+    assert_eq!(
+        app_data,
+        "0x1111111111111111111111111111111111111111111111111111111111111111",
     );
     restore_real_fetch();
 }
@@ -427,12 +434,12 @@ fn sign_eip712_owner_matches_anvil_account_zero() {
         "sellAmount": "100000000",
         "buyAmount": "99000000000000000000",
         "validTo": 4_294_967_295u32,
-        "appData": "0xe7e95e6cb40eea2a5e1ee72d7d6fb27c8c0b32a64a6e3a3a44d4c54e10c4dafc",
+        "appData": "0xb48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d",
         "feeAmount": "0",
         "kind": "sell",
         "partiallyFillable": false,
-        "sellTokenSource": "erc20",
-        "buyTokenDestination": "erc20",
+        "sellTokenBalance": "erc20",
+        "buyTokenBalance": "erc20",
     });
     // Round-trip through JSON.parse so the JsValue is a plain JS
     // Object (not a Map). `from_js<OrderData>` on the wasm side
