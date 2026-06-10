@@ -214,9 +214,103 @@ pub struct ApiError {
     pub data: Option<serde_json::Value>,
 }
 
+impl ApiError {
+    /// Classify the `errorType` string into a typed variant.
+    pub fn kind(&self) -> OrderPostErrorKind<'_> {
+        OrderPostErrorKind::from_str(&self.error_type)
+    }
+
+    /// Whether this error is transient and the order may be resubmitted
+    /// after re-quoting. Returns `false` for permanent rejections (invalid
+    /// signature, unsupported token, etc.) and `true` for transient ones
+    /// where a fresh quote and a new submission are likely to succeed.
+    pub fn retry_hint(&self) -> bool {
+        self.kind().is_retriable()
+    }
+}
+
 impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: {}", self.error_type, self.description)
+    }
+}
+
+/// Typed classification of the orderbook's `errorType` field on a failed
+/// `POST /api/v1/orders`. The string is parsed against the known variants
+/// documented in the CoW Protocol orderbook OpenAPI; unrecognised strings
+/// fall through to [`Self::Unknown`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum OrderPostErrorKind<'a> {
+    /// Fee was below the current minimum; re-quote and resubmit.
+    InsufficientFee,
+    /// Order with this UID already exists in the orderbook.
+    DuplicateOrder,
+    /// ECDSA or EIP-1271 signature is not valid for the order hash.
+    InvalidSignature,
+    /// Invalid EIP-1271 contract signature.
+    InvalidErc1271Signature,
+    /// Signer's sell-token balance is insufficient to cover the order.
+    InsufficientBalance,
+    /// Sell-token allowance to the vault relayer is too low.
+    InsufficientAllowance,
+    /// The sell or buy token is not accepted by the orderbook.
+    UnsupportedToken,
+    /// The `from` field does not match the signature recovery.
+    WrongOwner,
+    /// The `appData` hash in the order does not match the pinned document.
+    InvalidAppData,
+    /// `appData` hash in the order body disagrees with the pre-image pinned.
+    AppDataHashMismatch,
+    /// Sell and buy tokens are the same address.
+    SameBuyAndSellToken,
+    /// Unsupported buy-token destination flag.
+    UnsupportedBuyTokenDestination,
+    /// Unsupported sell-token balance source flag.
+    UnsupportedSellTokenSource,
+    /// Order type (e.g. pre-sign) not supported on this chain.
+    UnsupportedOrderType,
+    /// ETH transfer to a contract is rejected; wrap to WETH first.
+    TransferEthToContract,
+    /// Per-user limit order quota exceeded; back off and retry.
+    TooManyLimitOrders,
+    /// Order limit price exceeds current market; re-quote and retry.
+    PriceExceedsMarketPrice,
+    /// Any `errorType` string not covered by the variants above.
+    Unknown(&'a str),
+}
+
+impl<'a> OrderPostErrorKind<'a> {
+    fn from_str(s: &'a str) -> Self {
+        match s {
+            "InsufficientFee" => Self::InsufficientFee,
+            "DuplicateOrder" => Self::DuplicateOrder,
+            "InvalidSignature" => Self::InvalidSignature,
+            "InvalidErc1271Signature" => Self::InvalidErc1271Signature,
+            "InsufficientBalance" => Self::InsufficientBalance,
+            "InsufficientAllowance" => Self::InsufficientAllowance,
+            "UnsupportedToken" => Self::UnsupportedToken,
+            "WrongOwner" => Self::WrongOwner,
+            "InvalidAppData" => Self::InvalidAppData,
+            "AppDataHashMismatch" => Self::AppDataHashMismatch,
+            "SameBuyAndSellToken" => Self::SameBuyAndSellToken,
+            "UnsupportedBuyTokenDestination" => Self::UnsupportedBuyTokenDestination,
+            "UnsupportedSellTokenSource" => Self::UnsupportedSellTokenSource,
+            "UnsupportedOrderType" => Self::UnsupportedOrderType,
+            "TransferEthToContract" => Self::TransferEthToContract,
+            "TooManyLimitOrders" => Self::TooManyLimitOrders,
+            "PriceExceedsMarketPrice" => Self::PriceExceedsMarketPrice,
+            other => Self::Unknown(other),
+        }
+    }
+
+    /// `true` when the error is transient and a re-quote + resubmit is
+    /// likely to succeed. `false` for permanent rejections.
+    pub const fn is_retriable(&self) -> bool {
+        matches!(
+            self,
+            Self::InsufficientFee | Self::TooManyLimitOrders | Self::PriceExceedsMarketPrice
+        )
     }
 }
 
@@ -246,5 +340,72 @@ mod tests {
         let parsed: ApiError = serde_json::from_value(json).unwrap();
         assert!(parsed.data.is_some());
         assert_eq!(parsed.data.unwrap()["fee_amount"], "1234");
+    }
+
+    #[test]
+    fn known_retriable_kinds_hint_true() {
+        for error_type in ["InsufficientFee", "TooManyLimitOrders", "PriceExceedsMarketPrice"] {
+            let e = ApiError {
+                error_type: error_type.to_owned(),
+                description: String::new(),
+                data: None,
+            };
+            assert!(e.retry_hint(), "{error_type} should be retriable");
+        }
+    }
+
+    #[test]
+    fn known_permanent_kinds_hint_false() {
+        for error_type in [
+            "DuplicateOrder",
+            "InvalidSignature",
+            "InvalidErc1271Signature",
+            "InsufficientBalance",
+            "InsufficientAllowance",
+            "UnsupportedToken",
+            "WrongOwner",
+            "InvalidAppData",
+            "AppDataHashMismatch",
+            "SameBuyAndSellToken",
+            "UnsupportedBuyTokenDestination",
+            "UnsupportedSellTokenSource",
+            "UnsupportedOrderType",
+            "TransferEthToContract",
+        ] {
+            let e = ApiError {
+                error_type: error_type.to_owned(),
+                description: String::new(),
+                data: None,
+            };
+            assert!(!e.retry_hint(), "{error_type} should be permanent");
+        }
+    }
+
+    #[test]
+    fn unknown_error_type_does_not_retry() {
+        let e = ApiError {
+            error_type: "SomeNewUnknownError".to_owned(),
+            description: String::new(),
+            data: None,
+        };
+        assert_eq!(e.kind(), OrderPostErrorKind::Unknown("SomeNewUnknownError"));
+        assert!(!e.retry_hint());
+    }
+
+    #[test]
+    fn kind_parses_all_documented_variants() {
+        let cases = [
+            ("InsufficientFee", OrderPostErrorKind::InsufficientFee),
+            ("DuplicateOrder", OrderPostErrorKind::DuplicateOrder),
+            ("InvalidSignature", OrderPostErrorKind::InvalidSignature),
+        ];
+        for (s, expected) in cases {
+            let e = ApiError {
+                error_type: s.to_owned(),
+                description: String::new(),
+                data: None,
+            };
+            assert_eq!(e.kind(), expected);
+        }
     }
 }

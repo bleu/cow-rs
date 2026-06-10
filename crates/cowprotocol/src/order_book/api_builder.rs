@@ -17,6 +17,7 @@ use std::marker::PhantomData;
 
 use crate::chain::Chain;
 
+#[cfg(not(target_arch = "wasm32"))]
 use super::DEFAULT_HTTP_TIMEOUT;
 use super::client::OrderBookApi;
 
