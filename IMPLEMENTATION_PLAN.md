@@ -246,7 +246,7 @@ matches wasip1/p2 (no JS host: compiles, fails at runtime, not a regression).
 **Success Criteria**: `cargo tree -p cowprotocol-appdata` shows no signing edge;
 signing crate has no serde_json in non-test surface.
 **Tests**: existing suites; doc-link check stays clean after moves.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 7: primitives hygiene
 

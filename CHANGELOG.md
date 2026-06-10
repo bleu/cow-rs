@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking**: order wire types moved to their canonical crates. `Order` / `OrderStatus` (the `GET /orders/{uid}` response model) now live in `cowprotocol-orderbook` next to `OrderCreation`; `cowprotocol::order::{Order, OrderStatus}` paths are gone (use the crate root or `order_book::`). The `OrderUid` family and `OrderClass` moved to `cowprotocol-primitives::order_id` (the `order::` paths still work via re-export), and `cowprotocol-appdata` no longer depends on the signing crate nor re-exports its `order` module.
 - **Breaking**: `UnsupportedChain` is now an enum (`Id(u64)` / `Slug(...)`) and no longer `Copy`. Parsing an unknown slug reports `unsupported chain slug "..."` instead of the misleading `unsupported chain id 0` sentinel.
 - `Multiplexer` documentation now records the verified evidence chain for why its merkle layout differs from cow-sdk's `StandardMerkleTree`: upstream's own leaf encodings disagree with each other and with the on-chain `ComposableCoW` verifier (cow-sdk issue #155); this SDK's layout matches the contract. Documentation only, no behavioural change.
 - App-data partner-fee validation has a single chokepoint (`AppDataPartnerFee::new`); the builders and the `Deserialize` impl route through it, and the free `validate_fee_policy` function is private.
