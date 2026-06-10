@@ -90,14 +90,25 @@ impl Multiplexer {
     ///
     /// The proofs this produces verify against the on-chain
     /// `MerkleProof.verify` (which is order-agnostic), and
-    /// [`verify_proof`] round-trips them. It is **not** byte-equal to the
-    /// JS SDK's root, though: `@openzeppelin/merkle-tree`'s
-    /// `StandardMerkleTree` (used by `cow-sdk`'s `Multiplexer`) sorts
-    /// leaves by hash and lays out a complete binary tree, so
-    /// [`Multiplexer::root`] will differ from a JS-derived root over the
-    /// same orders. Do not cross-publish a `(leaves, root, proofs)` blob
-    /// and expect a JS consumer to re-derive the same root; ship the
-    /// proofs themselves, which verify on either side.
+    /// [`verify_proof`] round-trips them. The root is **not** byte-equal
+    /// to cow-sdk's `Multiplexer` root over the same orders, and cannot
+    /// be: cow-sdk ([`Multiplexer.ts` @ `00c3dbd4`][sdk], pinned in
+    /// `parity/source-lock.toml`) builds its `StandardMerkleTree` with
+    /// the flat types `['address', 'bytes32', 'bytes']`, so its leaves
+    /// double-hash the three fields encoded as a bare parameter list,
+    /// while `ComposableCoW._auth` verifies proofs against
+    /// `keccak256(bytes.concat(hash(params)))`, whose inner `hash`
+    /// ABI-encodes the fields as a struct: one offset-prefixed tuple,
+    /// the same bytes [`conditional_order_leaf`] hashes and the
+    /// `conditional_order_leaf_id_matches_cow_py_vector` test locks.
+    /// The two leaf preimages differ, so a cow-sdk-derived root does
+    /// not verify on-chain at all (upstream tracks finishing its merkle
+    /// flow in cow-sdk issue #155). This implementation sides with the
+    /// contract: it keeps the contract-canonical leaf and a layout
+    /// whose proofs `_auth` accepts, at the cost of root parity with
+    /// the JS SDK.
+    ///
+    /// [sdk]: https://github.com/cowprotocol/cow-sdk/blob/00c3dbd41c086ff9a51d5e5a30648615d4c66d0d/packages/composable/src/Multiplexer.ts
     pub fn new(leaves: &[B256]) -> Result<Self, MultiplexerError> {
         if leaves.is_empty() {
             return Err(MultiplexerError::Empty);
