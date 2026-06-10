@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Removed** `QuoteAppData::hash` / `QuoteAppData::full` identity constructors; use the enum variants, `From<AppDataHash>`, or the new `From<&AppDataDoc>` (pins the canonical JSON).
 - `SignerSync` is re-exported from `cowprotocol-signing` and the meta crate; `cowprotocol-orderbook` no longer depends on `alloy-signer`.
 
+### Changed: one transport layer, one entry point (breaking)
+
+- **The `cowprotocol` meta crate is now the single Rust entry point on native and wasm32.** `http-client` is target-polymorphic: `DefaultTransport` resolves to `ReqwestTransport` natively and to the new `FetchTransport` on `wasm32-unknown-unknown`, so `OrderBookApi::new(chain)` and the pipeline builders work unchanged on both targets. `cow-sdk-wasm` is JS-bindings-only (its `transport.rs` is deleted); reqwest is CI-banned from the wasm dependency graph.
+- Both transports live under `cowprotocol_orderbook::transport` (`transport/reqwest.rs`, `transport/fetch.rs`) beside the `HttpTransport` trait. `ReqwestTransport` / `with_client` do not exist on wasm32 (`with_transport` covers BYO transports); `Error::Transport(reqwest::Error)` is gated off wasm32.
+- `SubgraphClient<T: HttpTransport = DefaultTransport>` rides the shared transport: its duplicated client plumbing is deleted, it inherits the mid-stream response-size cap (the old copy buffered hostile bodies fully before checking), and it works on wasm32. `HttpRequest` gains a `bearer` field with a redacting `Debug`; `SubgraphError::GraphQl` loses its denormalised `first` field (the `Display` impl renders the first message).
+- **Fetch transport cap fix**: oversized bodies are now rejected before the copy into wasm linear memory (UTF-16 length pre-check with a byte-exact backstop); the module documentation states the real allocation bound.
+- wasm shim signing-scheme strings are now case-sensitive (`"eip712"` / `"ethsign"`): the duplicated string mappings were replaced by the serde wire forms the core crate defines.
+
 ### Fixed
 
 - **wasm `get_quote` no longer rejects quote requests that pin a non-empty `appData`.** The binding used to run eagerly with a hard-coded empty-document digest, so every pinned-appData quote failed with a spurious `appData mismatch`. The hostile-orderbook response binding now runs at the projection chokepoints (`to_signed_order_data`, `build_order_creation`) with the caller's real digest.

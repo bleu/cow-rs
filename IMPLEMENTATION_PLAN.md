@@ -188,7 +188,7 @@ the shared transport. First of two WASM-crux PRs (~850 LoC).
 **Success Criteria**: zero duplicated transport plumbing (grep `build_client`,
 `read_capped_text` returns nothing); subgraph capped-streaming test passes.
 **Tests**: streaming-cap test for subgraph path; bearer redaction; status-mapping pin.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: wasm32 target switch, meta crate as the single entry point
 
@@ -226,7 +226,7 @@ from the wasm graph (CI-enforced).
 **Tests**: browser suite green against the bindings-only shim; optional
 `SubgraphClient<FetchTransport>` browser test; rustdoc note that bare wasm32 cfg also
 matches wasip1/p2 (no JS host: compiles, fails at runtime, not a regression).
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 6: crate re-layering
 
