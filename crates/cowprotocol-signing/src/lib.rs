@@ -25,9 +25,8 @@ pub mod app_data {
 pub use self::{
     cancellation::{OrderCancellations, SignedOrderCancellation, SignedOrderCancellations},
     order::{
-        BUY_ETH_ADDRESS, BuyTokenDestination, Order, OrderClass, OrderData, OrderKind, OrderStatus,
-        OrderUid, OrderUidParseError, OrderUidParts, SellTokenSource, order_typed_data,
-        parse_order_uid,
+        BUY_ETH_ADDRESS, BuyTokenDestination, OrderClass, OrderData, OrderKind, OrderUid,
+        OrderUidParseError, OrderUidParts, SellTokenSource, order_typed_data, parse_order_uid,
     },
     signature::{
         EcdsaSignature, Recovered, Signature, SignatureError, ecdsa_from_components, ecdsa_recover,

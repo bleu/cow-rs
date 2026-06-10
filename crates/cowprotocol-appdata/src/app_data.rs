@@ -17,7 +17,7 @@ use alloy_primitives::{Address, Bytes, U256, keccak256};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_with::{DisplayFromStr, serde_as};
 
-use crate::order::{OrderClass, OrderUid};
+use cowprotocol_primitives::order_id::{OrderClass, OrderUid};
 pub use cowprotocol_primitives::{AppDataHash, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON};
 
 /// SemVer of the schema this crate emits. Bump in lock-step with
@@ -104,12 +104,12 @@ pub struct AppDataQuote {
     pub version: Option<String>,
 }
 
-/// `metadata.orderClass` envelope around [`crate::order::OrderClass`].
+/// `metadata.orderClass` envelope around [`OrderClass`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataOrderClass {
-    /// Inner [`crate::order::OrderClass`] discriminant.
-    pub order_class: crate::order::OrderClass,
+    /// Inner [`OrderClass`] discriminant.
+    pub order_class: OrderClass,
 }
 
 /// `metadata.partnerFee`. Policy fields are flattened alongside

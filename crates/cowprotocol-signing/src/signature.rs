@@ -71,7 +71,11 @@ pub enum SignatureError {
     #[error("signer error: {0}")]
     SignerOther(String),
     /// Recovered signer ≠ declared. Raised by the orderbook crate's
-    /// `OrderCreation::verify_owner`.
+    /// `OrderCreation::verify_owner`. Kept here rather than in the
+    /// orderbook error enum because the mismatch is a property of the
+    /// signature recovery this crate owns; any consumer that recovers
+    /// and compares (the orderbook, the wasm shim, integrator code)
+    /// reports the same failure shape.
     #[error("signer mismatch: declared {declared}, recovered {recovered}")]
     SignerMismatch {
         /// Owner the order claims to be signed by.

@@ -10,7 +10,7 @@
 //!
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/model/src/order.rs
 
-use alloy_primitives::{Address, B256, FixedBytes, U256, b256};
+use alloy_primitives::{Address, B256, U256, b256};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::fmt::{self, Display};
@@ -57,37 +57,6 @@ pub mod eip712 {
 /// Sentinel buy token meaning the order pays out in the chain's
 /// native currency (ETH on mainnet, xDAI on Gnosis, etc.).
 pub const BUY_ETH_ADDRESS: Address = Address::repeat_byte(0xee);
-
-/// Server-side lifecycle status from `GET /api/v1/orders/{uid}`.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum OrderStatus {
-    /// Awaiting on-chain pre-signature.
-    PresignaturePending,
-    /// Live; waiting for a solver to settle.
-    #[default]
-    Open,
-    /// Fully matched on-chain.
-    Fulfilled,
-    /// Off-chain delete or on-chain pre-sign reversal.
-    Cancelled,
-    /// `validTo` passed before any fill.
-    Expired,
-}
-
-/// Server-side order classification. Drives fee handling and solver
-/// routing.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum OrderClass {
-    /// Standard market order.
-    #[default]
-    Market,
-    /// Solver-internal, placed by whitelisted participants.
-    Liquidity,
-    /// Limit order; fee taken from surplus once the target is met.
-    Limit,
-}
 
 /// The 12 fields signed by the order owner and verified by
 /// `GPv2Settlement`. Mirrors [`GPv2Order.Data`].
@@ -263,72 +232,6 @@ pub fn order_typed_data(
     })
 }
 
-/// Full order returned by `GET /api/v1/orders/{uid}`. Flattens the
-/// 12 [`OrderData`] fields plus server-derived metadata; less-common
-/// contextual objects stay as opaque JSON for forward-compat.
-#[serde_as]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Order {
-    /// The 12 signed fields ([`OrderData`]).
-    #[serde(flatten)]
-    pub data: OrderData,
-    /// 56-byte order UID against the chain's settlement domain.
-    pub uid: OrderUid,
-    /// Owner that signed the order.
-    pub owner: alloy_primitives::Address,
-    /// Signing scheme used by the owner.
-    pub signing_scheme: crate::signing_scheme::SigningScheme,
-    /// Raw signature bytes, hex-encoded.
-    pub signature: String,
-    /// ISO-8601 timestamp the orderbook accepted the order.
-    pub creation_date: String,
-    /// Current server-side lifecycle status.
-    pub status: OrderStatus,
-    /// Server-side order classification.
-    pub class: OrderClass,
-    /// Cumulative buy-side fill, atomic units.
-    #[serde_as(as = "DisplayFromStr")]
-    pub executed_buy_amount: alloy_primitives::U256,
-    /// Cumulative sell-side fill, atomic units.
-    #[serde_as(as = "DisplayFromStr")]
-    pub executed_sell_amount: alloy_primitives::U256,
-    /// Executed fee in `executed_fee_token` atomic units.
-    #[serde_as(as = "Option<DisplayFromStr>")]
-    #[serde(default)]
-    pub executed_fee: Option<alloy_primitives::U256>,
-    /// Token used to charge `executed_fee`.
-    #[serde(default)]
-    pub executed_fee_token: Option<alloy_primitives::Address>,
-    /// `true` once the order is invalidated (cancelled / replaced).
-    #[serde(default)]
-    pub invalidated: bool,
-    /// `true` if classified as a liquidity order.
-    #[serde(default)]
-    pub is_liquidity_order: bool,
-    /// Full app-data document, when the orderbook stored it.
-    #[serde(default)]
-    pub full_app_data: Option<String>,
-    /// Quote that produced the order, when one was supplied.
-    #[serde(default)]
-    pub quote: Option<serde_json::Value>,
-    /// Pre/post settlement interactions from app-data hooks.
-    #[serde(default)]
-    pub interactions: Option<serde_json::Value>,
-    /// EthFlow metadata for native-sell orders.
-    #[serde(default)]
-    pub ethflow_data: Option<serde_json::Value>,
-    /// On-chain placement metadata for EthFlow orders.
-    #[serde(default)]
-    pub onchain_order_data: Option<serde_json::Value>,
-    /// On-chain user (distinct from `owner` for proxy/relayer flows).
-    #[serde(default)]
-    pub onchain_user: Option<alloy_primitives::Address>,
-    /// Settlement contract that processed the trade, when known.
-    #[serde(default)]
-    pub settlement_contract: Option<alloy_primitives::Address>,
-}
-
 /// Order direction.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -473,68 +376,13 @@ impl BuyTokenDestination {
     }
 }
 
-/// 56-byte order identifier:
-/// `32-byte digest || 20-byte owner || 4-byte validTo`. The digest is
-/// `keccak256(0x19 0x01 || domain_separator || order_struct_hash)`.
-///
-/// Type-aliased onto alloy's [`FixedBytes<56>`] so `Debug` / `Display` /
-/// serde (`0x`-prefixed lower-case hex), `FromStr`, `From<[u8; 56]>`,
-/// `AsRef<[u8]>` and `Index` all come from there for free; use
-/// [`OrderUidParts`] to split or rebuild the 56-byte layout.
-pub type OrderUid = FixedBytes<56>;
-
-/// Split / rebuild an [`OrderUid`]'s `digest || owner || validTo` layout.
-pub trait OrderUidParts {
-    /// Assemble from the three parts.
-    fn from_parts(hash: B256, owner: Address, valid_to: u32) -> Self;
-    /// Split into `(digest, owner, validTo)`.
-    fn to_parts(&self) -> (B256, Address, u32);
-}
-
-/// Errors from [`parse_order_uid`].
-#[derive(Debug, thiserror::Error)]
-pub enum OrderUidParseError {
-    /// The string did not start with the canonical `0x` prefix.
-    #[error("order UID must be 0x-prefixed")]
-    MissingPrefix,
-    /// The body was not valid 56-byte hex.
-    #[error("invalid order UID hex: {0}")]
-    Hex(#[from] alloy_primitives::hex::FromHexError),
-}
-
-/// Parse an [`OrderUid`] from its canonical `0x`-prefixed lower-case hex
-/// form. alloy's blanket `FromStr` for [`FixedBytes`] also accepts the
-/// unprefixed body, which can cause canonicalisation confusion in code
-/// that validates, caches, authorises, or compares UID strings before
-/// converting them. Use this helper for untrusted input to reject the
-/// non-canonical encoding up front.
-pub fn parse_order_uid(s: &str) -> Result<OrderUid, OrderUidParseError> {
-    if !s.starts_with("0x") {
-        return Err(OrderUidParseError::MissingPrefix);
-    }
-    Ok(s.parse::<OrderUid>()?)
-}
-
-impl OrderUidParts for OrderUid {
-    fn from_parts(hash: B256, owner: Address, valid_to: u32) -> Self {
-        let mut uid = [0u8; 56];
-        uid[0..32].copy_from_slice(hash.as_slice());
-        uid[32..52].copy_from_slice(owner.as_slice());
-        uid[52..56].copy_from_slice(&valid_to.to_be_bytes());
-        Self::new(uid)
-    }
-
-    fn to_parts(&self) -> (B256, Address, u32) {
-        let bytes = self.as_slice();
-        let mut valid_to = [0u8; 4];
-        valid_to.copy_from_slice(&bytes[52..56]);
-        (
-            B256::from_slice(&bytes[0..32]),
-            Address::from_slice(&bytes[32..52]),
-            u32::from_be_bytes(valid_to),
-        )
-    }
-}
+// Order identifiers and the server-side classification live in the
+// primitives crate (they are pure wire types shared by crates that do
+// not need the signing stack); re-exported here so the canonical
+// `order::OrderUid` / `order::OrderClass` paths keep working.
+pub use cowprotocol_primitives::order_id::{
+    OrderClass, OrderUid, OrderUidParseError, OrderUidParts, parse_order_uid,
+};
 
 #[cfg(test)]
 mod tests {

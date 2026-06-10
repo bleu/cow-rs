@@ -42,7 +42,7 @@ mod quote;
 pub use quote::*;
 
 mod orders;
-pub use orders::OrderCreation;
+pub use orders::{Order, OrderCreation, OrderStatus};
 
 mod api;
 pub use api::OrderBookApi;

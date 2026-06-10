@@ -10,6 +10,7 @@ pub mod composable;
 pub mod contracts;
 pub mod domain;
 pub mod multiplexer;
+pub mod order_id;
 
 /// 32-byte keccak256 digest of an app-data document, embedded directly
 /// in a signed order's `appData` field.
@@ -38,4 +39,5 @@ pub use self::{
         DOMAIN_NAME, DOMAIN_VERSION, DomainSeparator, eip712_message_hash, settlement_domain,
     },
     multiplexer::{Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof},
+    order_id::{OrderClass, OrderUid, OrderUidParseError, OrderUidParts, parse_order_uid},
 };

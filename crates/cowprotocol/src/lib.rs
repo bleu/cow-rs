@@ -131,14 +131,14 @@ pub use crate::{
     eth_flow::{ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowOrder},
     multiplexer::{Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof},
     order::{
-        BUY_ETH_ADDRESS, BuyTokenDestination, Order, OrderClass, OrderData, OrderKind, OrderStatus,
-        OrderUid, OrderUidParseError, OrderUidParts, SellTokenSource, order_typed_data,
-        parse_order_uid,
+        BUY_ETH_ADDRESS, BuyTokenDestination, OrderClass, OrderData, OrderKind, OrderUid,
+        OrderUidParseError, OrderUidParts, SellTokenSource, order_typed_data, parse_order_uid,
     },
     order_book::{
-        AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, OrderBookApi,
-        OrderCreation, OrderQuote, OrderQuoteResponse, OrderSubmission, PriceQuality, QuoteAppData,
-        QuoteRequest, QuoteRequestBuilder, QuotedOrder, TokenMetadata, TotalSurplus, Trade,
+        AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, Order,
+        OrderBookApi, OrderCreation, OrderQuote, OrderQuoteResponse, OrderStatus, OrderSubmission,
+        PriceQuality, QuoteAppData, QuoteRequest, QuoteRequestBuilder, QuotedOrder, TokenMetadata,
+        TotalSurplus, Trade,
     },
     quote_amounts::{
         Amounts as QuoteAmounts, DEFAULT_SLIPPAGE_BPS, OrderCosts, ProtocolFeeBps,

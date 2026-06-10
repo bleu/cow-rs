@@ -15,12 +15,12 @@ use crate::app_data::AppDataHash;
 use crate::cancellation::{SignedOrderCancellation, SignedOrderCancellations};
 use crate::chain::Chain;
 use crate::error::{Error, Result};
-use crate::order::{Order, OrderUid};
+use crate::order::OrderUid;
 use crate::signature::{EcdsaSignature, ecdsa_wire};
 use crate::signing_scheme::EcdsaSigningScheme;
 use crate::transport::{HttpMethod, HttpRequest, HttpTransport};
 
-use super::orders::OrderCreation;
+use super::orders::{Order, OrderCreation};
 use super::quote::{OrderQuoteResponse, QuoteRequest};
 use super::types::{
     AppDataDocument, Auction, AuctionStatus, NativePrice, TokenMetadata, TotalSurplus, Trade,

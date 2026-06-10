@@ -1047,7 +1047,6 @@ dependencies = [
  "cid",
  "const-hex",
  "cowprotocol-primitives",
- "cowprotocol-signing",
  "serde",
  "serde_json",
  "serde_with",

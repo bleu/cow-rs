@@ -1,6 +1,8 @@
-//! `OrderCreation`: the `POST /api/v1/orders` body and its serde wire
-//! shape. Carries the owner's signature, the canonical app-data JSON
-//! and the same amounts that were hashed for EIP-712 signing.
+//! Order wire bodies: `OrderCreation`, the `POST /api/v1/orders` body
+//! and its serde wire shape (carrying the owner's signature, the
+//! canonical app-data JSON and the same amounts that were hashed for
+//! EIP-712 signing), plus [`Order`] and [`OrderStatus`], the
+//! `GET /api/v1/orders/{uid}` response model.
 
 use alloy_primitives::{Address, Bytes, U256};
 use serde::{Deserialize, Serialize};
@@ -9,10 +11,93 @@ use serde_with::{DisplayFromStr, serde_as};
 use crate::{
     app_data::AppDataHash,
     error::{Error, Result},
-    order::{BuyTokenDestination, OrderData, OrderKind, SellTokenSource},
+    order::{BuyTokenDestination, OrderClass, OrderData, OrderKind, OrderUid, SellTokenSource},
     signature::Signature,
     signing_scheme::SigningScheme,
 };
+
+/// Server-side lifecycle status from `GET /api/v1/orders/{uid}`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OrderStatus {
+    /// Awaiting on-chain pre-signature.
+    PresignaturePending,
+    /// Live; waiting for a solver to settle.
+    #[default]
+    Open,
+    /// Fully matched on-chain.
+    Fulfilled,
+    /// Off-chain delete or on-chain pre-sign reversal.
+    Cancelled,
+    /// `validTo` passed before any fill.
+    Expired,
+}
+
+/// Full order returned by `GET /api/v1/orders/{uid}`. Flattens the
+/// 12 [`OrderData`] fields plus server-derived metadata; less-common
+/// contextual objects stay as opaque JSON for forward-compat.
+#[serde_as]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Order {
+    /// The 12 signed fields ([`OrderData`]).
+    #[serde(flatten)]
+    pub data: OrderData,
+    /// 56-byte order UID against the chain's settlement domain.
+    pub uid: OrderUid,
+    /// Owner that signed the order.
+    pub owner: Address,
+    /// Signing scheme used by the owner.
+    pub signing_scheme: SigningScheme,
+    /// Raw signature bytes, hex-encoded.
+    pub signature: String,
+    /// ISO-8601 timestamp the orderbook accepted the order.
+    pub creation_date: String,
+    /// Current server-side lifecycle status.
+    pub status: OrderStatus,
+    /// Server-side order classification.
+    pub class: OrderClass,
+    /// Cumulative buy-side fill, atomic units.
+    #[serde_as(as = "DisplayFromStr")]
+    pub executed_buy_amount: U256,
+    /// Cumulative sell-side fill, atomic units.
+    #[serde_as(as = "DisplayFromStr")]
+    pub executed_sell_amount: U256,
+    /// Executed fee in `executed_fee_token` atomic units.
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub executed_fee: Option<U256>,
+    /// Token used to charge `executed_fee`.
+    #[serde(default)]
+    pub executed_fee_token: Option<Address>,
+    /// `true` once the order is invalidated (cancelled / replaced).
+    #[serde(default)]
+    pub invalidated: bool,
+    /// `true` if classified as a liquidity order.
+    #[serde(default)]
+    pub is_liquidity_order: bool,
+    /// Full app-data document, when the orderbook stored it.
+    #[serde(default)]
+    pub full_app_data: Option<String>,
+    /// Quote that produced the order, when one was supplied.
+    #[serde(default)]
+    pub quote: Option<serde_json::Value>,
+    /// Pre/post settlement interactions from app-data hooks.
+    #[serde(default)]
+    pub interactions: Option<serde_json::Value>,
+    /// EthFlow metadata for native-sell orders.
+    #[serde(default)]
+    pub ethflow_data: Option<serde_json::Value>,
+    /// On-chain placement metadata for EthFlow orders.
+    #[serde(default)]
+    pub onchain_order_data: Option<serde_json::Value>,
+    /// On-chain user (distinct from `owner` for proxy/relayer flows).
+    #[serde(default)]
+    pub onchain_user: Option<Address>,
+    /// Settlement contract that processed the trade, when known.
+    #[serde(default)]
+    pub settlement_contract: Option<Address>,
+}
 
 /// Body of `POST /api/v1/orders`.
 ///
