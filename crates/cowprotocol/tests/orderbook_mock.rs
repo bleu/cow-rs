@@ -419,6 +419,9 @@ async fn orders_by_tx_fetches_settlement_orders() {
     assert!(orders.is_empty());
 }
 
+/// Positive path: an orderbook that returns the document's own
+/// `keccak256` is accepted and the verified digest is surfaced to the
+/// caller.
 #[tokio::test]
 async fn upload_app_data_returns_server_computed_hash() {
     let server = MockServer::start().await;
@@ -445,6 +448,40 @@ async fn upload_app_data_returns_server_computed_hash() {
 
     let hash = api(&server).upload_app_data(&document).await.unwrap();
     assert_eq!(hash, computed_hash);
+}
+
+/// `upload_app_data` rejects a server-supplied digest that disagrees
+/// with `keccak256(document.fullAppData.as_bytes())`. The signed
+/// order commits only to the digest, so trusting a divergent server
+/// hash would leave downstream consumers reading metadata other
+/// than what the order pinned.
+#[tokio::test]
+async fn upload_app_data_rejects_server_digest_mismatch() {
+    use cowprotocol::Error;
+
+    let server = MockServer::start().await;
+    let bogus_hash = AppDataHash::from([0xab; 32]);
+    let bogus_hex = format!("0x{}", const_hex::encode(bogus_hash.0));
+    Mock::given(method("PUT"))
+        .and(path("/api/v1/app_data"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .insert_header("content-type", "application/json")
+                .set_body_string(format!("\"{bogus_hex}\"")),
+        )
+        .mount(&server)
+        .await;
+
+    let document = AppDataDocument {
+        full_app_data: "{\"appCode\":\"cow-rs\"}".into(),
+    };
+    // `bogus_hash` is not `keccak256(document.full_app_data.as_bytes())`.
+    assert_ne!(document.computed_hash(), bogus_hash);
+    let err = api(&server).upload_app_data(&document).await.unwrap_err();
+    assert!(
+        matches!(err, Error::AppDataHashMismatch { .. }),
+        "got: {err:?}"
+    );
 }
 
 #[tokio::test]

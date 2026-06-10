@@ -61,7 +61,6 @@ wasm-bindgen-futures = { workspace = true, optional = true }
 
 [dev-dependencies]
 alloy-signer-local.workspace = true
-const-hex.workspace = true
 hex-literal.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

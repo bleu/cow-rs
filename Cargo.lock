@@ -1059,7 +1059,6 @@ version = "1.0.0-alpha.3"
 dependencies = [
  "alloy-primitives",
  "alloy-signer-local",
- "const-hex",
  "cowprotocol-appdata",
  "cowprotocol-primitives",
  "cowprotocol-signing",
