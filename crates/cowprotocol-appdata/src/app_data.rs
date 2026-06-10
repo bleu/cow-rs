@@ -9,12 +9,11 @@
 //! the orderbook pins to IPFS.
 //!
 //! [`app_data_cid`] derives the IPFS CID under which the orderbook pins
-//! the document, returning a [`cid::Cid`] whose `Display` already emits
-//! the base32 lower-case (`b`-prefixed) multibase string the orderbook
-//! indexes by.
+//! the document, returning a [`::cid::Cid`] whose `Display` already
+//! emits the base32 lower-case (`b`-prefixed) multibase string the
+//! orderbook indexes by.
 
 use alloy_primitives::{Address, Bytes, U256, keccak256};
-use cid::multihash::Multihash;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_with::{DisplayFromStr, serde_as};
 
@@ -117,11 +116,12 @@ pub struct AppDataOrderClass {
 /// `recipient` on the wire, matching
 /// `cowprotocol/services::app_data::PartnerFee`.
 ///
-/// Both fields are crate-private: every public constructor
-/// ([`AppDataPartnerFee::new`], [`AppDataDoc::with_partner_fee`],
-/// [`AppDataDoc::with_partner_fee_policy`]) routes through
-/// [`validate_fee_policy`], so a caller cannot assemble an over-cap fee
-/// and fold it into a signed digest. Read them back with
+/// Both fields are crate-private: every public path
+/// ([`AppDataDoc::with_partner_fee`],
+/// [`AppDataDoc::with_partner_fee_policy`], and `Deserialize`) routes
+/// through [`AppDataPartnerFee::new`], the single bps-validation
+/// chokepoint, so a caller cannot assemble an over-cap fee and fold it
+/// into a signed digest. Read the fields back with
 /// [`AppDataPartnerFee::policy`] / [`AppDataPartnerFee::recipient`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppDataPartnerFee {
@@ -191,61 +191,40 @@ impl<'de> Deserialize<'de> for AppDataPartnerFee {
         }
 
         let h = Helper::deserialize(deserializer)?;
-        let policy = match h {
-            Helper {
-                surplus_bps: Some(bps),
-                max_volume_bps: Some(max_volume_bps),
-                price_improvement_bps: None,
-                volume_bps: None,
-                bps: None,
-                ..
-            } => FeePolicy::Surplus {
-                bps,
-                max_volume_bps,
-            },
-            Helper {
-                surplus_bps: None,
-                max_volume_bps: Some(max_volume_bps),
-                price_improvement_bps: Some(bps),
-                volume_bps: None,
-                bps: None,
-                ..
-            } => FeePolicy::PriceImprovement {
-                bps,
-                max_volume_bps,
-            },
-            Helper {
-                surplus_bps: None,
-                max_volume_bps: None,
-                price_improvement_bps: None,
-                volume_bps: Some(bps),
-                bps: None,
-                ..
+        // Exactly one policy shape may be populated; mixed or absent
+        // fee keys fail closed. Tuple order:
+        // (bps, volume_bps, surplus_bps, price_improvement_bps, max_volume_bps).
+        let policy = match (
+            h.bps,
+            h.volume_bps,
+            h.surplus_bps,
+            h.price_improvement_bps,
+            h.max_volume_bps,
+        ) {
+            (Some(bps), None, None, None, None) | (None, Some(bps), None, None, None) => {
+                FeePolicy::Volume { bps }
             }
-            | Helper {
-                surplus_bps: None,
-                max_volume_bps: None,
-                price_improvement_bps: None,
-                volume_bps: None,
-                bps: Some(bps),
-                ..
-            } => FeePolicy::Volume { bps },
+            (None, None, Some(bps), None, Some(max_volume_bps)) => FeePolicy::Surplus {
+                bps,
+                max_volume_bps,
+            },
+            (None, None, None, Some(bps), Some(max_volume_bps)) => FeePolicy::PriceImprovement {
+                bps,
+                max_volume_bps,
+            },
             _ => {
                 return Err(D::Error::custom("unknown partner-fee policy shape"));
             }
         };
-        validate_fee_policy(&policy).map_err(D::Error::custom)?;
-        Ok(Self {
-            policy,
-            recipient: h.recipient,
-        })
+        Self::new(policy, h.recipient).map_err(D::Error::custom)
     }
 }
 
 /// Reject [`FeePolicy`] values whose bps fields exceed
 /// [`PARTNER_FEE_BPS_MAX`]. A hostile document otherwise pins a
-/// `bps = u64::MAX` that the contract silently clamps.
-pub fn validate_fee_policy(policy: &FeePolicy) -> Result<(), AppDataError> {
+/// `bps = u64::MAX` that the contract silently clamps. Private: every
+/// public path routes through [`AppDataPartnerFee::new`].
+fn validate_fee_policy(policy: &FeePolicy) -> Result<(), AppDataError> {
     let check = |field: &'static str, value: u16| -> Result<(), AppDataError> {
         if value > PARTNER_FEE_BPS_MAX {
             Err(AppDataError::FeeOutOfRange {
@@ -449,11 +428,8 @@ impl AppDataDoc {
     /// when `bps > PARTNER_FEE_BPS_MAX` (`10_000`), so an
     /// attacker-controlled value cannot be folded into the signed
     /// app-data digest unchecked.
-    pub fn with_partner_fee(mut self, bps: u16, recipient: Address) -> Result<Self, AppDataError> {
-        let policy = FeePolicy::Volume { bps };
-        validate_fee_policy(&policy)?;
-        self.metadata.partner_fee = Some(AppDataPartnerFee { policy, recipient });
-        Ok(self)
+    pub fn with_partner_fee(self, bps: u16, recipient: Address) -> Result<Self, AppDataError> {
+        self.with_partner_fee_policy(FeePolicy::Volume { bps }, recipient)
     }
 
     /// Attach a partner fee with an explicit [`FeePolicy`]. Fails
@@ -464,8 +440,7 @@ impl AppDataDoc {
         policy: FeePolicy,
         recipient: Address,
     ) -> Result<Self, AppDataError> {
-        validate_fee_policy(&policy)?;
-        self.metadata.partner_fee = Some(AppDataPartnerFee { policy, recipient });
+        self.metadata.partner_fee = Some(AppDataPartnerFee::new(policy, recipient)?);
         Ok(self)
     }
 
@@ -609,98 +584,14 @@ pub const PARTNER_FEE_BPS_MAX: u16 = 10_000;
 // serde_json anywhere in the workspace: it would silently re-hash every
 // app-data digest.
 
-/// IPFS CID the orderbook pins app-data under: `cidv1(raw=0x55,
-/// multihash=keccak-256(hash))`. Aliased onto [`cid::Cid`] so `Display`
-/// (base32 lower-case with the `b` multibase prefix), `FromStr` and
-/// validation come from the upstream crate. Build one with
-/// [`app_data_cid`] and recover the embedded digest with
-/// [`app_data_hash_from_cid`].
-pub type AppDataCid = cid::Cid;
+mod cid;
 
-/// Raw codec (`0x55`) used for the app-data CID payload.
-const CID_CODEC_RAW: u64 = 0x55;
-/// Keccak-256 multihash code (`0x1b`).
-const MULTIHASH_KECCAK_256: u64 = 0x1b;
-/// Upper bound on an app-data CID string. A CIDv1 wrapping a 32-byte
-/// keccak-256 digest is ~59 chars in canonical base32 and ~75 in
-/// base16; anything far longer is malformed or hostile. Capping before
-/// `cid::Cid::from_str` stops an attacker from forcing proportional
-/// allocation in the upstream multibase decoder.
-pub const MAX_CID_STR_LEN: usize = 128;
-
-/// Parse an [`AppDataCid`] from its string form, rejecting input above
-/// [`MAX_CID_STR_LEN`] before the upstream multibase decoder allocates.
-/// Prefer this over `s.parse::<AppDataCid>()` whenever the string comes
-/// from untrusted input (a hostile orderbook, user-supplied metadata).
-pub fn parse_app_data_cid(s: &str) -> Result<AppDataCid, AppDataCidError> {
-    if s.len() > MAX_CID_STR_LEN {
-        return Err(AppDataCidError::CidTooLong {
-            len: s.len(),
-            max: MAX_CID_STR_LEN,
-        });
-    }
-    Ok(s.parse::<AppDataCid>()?)
-}
-
-/// Build the IPFS CID the orderbook pins for an app-data digest. Pure
-/// offline derivation: wraps `hash` in a keccak-256 multihash and folds
-/// it into a CIDv1 with the raw codec. The resulting [`cid::Cid`]
-/// displays as the canonical `b...` base32 string and round-trips
-/// through `cid::Cid::from_str`.
-pub fn app_data_cid(hash: AppDataHash) -> AppDataCid {
-    let multihash = Multihash::<32>::wrap(MULTIHASH_KECCAK_256, hash.as_slice())
-        .expect("digest fits a 32-byte multihash by construction");
-    AppDataCid::new_v1(CID_CODEC_RAW, multihash.resize().expect("32 <= 64"))
-}
-
-/// Recover the embedded 32-byte digest from an [`AppDataCid`].
-/// Validates the codec, multihash code, and digest length match
-/// `cidv1(raw=0x55, multihash=keccak-256/32)` so a hostile string cannot
-/// silently re-route the orderbook lookup to a different document.
-pub fn app_data_hash_from_cid(cid: &AppDataCid) -> Result<AppDataHash, AppDataCidError> {
-    if cid.codec() != CID_CODEC_RAW {
-        return Err(AppDataCidError::UnexpectedCodec(cid.codec()));
-    }
-    let multihash = cid.hash();
-    if multihash.code() != MULTIHASH_KECCAK_256 {
-        return Err(AppDataCidError::UnexpectedMultihashCode(multihash.code()));
-    }
-    let digest = multihash.digest();
-    if digest.len() != 32 {
-        return Err(AppDataCidError::UnexpectedDigestLength(digest.len()));
-    }
-    Ok(AppDataHash::from_slice(digest))
-}
-
-/// Errors raised while parsing an [`AppDataCid`] back into an
-/// [`AppDataHash`]. Wraps [`cid::Error`] for syntactic failures and
-/// surfaces dedicated variants for codec / multihash / digest-length
-/// drift, which the upstream parser would otherwise silently accept.
-#[derive(Debug, thiserror::Error)]
-pub enum AppDataCidError {
-    /// The string could not be parsed as a CID at all (bad multibase
-    /// prefix, invalid varint, truncated body, etc).
-    #[error("invalid CID: {0}")]
-    InvalidCid(#[from] cid::Error),
-    /// The CID string was longer than [`MAX_CID_STR_LEN`], so it was
-    /// rejected before the multibase decoder allocated for it.
-    #[error("CID string exceeds {max}-char cap (got {len})")]
-    CidTooLong {
-        /// Length of the offending input, in chars.
-        len: usize,
-        /// Configured cap ([`MAX_CID_STR_LEN`]).
-        max: usize,
-    },
-    /// The CID codec was not the raw codec (`0x55`).
-    #[error("expected raw codec (0x55), got 0x{0:02x}")]
-    UnexpectedCodec(u64),
-    /// The multihash code was not keccak-256 (`0x1b`).
-    #[error("expected keccak-256 multihash (0x1b), got 0x{0:02x}")]
-    UnexpectedMultihashCode(u64),
-    /// The multihash digest was not 32 bytes long.
-    #[error("expected 32-byte digest, got {0}")]
-    UnexpectedDigestLength(usize),
-}
+pub use self::cid::{
+    AppDataCid, AppDataCidError, MAX_CID_STR_LEN, app_data_cid, app_data_hash_from_cid,
+    parse_app_data_cid,
+};
+#[cfg(test)]
+pub(crate) use self::cid::{CID_CODEC_RAW, MULTIHASH_KECCAK_256};
 
 #[cfg(test)]
 #[path = "app_data/tests.rs"]

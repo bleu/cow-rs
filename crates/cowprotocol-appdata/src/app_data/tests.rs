@@ -1,5 +1,6 @@
 use {
     super::*,
+    ::cid::multihash::Multihash,
     alloy_primitives::{address, b256},
 };
 
@@ -552,7 +553,7 @@ fn cid_parse_rejects_missing_multibase_prefix() {
     let err = "afkrwifuru4pspvkbbadh7czoc7znzkzym6ezxah3ce2wafu2y7zledttu"
         .parse::<AppDataCid>()
         .unwrap_err();
-    assert!(matches!(err, cid::Error::ParsingError), "got: {err:?}");
+    assert!(matches!(err, ::cid::Error::ParsingError), "got: {err:?}");
 }
 
 /// Round-trip the same `services` golden vector through the `f`
@@ -572,7 +573,7 @@ fn cid_parse_accepts_base16_multibase_prefix() {
 #[test]
 fn cid_parse_rejects_invalid_base16_body() {
     let err = "f01551b20zzzz".parse::<AppDataCid>().unwrap_err();
-    assert!(matches!(err, cid::Error::ParsingError), "got: {err:?}");
+    assert!(matches!(err, ::cid::Error::ParsingError), "got: {err:?}");
 }
 
 /// `parse_app_data_cid` rejects an oversized string before the
@@ -639,11 +640,11 @@ fn cid_parse_rejects_truncated_body() {
     assert!(
         matches!(
             err,
-            cid::Error::ParsingError
-                | cid::Error::VarIntDecodeError
-                | cid::Error::InputTooShort
-                | cid::Error::InvalidExplicitCidV0
-                | cid::Error::Io(_)
+            ::cid::Error::ParsingError
+                | ::cid::Error::VarIntDecodeError
+                | ::cid::Error::InputTooShort
+                | ::cid::Error::InvalidExplicitCidV0
+                | ::cid::Error::Io(_)
         ),
         "got: {err:?}"
     );
@@ -658,10 +659,10 @@ fn cid_parse_rejects_wrong_version() {
         0x70, 0xbf, 0x96, 0xe5, 0x59, 0xc3, 0x3c, 0x4c, 0xdc, 0x07, 0xd8, 0x89, 0xab, 0x00, 0xb4,
         0xd6, 0x3f, 0x95, 0x90, 0x73, 0x9d,
     ];
-    let encoded = cid::multibase::encode(cid::multibase::Base::Base32Lower, bytes);
+    let encoded = ::cid::multibase::encode(::cid::multibase::Base::Base32Lower, bytes);
     let err = encoded.parse::<AppDataCid>().unwrap_err();
     assert!(
-        matches!(err, cid::Error::InvalidExplicitCidV0),
+        matches!(err, ::cid::Error::InvalidExplicitCidV0),
         "got: {err:?}"
     );
 }
@@ -684,7 +685,10 @@ fn cid_parse_rejects_invalid_base32_char() {
     // `8` is outside RFC 4648's lower-case 32-char alphabet.
     let err = "b8".parse::<AppDataCid>().unwrap_err();
     assert!(
-        matches!(err, cid::Error::ParsingError | cid::Error::InputTooShort),
+        matches!(
+            err,
+            ::cid::Error::ParsingError | ::cid::Error::InputTooShort
+        ),
         "got: {err:?}"
     );
 }
