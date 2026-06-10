@@ -73,7 +73,7 @@ One PR (`fix:`), well under 500 LoC.
 totals surface an error; zero rustdoc warnings workspace-wide.
 **Tests**: new browser regression test for pinned appData; wiremock test for empty
 `totals`; existing suites green.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 1: one projection (BUY fix), `OrderCosts`, `ProtocolFeeBps`
 
@@ -101,7 +101,7 @@ totals surface an error; zero rustdoc warnings workspace-wide.
 vector passes; zero-sellAmount edge behaviour documented and tested.
 **Tests**: BUY-at-zero-costs vector test vs the TS reference; SELL equivalence test
 old-vs-new; error-variant migration covered.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: the canonical type-state pipeline
 
@@ -139,7 +139,7 @@ mock-transport pipeline test exercises the full chain without reqwest.
 **Tests**: chain-compiles doc test; born-verified binding test; `verify_owner`
 rejection test on the fluent path (previously impossible); typestate compile-fail
 tests for missing required fields.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: delete `TradingClient`
 
@@ -162,7 +162,7 @@ tests for missing required fields.
 `verify_owner` shows the chokepoint plus tests only.
 **Tests**: all `TradingClient` behaviour tests ported to the pipeline before deletion
 (R24 fail-fast, app-data pinning race, chain mismatch).
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: transports under one roof, subgraph generification
 
@@ -271,11 +271,12 @@ signing crate has no serde_json in non-test surface.
 merkle root reproducible from JS tooling.
 **Tests**: OZ-generated root vector; `ProofLocation` round-trip; chain slug error
 message test ("unsupported chain slug" not "id 0").
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 8: legibility sweep
 
 **Goal**: the remaining verified minors, batched by crate. One PR.
+(appdata and signing items are Complete; orderbook items remain.)
 
 - `order_book/tests.rs`: `assert_binding_rejects` helper collapses the ~15 copy-pasted
   mismatch tests (~450 -> ~80 LoC); group into `mod transport_cap / wire_shape /
