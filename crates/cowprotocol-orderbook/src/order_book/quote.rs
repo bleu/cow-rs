@@ -4,7 +4,7 @@
 //! [`QuoteRequest`] is the `POST /api/v1/quote` body; [`OrderQuote`] and
 //! [`OrderQuoteResponse`] model the reply. The request-binding guards
 //! ([`OrderQuoteResponse::check_response_matches_request`]) are shared by
-//! the orderbook client and by `trading.rs`, so this module is ungated.
+//! the orderbook client and the quote pipeline, so this module is ungated.
 
 use alloy_primitives::{Address, U256, keccak256};
 use serde::{Deserialize, Serialize};

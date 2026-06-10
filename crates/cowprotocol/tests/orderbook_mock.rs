@@ -845,7 +845,7 @@ async fn quote_builder_can_quote_sign_and_submit() {
     // buy side before signing: 99_900_000 * (10_000 - 50) / 10_000 =
     // 99_400_500. The fixed sell side passes through. This locks that
     // quote_builder().build().sign() routes through the costs projection
-    // (matching TradingClient's defaults) rather than signing the raw
+    // (the pipeline's seeded default) rather than signing the raw
     // quote with no slippage.
     let posted_body = posted.lock().unwrap().pop().expect("order was posted");
     assert_eq!(posted_body["sellAmount"], json!("100000000"));

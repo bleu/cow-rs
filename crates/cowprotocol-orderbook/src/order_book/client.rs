@@ -159,8 +159,8 @@ impl OrderBookApi<ReqwestTransport> {
     /// Client against an arbitrary base URL (staging, recorded mock,
     /// etc.). The default reqwest client enforces
     /// [`DEFAULT_HTTP_TIMEOUT`]. The chain is left unknown; prefer
-    /// [`Self::new`] when targeting a production chain so
-    /// [`crate::TradingClient::from_orderbook`] can cross-check it.
+    /// [`Self::new`] when targeting a production chain so the quote
+    /// pipeline can infer the signing domain and cross-check it.
     pub fn new_with_base_url(base_url: url::Url) -> Self {
         Self::new_with_transport(base_url, ReqwestTransport::default())
     }

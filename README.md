@@ -123,8 +123,7 @@ assert_eq!(uid.0.len(), 56);
 | Module | What it exposes |
 |---|---|
 | `order` | `OrderData` (12-field signed payload), `OrderBuilder`, `OrderUid`, `OrderKind`, `SellTokenSource`, `BuyTokenDestination`, `BUY_ETH_ADDRESS`, plus the full GET-orders `Order`, `OrderStatus`, `OrderClass` |
-| `order_book` | `OrderBookApi` with quote / submit / lookup / status / cancel, trades, native price, account orders, app-data PUT / GET (with digest round-trip), version, total surplus; the runtime-agnostic `poll_until` helper and the tokio-bound `wait_for_order_fulfilled` convenience |
-| `trading` | `TradingClient::post_swap_order`, the one-call quote → bind → sign → put-app-data → submit facade. Mirrors `TradingSdk.postSwapOrder` in `@cowprotocol/cow-sdk` |
+| `order_book` | `OrderBookApi` with quote / submit / lookup / status / cancel, trades, native price, account orders, app-data PUT / GET (with digest round-trip), version, total surplus; the runtime-agnostic `poll_until` helper; and the fluent quote → bind → sign → put-app-data → submit pipeline (`quote_builder()`, `QuotedOrder`, `OrderSubmission`), the successor to `TradingSdk.postSwapOrder` in `@cowprotocol/cow-sdk` |
 | `quote_amounts` | `compute()` (the partner-fee + protocol-fee + slippage composition the TS SDK uses, byte-for-byte against `cow-sdk` PR #867); fail-closed via `Error::QuoteFeeMathOverflow { stage }` on every intermediate |
 | `signature` | `Signature` (all four schemes), `EcdsaSignature`, `Recovered`, `SignatureError` |
 | `domain` | `DomainSeparator`, `hashed_eip712_message`, `hashed_ethsign_message` |

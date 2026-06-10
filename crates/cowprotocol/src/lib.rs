@@ -100,8 +100,6 @@
 pub use cowprotocol_appdata::app_data;
 #[cfg(feature = "subgraph")]
 pub use cowprotocol_orderbook::subgraph;
-#[cfg(feature = "http-client")]
-pub use cowprotocol_orderbook::trading;
 pub use cowprotocol_orderbook::{error, eth_flow, order_book, quote_amounts, transport};
 pub use cowprotocol_primitives::{chain, composable, contracts, domain, multiplexer};
 pub use cowprotocol_signing::{cancellation, order, signature, signing_scheme};
@@ -156,9 +154,6 @@ pub use crate::{
 
 #[cfg(feature = "http-client")]
 pub use crate::order_book::{OrderBookApiBuilder, ReqwestTransport};
-
-#[cfg(feature = "http-client")]
-pub use crate::trading::{PostedSwapOrder, SwapOrder, TradingClient};
 
 /// Commonly-used SDK imports for quote, sign, and submit flows.
 ///

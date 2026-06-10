@@ -1568,6 +1568,72 @@ mod pipeline {
         );
     }
 
+    /// The structural chokepoint: a chain-hinted client owner-verifies
+    /// every body inside `post_order`, so a hand-assembled
+    /// `OrderCreation` whose `from` does not match the recovered signer
+    /// never reaches the wire. Chainless clients skip the check (the
+    /// signing domain is unknown), preserving mock ergonomics.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn post_order_owner_verifies_chain_hinted_submissions() {
+        use crate::domain::settlement_domain;
+        use crate::order::OrderData;
+
+        let wallet = signer();
+        let impostor = address!("dead0000dead0000dead0000dead0000dead0000");
+        assert_ne!(wallet.address(), impostor);
+
+        let order_data = OrderData {
+            sell_token: USDC,
+            buy_token: DAI,
+            sell_amount: U256::from(SELL),
+            buy_amount: U256::from(BUY),
+            valid_to: 1_900_000_000,
+            app_data: EMPTY_APP_DATA_HASH,
+            ..OrderData::default()
+        };
+        let domain = settlement_domain(
+            Chain::Mainnet.id(),
+            address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
+        );
+        let signature = order_data
+            .sign(EcdsaSigningScheme::Eip712, &domain, &wallet)
+            .unwrap();
+        // Declared owner is NOT the signer: the chokepoint must refuse.
+        let body = OrderCreation::from_signed_order_data(
+            &order_data,
+            signature,
+            impostor,
+            EMPTY_APP_DATA_JSON.to_owned(),
+            None,
+        )
+        .unwrap();
+
+        let transport = MockTransport::default();
+        let hinted = mock_api(&transport).with_chain_hint(Chain::Mainnet);
+        let err = hinted.post_order(&body).await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::Signature(crate::signature::SignatureError::SignerMismatch { .. })
+            ),
+            "got: {err:?}"
+        );
+        assert!(
+            transport.seen().is_empty(),
+            "a mismatched body must never reach the wire"
+        );
+
+        // A chainless client cannot infer the domain and skips the
+        // guard: the body goes through to the (mock) wire.
+        let chainless = mock_api(&transport);
+        transport.enqueue(201, UID_BODY);
+        chainless
+            .post_order(&body)
+            .await
+            .expect("chainless clients skip the owner check");
+    }
+
     /// A quote pinned by a bare non-empty digest carries no document,
     /// so signing fails until the caller supplies the JSON.
     #[cfg(not(target_arch = "wasm32"))]

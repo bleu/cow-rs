@@ -60,8 +60,9 @@ pub struct OrderBookApi<T = ReqwestTransport> {
     transport: T,
     // `Some` when built from a [`Chain`]; `None` when built from an
     // arbitrary URL (staging / mock), where the chain is not known.
-    // [`crate::TradingClient::from_orderbook`] uses it to refuse a chain
-    // that disagrees with the signing domain.
+    // [`QuotedOrder::sign_with`](super::QuotedOrder::sign_with) uses it
+    // to refuse a chain that disagrees with the signing domain, and
+    // [`Self::post_order`] to owner-verify bodies before posting.
     chain: Option<Chain>,
 }
 
@@ -80,8 +81,9 @@ pub struct OrderBookApi<T> {
 impl<T: HttpTransport> OrderBookApi<T> {
     /// Build a client around an arbitrary [`HttpTransport`] and base URL.
     /// The chain is left unknown; supply it with [`Self::with_chain_hint`]
-    /// when the transport targets a known production chain so
-    /// [`crate::TradingClient::from_orderbook`] can cross-check it.
+    /// when the transport targets a known production chain so the quote
+    /// pipeline can cross-check it and [`Self::post_order`] can
+    /// owner-verify bodies.
     pub fn new_with_transport(base_url: url::Url, transport: T) -> Self {
         Self {
             base_url: ensure_trailing_slash(base_url),
@@ -104,7 +106,8 @@ impl<T: HttpTransport> OrderBookApi<T> {
     }
 
     /// The [`Chain`] this client targets, when known. `Some` only when
-    /// built from a chain; arbitrary-URL constructors leave it `None`.
+    /// built from a chain; arbitrary-URL constructors leave it `None`,
+    /// which also disables [`Self::post_order`]'s owner verification.
     pub const fn chain(&self) -> Option<Chain> {
         self.chain
     }
@@ -117,7 +120,20 @@ impl<T: HttpTransport> OrderBookApi<T> {
     }
 
     /// `POST /api/v1/orders`. Returns the assigned 56-byte UID.
+    ///
+    /// When the client carries a chain hint ([`Self::chain`] is
+    /// `Some`), the body is owner-verified
+    /// ([`OrderCreation::verify_owner`]) against that chain's
+    /// settlement domain before anything reaches the wire. This makes
+    /// the verification structural for every chain-bound submission
+    /// path, including hand-assembled bodies, at the cost of one ECDSA
+    /// recovery per submission. Chainless clients (arbitrary base
+    /// URLs: mocks, staging) skip the check, since the signing domain
+    /// is unknown to them.
     pub async fn post_order(&self, order: &OrderCreation) -> Result<OrderUid> {
+        if let Some(chain) = self.chain {
+            order.verify_owner(&chain.settlement_domain())?;
+        }
         self.post_json("api/v1/orders", order).await
     }
 

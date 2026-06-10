@@ -563,16 +563,16 @@ fn build_order_creation_rejects_overflowing_quote_id() {
     );
 }
 
-/// `post_order` must run [`OrderCreation::verify_owner`] before any
-/// network call: a hand-assembled body with a `from` that does not
-/// match the recovered signer is rejected locally with a
-/// `verify_owner:`-prefixed error rather than reaching `fetch`.
+/// `post_order` must owner-verify the body before any network call:
+/// the chain-hinted shared client runs `verify_owner` inside
+/// `OrderBookApi::post_order`, so a hand-assembled body with a `from`
+/// that does not match the recovered signer is rejected locally with a
+/// signer-mismatch error rather than reaching `fetch`.
 ///
 /// Build a wire-shape `OrderCreation` JSON whose ECDSA signature
 /// recovers to one address but whose `from` is a different non-zero
 /// address. Deserialisation succeeds (the wire `try_from` only rejects
-/// `from = ZERO`); the wasm shim's `verify_owner` must then reject the
-/// mismatch.
+/// `from = ZERO`); the chokepoint must then reject the mismatch.
 #[wasm_bindgen_test]
 async fn post_order_rejects_wrong_from_locally() {
     // Install a fetch shim that panics if hit; the local guard must
@@ -621,11 +621,11 @@ async fn post_order_rejects_wrong_from_locally() {
 
     let err = post_order("mainnet", creation_js)
         .await
-        .expect_err("expected verify_owner mismatch before fetch");
+        .expect_err("expected signer mismatch before fetch");
     let msg = err.as_string().unwrap_or_default();
     assert!(
-        msg.starts_with("verify_owner:"),
-        "expected verify_owner-prefixed error, got: {msg}",
+        msg.starts_with("post_order failed:") && msg.contains("signer mismatch"),
+        "expected a local signer-mismatch rejection, got: {msg}",
     );
 
     restore_real_fetch();

@@ -22,8 +22,6 @@ pub mod order_book;
 pub mod quote_amounts;
 #[cfg(feature = "subgraph")]
 pub mod subgraph;
-#[cfg(feature = "http-client")]
-pub mod trading;
 pub mod transport;
 
 pub use self::{
@@ -42,10 +40,7 @@ pub use self::{
 };
 
 #[cfg(feature = "http-client")]
-pub use self::{
-    order_book::{OrderBookApiBuilder, ReqwestTransport},
-    trading::{PostedSwapOrder, SwapOrder, TradingClient},
-};
+pub use self::order_book::{OrderBookApiBuilder, ReqwestTransport};
 
 #[cfg(feature = "subgraph")]
 pub use self::subgraph::{

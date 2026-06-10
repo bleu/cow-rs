@@ -100,13 +100,13 @@ pub enum Error {
         reason: &'static str,
     },
 
-    /// A [`crate::TradingClient`] was built with a `chain` that disagrees
-    /// with the chain its [`crate::OrderBookApi`] targets. Signing under
-    /// one chain and posting to another's orderbook produces an order the
-    /// orderbook rejects, so it is refused at construction.
-    #[error("chain mismatch: TradingClient signs for {client} but its OrderBookApi targets {api}")]
+    /// The chain passed to `QuotedOrder::sign_with` disagrees with the
+    /// chain its [`crate::OrderBookApi`] targets. Signing under one
+    /// chain and posting to another's orderbook produces an order the
+    /// orderbook rejects, so it is refused before signing.
+    #[error("chain mismatch: signing for {client} but the OrderBookApi targets {api}")]
     ChainMismatch {
-        /// Chain the [`crate::TradingClient`] would sign for.
+        /// Chain the caller asked to sign for.
         client: crate::chain::Chain,
         /// Chain the [`crate::OrderBookApi`] targets.
         api: crate::chain::Chain,

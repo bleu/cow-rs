@@ -91,21 +91,17 @@ pub async fn get_quote_simple(
 
 /// `POST /api/v1/orders`. Returns the assigned 56-byte UID.
 ///
-/// The assembled `OrderCreation` is verified locally via
-/// [`cowprotocol::OrderCreation::verify_owner`] before any network call,
-/// mirroring the guard
-/// [`build_order_creation`](crate::signing::build_order_creation)
-/// performs, so a hand-assembled body with a typo'd `from` is rejected
-/// client-side rather than as a 4xx from the orderbook.
+/// The shared client carries the chain hint, so
+/// [`cowprotocol::OrderBookApi::post_order`] owner-verifies the body
+/// ([`cowprotocol::OrderCreation::verify_owner`]) before any network
+/// call: a hand-assembled body with a typo'd `from` is rejected
+/// client-side rather than as a 4xx from the orderbook. The same guard
+/// runs at assembly time inside
+/// [`build_order_creation`](crate::signing::build_order_creation).
 #[wasm_bindgen]
 pub async fn post_order(chain: &str, creation: JsValue) -> Result<String, JsValue> {
     let creation: OrderCreation = from_js(creation)?;
-    let c = parse_chain(chain)?;
-    let domain = c.settlement_domain();
-    creation
-        .verify_owner(&domain)
-        .map_err(js_err("verify_owner"))?;
-    client(c)
+    client(parse_chain(chain)?)
         .post_order(&creation)
         .await
         .map(|uid| uid.to_string())
