@@ -15,6 +15,8 @@
 //!   for hashing into the single-order or merkle-root index.
 //! - [`Proof`]: the `(location, data)` pointer the contract stores
 //!   alongside a merkle root in `ComposableCoW.setRoot`.
+//!   [`ProofLocation`] enumerates the conventional values of the
+//!   `location` field and [`Proof::new`] builds the pair from them.
 //!
 //! Handler-specific `staticInput` payloads (TWAP, GoodAfterTime, etc.)
 //! land in follow-up modules; the canonical `TWAP` handler is the first,
@@ -27,7 +29,7 @@ mod twap;
 
 pub use twap::*;
 
-use alloy_primitives::{Address, B256, address};
+use alloy_primitives::{Address, B256, Bytes, U256, address};
 use alloy_sol_types::{SolCall, SolValue, sol};
 
 use crate::chain::Chain;
@@ -50,8 +52,9 @@ sol! {
     /// Pointer to off-chain merkle proofs, recorded by
     /// `ComposableCoW.setRoot` so watch-towers know where to fetch the
     /// leaf proofs from. `location` is declared as a plain `uint256`
-    /// upstream (`ComposableCoW.sol`); callers pass a `ProofLocation`
-    /// enum value widened to `uint256`. Typing it as `U256` here is what
+    /// upstream (`ComposableCoW.sol`); callers pass a [`ProofLocation`]
+    /// enum value widened to `uint256`, which [`Proof::new`] does for
+    /// them. Typing it as `U256` here is what
     /// makes the `setRoot` / `setRootWithContext` selectors and
     /// [`MerkleRootSet::SIGNATURE_HASH`] hash `(uint256,bytes)`, the form
     /// the contract decodes against and emits.
@@ -146,7 +149,7 @@ sol! {
         /// conditional orders. `proof` is the `(location, data)`
         /// pointer watch towers use to fetch the leaf proofs from
         /// off-chain storage; the location codes are documented under
-        /// [`Proof`].
+        /// [`ProofLocation`].
         function setRoot(bytes32 root, Proof proof) external;
 
         /// Same as [`setRoot`] but additionally writes a per-owner
@@ -190,6 +193,58 @@ sol! {
         /// callers can verify their off-chain leaf matches what the
         /// contract stores.
         function hash(ConditionalOrderParams params) external pure returns (bytes32);
+    }
+}
+
+/// Where watch towers can find the merkle proofs backing a
+/// `ComposableCoW.setRoot` registration.
+///
+/// The contract stores and emits the value as a plain `uint256`
+/// ([`Proof::location`]) and never interprets it; the codes are an
+/// off-chain convention between registrants and watch towers. The
+/// discriminants mirror `ProofLocation` in cow-sdk ([cow-sdk @
+/// `00c3dbd4`](https://github.com/cowprotocol/cow-sdk/blob/00c3dbd41c086ff9a51d5e5a30648615d4c66d0d/packages/composable/src/types.ts),
+/// pinned in `parity/source-lock.toml`).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[repr(u8)]
+pub enum ProofLocation {
+    /// The proofs are private to the caller; nothing is published.
+    Private = 0,
+    /// [`Proof::data`] carries the ABI-encoded proofs and conditional
+    /// order parameters, emitted on-chain via the [`MerkleRootSet`]
+    /// event.
+    ///
+    /// [`MerkleRootSet`]: ComposableCoW::MerkleRootSet
+    Emitted = 1,
+    /// [`Proof::data`] carries the Swarm address of the uploaded
+    /// proofs and conditional order parameters.
+    Swarm = 2,
+    /// Reserved for Waku; upstream documents the payload as TBD.
+    Waku = 3,
+    /// Reserved for future use; upstream documents the payload as TBD.
+    Reserved = 4,
+    /// [`Proof::data`] carries the IPFS address of the uploaded
+    /// proofs and conditional order parameters.
+    Ipfs = 5,
+}
+
+impl From<ProofLocation> for U256 {
+    /// Widen the location code to the `uint256` the contract stores
+    /// and emits ([`Proof::location`]).
+    fn from(location: ProofLocation) -> Self {
+        Self::from(location as u8)
+    }
+}
+
+impl Proof {
+    /// Build the `(location, data)` pointer for `ComposableCoW.setRoot`
+    /// / `setRootWithContext`, widening the typed [`ProofLocation`] to
+    /// the `uint256` the contract decodes against.
+    pub fn new(location: ProofLocation, data: Bytes) -> Self {
+        Self {
+            location: location.into(),
+            data,
+        }
     }
 }
 
@@ -375,14 +430,42 @@ mod tests {
 
     #[test]
     fn proof_round_trips_via_abi() {
-        let proof = Proof {
-            location: U256::ZERO,
-            data: Bytes::from_static(b"hello"),
-        };
+        let proof = Proof::new(ProofLocation::Private, Bytes::from_static(b"hello"));
         let encoded = proof.abi_encode();
         let decoded = Proof::abi_decode(&encoded).unwrap();
         assert_eq!(decoded.location, proof.location);
         assert_eq!(decoded.data, proof.data);
+    }
+
+    /// Locks the six location codes against the `ProofLocation` enum in
+    /// cow-sdk's `packages/composable/src/types.ts` (pinned sha
+    /// `00c3dbd4`, `parity/source-lock.toml`). The codes are an
+    /// off-chain convention, so a renumbering here would silently
+    /// mislead watch towers.
+    #[test]
+    fn proof_location_discriminants_match_cow_sdk() {
+        let cases: [(ProofLocation, u8); 6] = [
+            (ProofLocation::Private, 0),
+            (ProofLocation::Emitted, 1),
+            (ProofLocation::Swarm, 2),
+            (ProofLocation::Waku, 3),
+            (ProofLocation::Reserved, 4),
+            (ProofLocation::Ipfs, 5),
+        ];
+        for (location, code) in cases {
+            assert_eq!(location as u8, code, "{location:?}");
+            let widened: U256 = location.into();
+            assert_eq!(widened, U256::from(code), "{location:?}");
+        }
+    }
+
+    /// `Proof::new` widens the typed location to the `uint256` field
+    /// the contract decodes against and stores the data untouched.
+    #[test]
+    fn proof_new_widens_location_to_uint256() {
+        let proof = Proof::new(ProofLocation::Ipfs, Bytes::from_static(b"ipfs://bafy"));
+        assert_eq!(proof.location, U256::from(5));
+        assert_eq!(proof.data.as_ref(), b"ipfs://bafy");
     }
 
     fn sample_order_and_payload() -> (GPv2OrderData, PayloadStruct) {
@@ -510,10 +593,7 @@ mod tests {
         let root = B256::from(hex!(
             "abababababababababababababababababababababababababababababababab"
         ));
-        let proof = Proof {
-            location: U256::from(1),
-            data: Bytes::from_static(b"ipfs://bafy"),
-        };
+        let proof = Proof::new(ProofLocation::Ipfs, Bytes::from_static(b"ipfs://bafy"));
         let call = ComposableCoW::setRootCall {
             root,
             proof: proof.clone(),
