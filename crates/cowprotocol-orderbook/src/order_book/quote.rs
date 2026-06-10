@@ -13,6 +13,7 @@ use serde_with::{DisplayFromStr, serde_as};
 use crate::app_data::AppDataHash;
 use crate::error::{Error, Result};
 use crate::order::{BuyTokenDestination, OrderData, OrderKind, SellTokenSource};
+use crate::quote_amounts::{OrderCosts, ProtocolFeeBps, QuoteAmountsAndCosts, QuoteAmountsParams};
 use crate::signing_scheme::SigningScheme;
 
 use super::types::{PriceQuality, QuoteAppData};
@@ -499,7 +500,7 @@ impl QuoteRequest {
 
 /// Quote response payload. The 12-field signed shape plus the
 /// orderbook's expected signing scheme and price metadata. Use
-/// [`OrderQuoteResponse::try_into_signed_order_data`] to project into a
+/// [`OrderQuoteResponse::try_to_order_data`] to project into a
 /// signable [`OrderData`] after binding the response to the
 /// originating [`QuoteRequest`].
 ///
@@ -546,37 +547,41 @@ pub struct OrderQuote {
 }
 
 impl OrderQuoteResponse {
-    /// Project the response into the [`OrderData`] the owner signs,
-    /// applying the [step-3][step3] amount adjustments. Cross-checks
-    /// `sellToken`, `buyToken`, normalised `receiver`, `kind`, `from`,
-    /// plus any caller-pinned `validTo` / `partiallyFillable` /
-    /// balance / scheme / `appData`, against `request`; mismatches
-    /// fail closed with [`Error::QuoteFieldMismatch`]. Sell orders
-    /// fold `feeAmount` into `sellAmount`; `fee_amount` ships as `0`
-    /// (solvers price gas at settlement).
+    /// Project the response into the [`OrderData`] the owner signs:
+    /// THE single quote-to-order projection, routed through the
+    /// parity-locked [`crate::quote_amounts::compute`].
+    ///
+    /// Cross-checks `sellToken`, `buyToken`, normalised `receiver`,
+    /// `kind`, `from`, plus any caller-pinned `validTo` /
+    /// `partiallyFillable` / balance / scheme / `appData`, against
+    /// `request`; mismatches fail closed with
+    /// [`Error::QuoteFieldMismatch`]. The signed amounts apply the
+    /// partner-fee + protocol-fee + slippage composition in `costs`;
+    /// `&OrderCosts::default()` reproduces the raw [step-3][step3]
+    /// adjustment, folding `feeAmount` into the signed `sellAmount`
+    /// for both SELL and BUY quotes (the orderbook reports BUY network
+    /// costs outside `sellAmount`, matching the TS reference).
+    /// `fee_amount` ships as `0` (solvers price gas at settlement).
+    ///
+    /// Fail-closed edge: `compute` rejects a degenerate quote whose
+    /// `sellAmount` is zero with [`Error::QuoteSellAmountZero`], since
+    /// the network-cost projection into the buy currency is undefined
+    /// there. Such quotes never describe a settleable order.
     ///
     /// [step3]: https://docs.cow.fi/cow-protocol/howto/integrate/api#step-3-compute-the-amounts-to-sign
-    pub fn try_into_signed_order_data(
+    pub fn try_to_order_data(
         &self,
         request: &QuoteRequest,
         app_data: AppDataHash,
+        costs: &OrderCosts,
     ) -> Result<OrderData> {
         self.check_response_matches_request(request, app_data)?;
-        let q = &self.quote;
-        let (sell_amount, buy_amount) = match q.kind {
-            OrderKind::Sell => {
-                let total =
-                    q.sell_amount
-                        .checked_add(q.fee_amount)
-                        .ok_or(Error::QuoteAmountOverflow {
-                            sell: q.sell_amount,
-                            fee: q.fee_amount,
-                        })?;
-                (total, q.buy_amount)
-            }
-            OrderKind::Buy => (q.sell_amount, q.buy_amount),
-        };
-        Ok(self.project_into_order_data(sell_amount, buy_amount, app_data))
+        let amounts = self.amounts_with_costs(costs)?;
+        Ok(self.project_into_order_data(
+            amounts.amounts_to_sign.sell_amount,
+            amounts.amounts_to_sign.buy_amount,
+            app_data,
+        ))
     }
 
     /// Project the response into [`OrderData`] with caller-supplied
@@ -607,54 +612,23 @@ impl OrderQuoteResponse {
     }
 
     /// Project the quote through `getQuoteAmountsAndCosts`-equivalent
-    /// arithmetic ([`crate::quote_amounts::compute`]). Required when
-    /// combining a partner fee with a quote that carries a protocol
-    /// fee: otherwise the partner-fee base is computed against the
-    /// wrong spot price (see [cow-sdk #867]). Pass
-    /// `protocol_fee_bps_override` to pin the value; `None` falls
-    /// back to [`Self::protocol_fee_bps`].
-    ///
-    /// [cow-sdk #867]: https://github.com/cowprotocol/cow-sdk/pull/867
-    pub fn amounts_with_costs(
-        &self,
-        partner_fee_bps: u32,
-        slippage_bps: u32,
-        protocol_fee_bps_override: Option<&str>,
-    ) -> Result<crate::quote_amounts::QuoteAmountsAndCosts> {
+    /// arithmetic ([`crate::quote_amounts::compute`]), exposing every
+    /// fee-application stage. [`Self::try_to_order_data`] consumes the
+    /// `amounts_to_sign` leg; call this directly to inspect the
+    /// intermediate stages or the cost breakdown.
+    /// `costs.protocol_fee_bps_override` pins the protocol fee; `None`
+    /// falls back to [`Self::protocol_fee_bps`].
+    pub fn amounts_with_costs(&self, costs: &OrderCosts) -> Result<QuoteAmountsAndCosts> {
         let q = &self.quote;
-        let protocol_fee_bps = protocol_fee_bps_override.or(self.protocol_fee_bps.as_deref());
-        crate::quote_amounts::compute(crate::quote_amounts::QuoteAmountsParams {
+        crate::quote_amounts::compute(QuoteAmountsParams {
             kind: q.kind,
             sell_amount: q.sell_amount,
             buy_amount: q.buy_amount,
             fee_amount: q.fee_amount,
-            partner_fee_bps,
-            slippage_bps,
-            protocol_fee_bps,
+            partner_fee_bps: costs.partner_fee_bps,
+            slippage_bps: costs.slippage_bps,
+            protocol_fee_bps: costs.protocol_fee_bps_override.or(self.protocol_fee_bps),
         })
-    }
-
-    /// Like [`Self::try_into_signed_order_data`] but runs the full
-    /// partner-fee + protocol-fee + slippage composition through
-    /// [`Self::amounts_with_costs`] first. Use when the order carries
-    /// an `AppDataPartnerFee` or the quote echoes a non-zero
-    /// `protocolFeeBps`. Same request-binding guard.
-    pub fn try_into_signed_order_data_with_costs(
-        &self,
-        request: &QuoteRequest,
-        partner_fee_bps: u32,
-        slippage_bps: u32,
-        protocol_fee_bps_override: Option<&str>,
-        app_data: AppDataHash,
-    ) -> Result<OrderData> {
-        self.check_response_matches_request(request, app_data)?;
-        let amounts =
-            self.amounts_with_costs(partner_fee_bps, slippage_bps, protocol_fee_bps_override)?;
-        Ok(self.project_into_order_data(
-            amounts.amounts_to_sign.sell_amount,
-            amounts.amounts_to_sign.buy_amount,
-            app_data,
-        ))
     }
 
     pub(crate) fn check_response_matches_request(
@@ -721,14 +695,7 @@ impl OrderQuoteResponse {
         //
         // [`AppDataDocument::computed_hash`]: super::AppDataDocument::computed_hash
         if let Some(QuoteAppData::Full(json)) = request.app_data.as_ref() {
-            let expected = keccak256(json.as_bytes());
-            if expected != app_data {
-                return Err(Error::QuoteFieldMismatch {
-                    field: "appData",
-                    requested: expected.to_string(),
-                    returned: app_data.to_string(),
-                });
-            }
+            ensure_eq("appData", keccak256(json.as_bytes()), app_data)?;
         }
         // Bind the fixed leg the caller specified. Without this a hostile
         // orderbook can echo the right token pair and `kind` but inflate
@@ -739,13 +706,14 @@ impl OrderQuoteResponse {
         // slippage / fee composition adjust it downstream.
         if let Some(requested) = request.sell_amount_before_fee {
             // The signed `sellAmount` folds the fee back in, so the
-            // pre-fee request equals `sellAmount + feeAmount`.
+            // pre-fee request equals `sellAmount + feeAmount`. The fold
+            // shares `compute`'s fail-closed contract: overflow is
+            // refused, never saturated.
             let signed_sell =
                 q.sell_amount
                     .checked_add(q.fee_amount)
-                    .ok_or(Error::QuoteAmountOverflow {
-                        sell: q.sell_amount,
-                        fee: q.fee_amount,
+                    .ok_or(Error::QuoteFeeMathOverflow {
+                        stage: "request_binding.sell_before_fee",
                     })?;
             ensure_eq("sellAmountBeforeFee", requested, signed_sell)?;
         }
@@ -779,10 +747,11 @@ where
 }
 
 /// `POST /api/v1/quote` response body.
+#[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderQuoteResponse {
-    /// Quoted [`OrderQuote`]; project via [`Self::try_into_signed_order_data`].
+    /// Quoted [`OrderQuote`]; project via [`Self::try_to_order_data`].
     pub quote: OrderQuote,
     /// Order owner; echoed from the request.
     pub from: Address,
@@ -798,7 +767,10 @@ pub struct OrderQuoteResponse {
     pub id: i64,
     /// `true` if the orderbook simulated against on-chain balances.
     pub verified: bool,
-    /// Protocol fee in bps, decimal string.
+    /// Protocol fee, parsed from the wire's decimal string at decode
+    /// time so a malformed value fails the whole response (fail-closed,
+    /// and earlier than the signing path would catch it).
+    #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(default)]
-    pub protocol_fee_bps: Option<String>,
+    pub protocol_fee_bps: Option<ProtocolFeeBps>,
 }

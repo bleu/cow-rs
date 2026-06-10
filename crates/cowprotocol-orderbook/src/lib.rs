@@ -35,7 +35,8 @@ pub use self::{
         QuoteRequestBuilder, TokenMetadata, TotalSurplus, Trade,
     },
     quote_amounts::{
-        Amounts as QuoteAmounts, QuoteAmountsAndCosts, QuoteAmountsParams, QuoteCosts,
+        Amounts as QuoteAmounts, DEFAULT_SLIPPAGE_BPS, OrderCosts, ProtocolFeeBps,
+        QuoteAmountsAndCosts, QuoteAmountsParams, QuoteCosts,
     },
     transport::{HttpMethod, HttpRequest, HttpResponse, HttpTransport},
 };

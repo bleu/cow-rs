@@ -9,7 +9,7 @@
 
 use {
     alloy_primitives::{Address, U256, address},
-    cowprotocol::{Chain, EMPTY_APP_DATA_HASH, OrderBookApi, QuoteRequest},
+    cowprotocol::{Chain, EMPTY_APP_DATA_HASH, OrderBookApi, OrderCosts, QuoteRequest},
 };
 
 // Ethereum mainnet USDC.
@@ -42,7 +42,8 @@ async fn main() -> cowprotocol::Result<()> {
     // configured chain: this is what we would sign in the next step.
     // Binding the response to `request` here makes the SDK reject a
     // hostile orderbook that tries to swap tokens / receiver / kind.
-    let order_data = response.try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)?;
+    let order_data =
+        response.try_to_order_data(&request, EMPTY_APP_DATA_HASH, &OrderCosts::default())?;
     let domain = cowprotocol::settlement_domain(
         Chain::Mainnet.id(),
         address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),

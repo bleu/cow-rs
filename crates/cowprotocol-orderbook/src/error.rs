@@ -78,18 +78,6 @@ pub enum Error {
     #[error(transparent)]
     AppData(#[from] crate::app_data::AppDataError),
 
-    /// The submission-side adjustment `sellAmount + feeAmount` overflowed
-    /// the U256 range. Real quotes never come anywhere close, but the
-    /// orderbook would silently accept the saturated value and produce a
-    /// different on-chain order than the user signed.
-    #[error("quote amount overflow: sell={sell} + fee={fee} exceeds U256")]
-    QuoteAmountOverflow {
-        /// `quote.sellAmount` before adjustment.
-        sell: alloy_primitives::U256,
-        /// `quote.feeAmount` we tried to fold into it.
-        fee: alloy_primitives::U256,
-    },
-
     /// An [`crate::OrderCreation`] field did not satisfy the orderbook's
     /// preconditions; surfaced locally so the body is never shipped.
     #[error("invalid OrderCreation: {field} {reason}")]
@@ -126,7 +114,7 @@ pub enum Error {
 
     /// A field on the orderbook's quote response did not match the
     /// caller's [`crate::QuoteRequest`]. Raised by
-    /// [`crate::OrderQuoteResponse::try_into_signed_order_data`] before any
+    /// [`crate::OrderQuoteResponse::try_to_order_data`] before any
     /// `OrderData` is returned, so a hostile orderbook cannot trick the
     /// caller into signing an order with a swapped buy token, recipient,
     /// or app-data digest.
@@ -170,10 +158,10 @@ pub enum Error {
     #[error("quote sellAmount is zero, network cost projection undefined")]
     QuoteSellAmountZero,
 
-    /// A [`crate::quote_amounts::compute`] intermediate overflowed or
+    /// A [`crate::quote_amounts::compute`] intermediate (or the
+    /// request-binding `sellAmount + feeAmount` fold) overflowed or
     /// underflowed before reaching the signed [`crate::OrderData`].
-    /// Mirrors the fail-closed contract of [`Self::QuoteAmountOverflow`]
-    /// for the full fee-composition path: a hostile or malformed
+    /// Fail-closed: a hostile or malformed
     /// orderbook response that would push `sellAmount`, `buyAmount`,
     /// `feeAmount`, or `protocolFeeBps` into a U256-saturating
     /// computation is rejected before any saturated bytes are folded

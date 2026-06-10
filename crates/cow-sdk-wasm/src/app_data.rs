@@ -5,7 +5,9 @@
 
 use {
     crate::{from_js, js_err, parse_b256, to_js},
-    cowprotocol::{AppDataDoc, AppDataHash, EMPTY_APP_DATA_HASH, QuoteRequest, app_data_cid},
+    cowprotocol::{
+        AppDataDoc, AppDataHash, EMPTY_APP_DATA_HASH, OrderCosts, QuoteRequest, app_data_cid,
+    },
     wasm_bindgen::prelude::*,
 };
 
@@ -64,7 +66,8 @@ pub fn sdk_app_data_hash() -> String {
 ///
 /// The single chokepoint for assembling signable bytes from a quote
 /// in JS-land. Mirrors the native
-/// [`cowprotocol::OrderQuoteResponse::try_into_signed_order_data`]: rejects
+/// [`cowprotocol::OrderQuoteResponse::try_to_order_data`] at zero
+/// costs (no partner fee, no slippage): rejects
 /// any response whose `sellToken`, `buyToken`, normalised `receiver`,
 /// `from`, `kind`, or pinned `appData` disagrees with the request,
 /// plus `validTo` / `partiallyFillable` / `sellTokenBalance` /
@@ -86,7 +89,7 @@ pub fn to_signed_order_data(
     let response: cowprotocol::OrderQuoteResponse = from_js(response)?;
     let app_data: AppDataHash = parse_b256(app_data_hash_hex)?;
     let order_data = response
-        .try_into_signed_order_data(&request, app_data)
+        .try_to_order_data(&request, app_data, &OrderCosts::default())
         .map_err(js_err("to_signed_order_data failed"))?;
     to_js(&order_data)
 }

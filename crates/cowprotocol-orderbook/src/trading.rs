@@ -18,7 +18,9 @@ use alloy_signer::SignerSync;
 
 use crate::{
     AppDataDoc, Chain, Error, OrderBookApi, OrderCreation, OrderData, OrderQuoteResponse, OrderUid,
-    QuoteRequest, Result, signing_scheme::EcdsaSigningScheme,
+    QuoteRequest, Result,
+    quote_amounts::{OrderCosts, ProtocolFeeBps},
+    signing_scheme::EcdsaSigningScheme,
 };
 
 /// Inputs to [`TradingClient::post_swap_order`]. Every field except
@@ -43,7 +45,7 @@ pub struct SwapOrder<'a> {
     pub slippage_bps: u32,
     /// Optional override for the `protocolFeeBps` echoed by the quote
     /// response. `None` falls back to `OrderQuoteResponse::protocol_fee_bps`.
-    pub protocol_fee_bps_override: Option<String>,
+    pub protocol_fee_bps_override: Option<ProtocolFeeBps>,
 }
 
 impl<'a> SwapOrder<'a> {
@@ -188,12 +190,14 @@ impl TradingClient {
 
         let quote = self.api.quote(&params.request).await?;
 
-        let order_data = quote.try_into_signed_order_data_with_costs(
+        let order_data = quote.try_to_order_data(
             &params.request,
-            params.partner_fee_bps,
-            params.slippage_bps,
-            params.protocol_fee_bps_override.as_deref(),
             app_data_hash,
+            &OrderCosts {
+                partner_fee_bps: params.partner_fee_bps,
+                slippage_bps: params.slippage_bps,
+                protocol_fee_bps_override: params.protocol_fee_bps_override,
+            },
         )?;
 
         let domain = crate::domain::settlement_domain(self.chain.id(), self.chain.settlement());

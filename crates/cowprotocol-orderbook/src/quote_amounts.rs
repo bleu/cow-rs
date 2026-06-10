@@ -9,15 +9,18 @@
 //!
 //! ## Why this exists
 //!
-//! [`crate::OrderQuoteResponse::try_into_signed_order_data`] applies only the
-//! basic `sellAmount + feeAmount` adjustment documented at [api §"Step 3"].
-//! When the caller layers a partner fee on top of a quote that also
+//! The basic `sellAmount + feeAmount` adjustment documented at
+//! [api §"Step 3"] is only correct in isolation. When the caller layers
+//! a partner fee on top of a quote that also
 //! carries a protocol fee, the partner-fee base must be computed against
 //! the spot price (`beforeAllFees.buyAmount`), which itself depends on
 //! the protocol-fee amount. Skipping the protocol-fee leg
 //! understates the partner-fee base and overstates the final
 //! `buyAmount`; the orderbook rejects or under-fills the resulting
-//! order. The TypeScript SDK fixed this in
+//! order. [`crate::OrderQuoteResponse::try_to_order_data`] therefore
+//! routes every quote-to-`OrderData` projection through [`compute`],
+//! with [`OrderCosts::default`] reproducing the basic adjustment
+//! exactly. The TypeScript SDK fixed the composed case in
 //! [`cow-sdk` #867](https://github.com/cowprotocol/cow-sdk/pull/867);
 //! this module is the Rust port (against upstream [cow-sdk @
 //! `00c3dbd4`](https://github.com/cowprotocol/cow-sdk/blob/00c3dbd41c086ff9a51d5e5a30648615d4c66d0d/packages/order-book/src/quoteAmountsAndCosts/getQuoteAmountsAndCosts.ts),
@@ -43,11 +46,12 @@
 //! so it never silently clamps; the port must reject pathological
 //! orderbook inputs (e.g. `sellAmount = U256::MAX`, `slippageBps >
 //! 10_000`, `protocolFeeBps >= 100%`) instead of folding a saturated
-//! amount into the signed [`crate::OrderData`]. The same fail-closed
-//! contract already governs [`crate::OrderQuoteResponse::try_into_signed_order_data`]
-//! via [`Error::QuoteAmountOverflow`].
+//! amount into the signed [`crate::OrderData`].
 //!
 //! [api §"Step 3"]: https://docs.cow.fi/cow-protocol/howto/integrate/api#step-3-compute-the-amounts-to-sign
+
+use core::fmt;
+use core::str::FromStr;
 
 use alloy_primitives::U256;
 
@@ -65,6 +69,141 @@ const HUNDRED_THOUSANDS: u64 = 100_000;
 /// Evaluated at compile time, so const evaluation rejects any overflow
 /// rather than a runtime `expect` having to.
 const SCALE: U256 = U256::from_limbs([(ONE_HUNDRED_BPS * HUNDRED_THOUSANDS), 0, 0, 0]);
+
+/// Default slippage tolerance, in basis points, that
+/// [`OrderBookApi::quote_builder`] seeds into [`OrderCosts`]. This is
+/// the single place the protocol-recommended `50` is written;
+/// [`OrderCosts::default`] is deliberately neutral (zero slippage) so
+/// the type itself never injects an adjustment.
+///
+/// [`OrderBookApi::quote_builder`]: crate::OrderBookApi
+pub const DEFAULT_SLIPPAGE_BPS: u32 = 50;
+
+/// Protocol fee in basis points, scaled by `100_000` so the on-wire
+/// decimal string (e.g. `"0.3"`) round-trips through integer
+/// arithmetic with five fractional digits of precision, matching the
+/// TS SDK's `Math.round(protocolFeeBps * 100_000)`.
+///
+/// The scale is part of the value's meaning, so this is an
+/// invariant-enforcing newtype rather than a type alias: a raw `u64`
+/// could be confused with an unscaled bps count. Parse the orderbook's
+/// decimal string with [`FromStr`]; [`fmt::Display`] renders the wire
+/// form back (`"0.3"`, `"5"`), which is also how the type serialises
+/// inside [`crate::OrderQuoteResponse`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProtocolFeeBps(u64);
+
+impl ProtocolFeeBps {
+    /// Zero protocol fee: skips the protocol-fee leg entirely.
+    pub const ZERO: Self = Self(0);
+
+    /// The internal `bps * 100_000` representation (`"0.3"` is
+    /// `30_000`, `"5"` is `500_000`). Pair with
+    /// [`protocol_fee_bps_scale`] when reasoning about precision.
+    pub const fn scaled(self) -> u64 {
+        self.0
+    }
+}
+
+impl FromStr for ProtocolFeeBps {
+    type Err = Error;
+
+    /// Parse the orderbook's decimal `protocolFeeBps` string. Empty or
+    /// whitespace-only input is treated as zero, matching how the
+    /// orderbook omits the field for fee-free quotes. The sixth
+    /// fractional digit rounds half-away-from-zero, matching the TS
+    /// SDK's `Math.round(protocolFeeBps * 100_000)`.
+    fn from_str(raw: &str) -> Result<Self> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Ok(Self::ZERO);
+        }
+        if trimmed.starts_with('-') {
+            return Err(Error::InvalidProtocolFeeBps {
+                value: raw.to_owned(),
+                reason: "must be non-negative",
+            });
+        }
+        let (int_part, frac_part) = trimmed
+            .find('.')
+            .map_or((trimmed, ""), |i| (&trimmed[..i], &trimmed[i + 1..]));
+        if int_part.is_empty() && frac_part.is_empty() {
+            return Err(Error::InvalidProtocolFeeBps {
+                value: raw.to_owned(),
+                reason: "empty value",
+            });
+        }
+        let int_val: u64 = if int_part.is_empty() {
+            0
+        } else {
+            int_part.parse().map_err(|_| Error::InvalidProtocolFeeBps {
+                value: raw.to_owned(),
+                reason: "integer part is not a decimal number",
+            })?
+        };
+        let frac_scaled = if frac_part.is_empty() {
+            0u64
+        } else {
+            if !frac_part.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(Error::InvalidProtocolFeeBps {
+                    value: raw.to_owned(),
+                    reason: "fractional part is not a decimal number",
+                });
+            }
+            round_fraction_to_five_digits(frac_part.as_bytes())
+        };
+        int_val
+            .checked_mul(HUNDRED_THOUSANDS)
+            .and_then(|v| v.checked_add(frac_scaled))
+            .map(Self)
+            .ok_or(Error::InvalidProtocolFeeBps {
+                value: raw.to_owned(),
+                reason: "value too large for internal scale",
+            })
+    }
+}
+
+impl fmt::Display for ProtocolFeeBps {
+    /// Render the wire decimal back: `30_000` formats as `"0.3"`,
+    /// `500_000` as `"5"`. Trailing fractional zeros are trimmed, so
+    /// the output is canonical rather than byte-identical to whatever
+    /// padding the orderbook sent.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let int = self.0 / HUNDRED_THOUSANDS;
+        let frac = self.0 % HUNDRED_THOUSANDS;
+        if frac == 0 {
+            return write!(f, "{int}");
+        }
+        let padded = format!("{frac:05}");
+        write!(f, "{int}.{}", padded.trim_end_matches('0'))
+    }
+}
+
+/// Partner-fee, slippage, and protocol-fee inputs for the quote
+/// projection: the single public costs type consumed by
+/// [`crate::OrderQuoteResponse::try_to_order_data`] and the quote
+/// pipeline.
+///
+/// [`Default`] is neutral (no partner fee, no slippage, no override),
+/// so `&OrderCosts::default()` reproduces the raw [api §"Step 3"]
+/// adjustment. The pipeline's quote builder seeds
+/// [`DEFAULT_SLIPPAGE_BPS`] on top; that recommendation deliberately
+/// lives in the named constant, not here.
+///
+/// [api §"Step 3"]: https://docs.cow.fi/cow-protocol/howto/integrate/api#step-3-compute-the-amounts-to-sign
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct OrderCosts {
+    /// Partner-fee tier in basis points, charged on the surplus side.
+    /// `0` skips the partner-fee leg.
+    pub partner_fee_bps: u32,
+    /// Slippage tolerance in basis points, applied to the non-fixed
+    /// side of the signed order (`buy_amount` for SELL, `sell_amount`
+    /// for BUY). `0` signs the raw quote.
+    pub slippage_bps: u32,
+    /// Override for the `protocolFeeBps` echoed by the quote response.
+    /// `None` falls back to [`crate::OrderQuoteResponse::protocol_fee_bps`].
+    pub protocol_fee_bps_override: Option<ProtocolFeeBps>,
+}
 
 /// A pair of sell / buy amounts at a specific fee-application stage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,7 +246,7 @@ pub struct QuoteCosts {
 /// field-for-field, for parity with that reference and so callers can
 /// inspect any leg of the fee composition. Only `amounts_to_sign` is
 /// consumed internally (by
-/// [`crate::OrderQuoteResponse::try_into_signed_order_data`]); the other
+/// [`crate::OrderQuoteResponse::try_to_order_data`]); the other
 /// stages are exposed for parity and external inspection, not because the
 /// SDK reads them back.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,7 +277,7 @@ pub struct QuoteAmountsAndCosts {
 
 /// Inputs to [`compute`].
 #[derive(Clone, Copy, Debug)]
-pub struct QuoteAmountsParams<'a> {
+pub struct QuoteAmountsParams {
     /// Quote direction (SELL or BUY).
     pub kind: OrderKind,
     /// `quote.sellAmount` from the orderbook response.
@@ -153,18 +292,17 @@ pub struct QuoteAmountsParams<'a> {
     /// Slippage tolerance in basis points, applied to the non-fixed
     /// side (SELL: buy; BUY: sell). `0` skips the slippage leg.
     pub slippage_bps: u32,
-    /// Decimal-string `protocolFeeBps` echoed by the quote (e.g.
-    /// `"0.3"`). `None` and `Some("0")` are equivalent and skip the
+    /// `protocolFeeBps` echoed by the quote. `None` and
+    /// `Some(ProtocolFeeBps::ZERO)` are equivalent and skip the
     /// protocol-fee leg.
-    pub protocol_fee_bps: Option<&'a str>,
+    pub protocol_fee_bps: Option<ProtocolFeeBps>,
 }
 
 /// Compute every fee-application stage and the `amountsToSign` for a
 /// quote response, matching the TS SDK's `getQuoteAmountsAndCosts`.
 ///
-/// Returns [`Error::InvalidProtocolFeeBps`] when the protocol-fee
-/// string fails to parse and [`Error::QuoteSellAmountZero`] when the
-/// quote reports `sellAmount = 0`.
+/// Returns [`Error::QuoteSellAmountZero`] when the quote reports
+/// `sellAmount = 0`.
 ///
 /// ```
 /// use alloy_primitives::U256;
@@ -177,15 +315,15 @@ pub struct QuoteAmountsParams<'a> {
 ///     fee_amount: U256::ZERO,
 ///     partner_fee_bps: 100,
 ///     slippage_bps: 50,
-///     protocol_fee_bps: Some("5"),
-/// })
-/// .unwrap();
+///     protocol_fee_bps: Some("5".parse()?),
+/// })?;
 /// assert_eq!(
 ///     res.amounts_to_sign.buy_amount,
 ///     U256::from(1_970_090_045_022_511_257u128),
 /// );
+/// # Ok::<(), cowprotocol_orderbook::Error>(())
 /// ```
-pub fn compute(params: QuoteAmountsParams<'_>) -> Result<QuoteAmountsAndCosts> {
+pub fn compute(params: QuoteAmountsParams) -> Result<QuoteAmountsAndCosts> {
     let QuoteAmountsParams {
         kind,
         sell_amount,
@@ -197,7 +335,7 @@ pub fn compute(params: QuoteAmountsParams<'_>) -> Result<QuoteAmountsAndCosts> {
     } = params;
 
     let is_sell = matches!(kind, OrderKind::Sell);
-    let protocol_fee_bps_scaled = parse_protocol_fee_bps(protocol_fee_bps)?;
+    let protocol_fee_bps_scaled = protocol_fee_bps.unwrap_or_default().scaled();
 
     if sell_amount.is_zero() {
         return Err(Error::QuoteSellAmountZero);
@@ -434,57 +572,6 @@ pub const fn protocol_fee_bps_scale() -> u64 {
     HUNDRED_THOUSANDS
 }
 
-fn parse_protocol_fee_bps(input: Option<&str>) -> Result<u64> {
-    let Some(raw) = input else {
-        return Ok(0);
-    };
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Ok(0);
-    }
-    if trimmed.starts_with('-') {
-        return Err(Error::InvalidProtocolFeeBps {
-            value: raw.to_owned(),
-            reason: "must be non-negative",
-        });
-    }
-    let (int_part, frac_part) = trimmed
-        .find('.')
-        .map_or((trimmed, ""), |i| (&trimmed[..i], &trimmed[i + 1..]));
-    if int_part.is_empty() && frac_part.is_empty() {
-        return Err(Error::InvalidProtocolFeeBps {
-            value: raw.to_owned(),
-            reason: "empty value",
-        });
-    }
-    let int_val: u64 = if int_part.is_empty() {
-        0
-    } else {
-        int_part.parse().map_err(|_| Error::InvalidProtocolFeeBps {
-            value: raw.to_owned(),
-            reason: "integer part is not a decimal number",
-        })?
-    };
-    let frac_scaled = if frac_part.is_empty() {
-        0u64
-    } else {
-        if !frac_part.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(Error::InvalidProtocolFeeBps {
-                value: raw.to_owned(),
-                reason: "fractional part is not a decimal number",
-            });
-        }
-        round_fraction_to_five_digits(frac_part.as_bytes())
-    };
-    int_val
-        .checked_mul(HUNDRED_THOUSANDS)
-        .and_then(|v| v.checked_add(frac_scaled))
-        .ok_or(Error::InvalidProtocolFeeBps {
-            value: raw.to_owned(),
-            reason: "value too large for internal scale",
-        })
-}
-
 /// Read `frac_digits` (ASCII decimal digits, no sign or point) as a
 /// fixed-point value scaled to five fractional places, rounding the sixth
 /// place half-away-from-zero to match the TS SDK's
@@ -603,7 +690,7 @@ mod tests {
         );
 
         let with_protocol = compute(QuoteAmountsParams {
-            protocol_fee_bps: Some("5"),
+            protocol_fee_bps: Some("5".parse().unwrap()),
             ..base
         })
         .unwrap();
@@ -683,41 +770,46 @@ mod tests {
         );
     }
 
+    fn parse(raw: &str) -> Result<u64> {
+        raw.parse::<ProtocolFeeBps>().map(ProtocolFeeBps::scaled)
+    }
+
     #[test]
     fn protocol_fee_bps_accepts_decimal_string() {
-        assert_eq!(parse_protocol_fee_bps(None).unwrap(), 0);
-        assert_eq!(parse_protocol_fee_bps(Some("")).unwrap(), 0);
-        assert_eq!(parse_protocol_fee_bps(Some("0")).unwrap(), 0);
-        assert_eq!(parse_protocol_fee_bps(Some("5")).unwrap(), 500_000);
-        assert_eq!(parse_protocol_fee_bps(Some("0.3")).unwrap(), 30_000);
-        assert_eq!(parse_protocol_fee_bps(Some("0.30000")).unwrap(), 30_000);
+        assert_eq!(parse("").unwrap(), 0);
+        assert_eq!(parse("0").unwrap(), 0);
+        assert_eq!(parse("5").unwrap(), 500_000);
+        assert_eq!(parse("0.3").unwrap(), 30_000);
+        assert_eq!(parse("0.30000").unwrap(), 30_000);
         // Round-half-away-from-zero, matching `Math.round`.
-        assert_eq!(parse_protocol_fee_bps(Some("0.000005")).unwrap(), 1);
-        assert_eq!(parse_protocol_fee_bps(Some("0.000004")).unwrap(), 0);
+        assert_eq!(parse("0.000005").unwrap(), 1);
+        assert_eq!(parse("0.000004").unwrap(), 0);
     }
 
     #[test]
     fn protocol_fee_bps_rejects_negative_or_garbage() {
-        assert!(matches!(
-            parse_protocol_fee_bps(Some("-1")),
-            Err(Error::InvalidProtocolFeeBps { .. }),
-        ));
-        assert!(matches!(
-            parse_protocol_fee_bps(Some("abc")),
-            Err(Error::InvalidProtocolFeeBps { .. }),
-        ));
-        assert!(matches!(
-            parse_protocol_fee_bps(Some("0.x")),
-            Err(Error::InvalidProtocolFeeBps { .. }),
-        ));
+        for garbage in ["-1", "abc", "0.x"] {
+            assert!(matches!(
+                parse(garbage),
+                Err(Error::InvalidProtocolFeeBps { .. }),
+            ));
+        }
+    }
+
+    #[test]
+    fn protocol_fee_bps_display_renders_wire_decimal() {
+        for (raw, rendered) in [("5", "5"), ("0.3", "0.3"), ("0.30000", "0.3"), ("0", "0")] {
+            assert_eq!(raw.parse::<ProtocolFeeBps>().unwrap().to_string(), rendered);
+        }
+        assert_eq!(ProtocolFeeBps::ZERO.to_string(), "0");
     }
 
     /// `sell + fee` overflow on a SELL quote must surface as
     /// [`Error::QuoteFeeMathOverflow`] at the `before_all_fees.sell`
     /// stage rather than saturating to `U256::MAX` and being copied
-    /// into the signed `OrderData`. Mirrors the contract that
-    /// [`crate::OrderQuoteResponse::try_into_signed_order_data`] enforces via
-    /// `Error::QuoteAmountOverflow`.
+    /// into the signed `OrderData`. The same contract covers
+    /// [`crate::OrderQuoteResponse::try_to_order_data`], which routes
+    /// through [`compute`].
     #[test]
     fn rejects_sell_plus_fee_overflow() {
         let err = compute(QuoteAmountsParams {
@@ -754,7 +846,7 @@ mod tests {
             fee_amount: U256::ZERO,
             partner_fee_bps: 0,
             slippage_bps: 0,
-            protocol_fee_bps: Some("5"),
+            protocol_fee_bps: Some("5".parse().unwrap()),
         })
         .unwrap_err();
         assert!(
@@ -802,7 +894,7 @@ mod tests {
             fee_amount: U256::from(1_000u64),
             partner_fee_bps: 0,
             slippage_bps: 0,
-            protocol_fee_bps: Some("9999.99999"),
+            protocol_fee_bps: Some("9999.99999".parse().unwrap()),
         })
         .unwrap_err();
         assert!(
@@ -829,7 +921,7 @@ mod tests {
             partner_fee_bps: 0,
             slippage_bps: 0,
             // 10_000 bps == scale, denom collapses to zero.
-            protocol_fee_bps: Some("10000"),
+            protocol_fee_bps: Some("10000".parse().unwrap()),
         })
         .unwrap_err();
         assert!(
@@ -850,7 +942,7 @@ mod tests {
             partner_fee_bps: 0,
             slippage_bps: 0,
             // 10_001 bps > scale, denom underflows.
-            protocol_fee_bps: Some("10001"),
+            protocol_fee_bps: Some("10001".parse().unwrap()),
         })
         .unwrap_err();
         assert!(

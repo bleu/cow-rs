@@ -15,7 +15,7 @@ use {
     },
     alloy_primitives::U256,
     cowprotocol::{
-        Chain, EMPTY_APP_DATA_HASH, OrderBookApi, OrderCreation, QuoteRequest,
+        Chain, EMPTY_APP_DATA_HASH, OrderBookApi, OrderCosts, OrderCreation, QuoteRequest,
         SignedOrderCancellation,
     },
     wasm_bindgen::prelude::*,
@@ -78,7 +78,7 @@ pub async fn get_quote_simple(
         .await
         .map_err(js_err("quote request failed"))?;
     let order_data = response
-        .try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)
+        .try_to_order_data(&request, EMPTY_APP_DATA_HASH, &OrderCosts::default())
         .map_err(js_err("to_signed_order_data failed"))?;
     let domain = c.settlement_domain();
     let uid = order_data.uid(&domain, response.from);

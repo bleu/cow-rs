@@ -4,7 +4,7 @@
 //!
 //! 1. Ask the Sepolia orderbook for a quote on a small WETH -> COW swap.
 //! 2. Apply the documented submission adjustments via
-//!    [`cowprotocol::OrderQuoteResponse::try_into_signed_order_data`].
+//!    [`cowprotocol::OrderQuoteResponse::try_to_order_data`].
 //! 3. Sign the resulting [`cowprotocol::OrderData`] under the GPv2Settlement
 //!    domain with an EIP-712 ECDSA signature.
 //! 4. POST the signed body to `/api/v1/orders` and print the assigned UID
@@ -43,7 +43,7 @@ use {
     alloy_signer_local::PrivateKeySigner,
     cowprotocol::{
         Chain, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON, EcdsaSigningScheme, GPV2_SETTLEMENT,
-        OrderBookApi, OrderCreation, QuoteRequest, settlement_domain,
+        OrderBookApi, OrderCosts, OrderCreation, QuoteRequest, settlement_domain,
     },
     std::str::FromStr,
 };
@@ -91,7 +91,8 @@ async fn main() -> cowprotocol::Result<()> {
     // Step 2: project into the signed payload, binding the response
     // to the original request so a hostile orderbook cannot trick us
     // into signing a swapped token / receiver.
-    let order_data = quote.try_into_signed_order_data(&request, EMPTY_APP_DATA_HASH)?;
+    let order_data =
+        quote.try_to_order_data(&request, EMPTY_APP_DATA_HASH, &OrderCosts::default())?;
 
     // Step 3: sign under the Sepolia GPv2Settlement domain.
     let domain = settlement_domain(Chain::Sepolia.id(), GPV2_SETTLEMENT);

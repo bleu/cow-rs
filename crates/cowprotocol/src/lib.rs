@@ -143,7 +143,8 @@ pub use crate::{
         QuoteRequestBuilder, TokenMetadata, TotalSurplus, Trade,
     },
     quote_amounts::{
-        Amounts as QuoteAmounts, QuoteAmountsAndCosts, QuoteAmountsParams, QuoteCosts,
+        Amounts as QuoteAmounts, DEFAULT_SLIPPAGE_BPS, OrderCosts, ProtocolFeeBps,
+        QuoteAmountsAndCosts, QuoteAmountsParams, QuoteCosts,
     },
     signature::{
         EcdsaSignature, Recovered, Signature, SignatureError, ecdsa_from_components, ecdsa_recover,

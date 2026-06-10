@@ -11,6 +11,7 @@ use crate::app_data::{AppDataHash, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON};
 use crate::chain::Chain;
 use crate::error::{Error, Result};
 use crate::order::OrderUid;
+use crate::quote_amounts::{DEFAULT_SLIPPAGE_BPS, OrderCosts, ProtocolFeeBps};
 use crate::signing_scheme::EcdsaSigningScheme;
 use crate::transport::{HttpMethod, HttpRequest, HttpResponse, HttpTransport};
 
@@ -154,9 +155,18 @@ impl OrderBookApi<ReqwestTransport> {
         Self::builder().with_chain(chain)
     }
 
-    /// Start a type-state quote builder bound to this client.
+    /// Start a type-state quote builder bound to this client. Seeds
+    /// [`DEFAULT_SLIPPAGE_BPS`] (50 bps) so the fluent path applies the
+    /// recommended slippage protection rather than signing the raw quote.
     pub fn quote_builder(&self) -> OrderBookQuoteBuilder {
-        OrderBookQuoteBuilder::new(self.clone(), QuoteRequest::builder(), CostParams::default())
+        OrderBookQuoteBuilder::new(
+            self.clone(),
+            QuoteRequest::builder(),
+            OrderCosts {
+                slippage_bps: DEFAULT_SLIPPAGE_BPS,
+                ..OrderCosts::default()
+            },
+        )
     }
 
     /// Client for the production orderbook on `chain`.
@@ -183,28 +193,6 @@ impl OrderBookApi<ReqwestTransport> {
     }
 }
 
-/// Partner-fee, slippage, and protocol-fee inputs threaded from the quote
-/// builder into [`QuotedOrder::sign`]. Defaults match
-/// [`crate::SwapOrder::eip712`] (50 bps slippage, no partner fee), so the
-/// fluent path applies the same protection [`crate::TradingClient`] does
-/// rather than signing the raw quote.
-#[derive(Debug, Clone)]
-struct CostParams {
-    partner_fee_bps: u32,
-    slippage_bps: u32,
-    protocol_fee_bps_override: Option<String>,
-}
-
-impl Default for CostParams {
-    fn default() -> Self {
-        Self {
-            partner_fee_bps: 0,
-            slippage_bps: 50,
-            protocol_fee_bps_override: None,
-        }
-    }
-}
-
 /// Type-state quote builder bound to an [`OrderBookApi`].
 #[derive(Debug, Clone)]
 pub struct OrderBookQuoteBuilder<
@@ -215,14 +203,14 @@ pub struct OrderBookQuoteBuilder<
 > {
     api: OrderBookApi,
     request: QuoteRequestBuilder<SellToken, BuyToken, From, Amount>,
-    costs: CostParams,
+    costs: OrderCosts,
 }
 
 impl<SellToken, BuyToken, From, Amount> OrderBookQuoteBuilder<SellToken, BuyToken, From, Amount> {
     const fn new(
         api: OrderBookApi,
         request: QuoteRequestBuilder<SellToken, BuyToken, From, Amount>,
-        costs: CostParams,
+        costs: OrderCosts,
     ) -> Self {
         Self {
             api,
@@ -341,10 +329,10 @@ impl<SellToken, BuyToken, From, Amount> OrderBookQuoteBuilder<SellToken, BuyToke
         self
     }
 
-    /// Override the `protocolFeeBps` echoed by the quote response (decimal
-    /// string, e.g. `"0.3"`). Defaults to the value the quote reports.
-    pub fn with_protocol_fee_bps_override(mut self, value: impl Into<String>) -> Self {
-        self.costs.protocol_fee_bps_override = Some(value.into());
+    /// Override the `protocolFeeBps` echoed by the quote response.
+    /// Defaults to the value the quote reports.
+    pub const fn with_protocol_fee_bps_override(mut self, value: ProtocolFeeBps) -> Self {
+        self.costs.protocol_fee_bps_override = Some(value);
         self
     }
 }
@@ -386,7 +374,7 @@ pub struct QuotedOrder {
     response: OrderQuoteResponse,
     app_data_hash: AppDataHash,
     app_data_json: Option<String>,
-    costs: CostParams,
+    costs: OrderCosts,
 }
 
 impl QuotedOrder {
@@ -435,13 +423,9 @@ impl QuotedOrder {
         scheme: EcdsaSigningScheme,
         signer: &S,
     ) -> Result<SignedOrderSubmission> {
-        let order_data = self.response.try_into_signed_order_data_with_costs(
-            &self.request,
-            self.costs.partner_fee_bps,
-            self.costs.slippage_bps,
-            self.costs.protocol_fee_bps_override.as_deref(),
-            self.app_data_hash,
-        )?;
+        let order_data =
+            self.response
+                .try_to_order_data(&self.request, self.app_data_hash, &self.costs)?;
         let signature = order_data.sign(scheme, &chain.settlement_domain(), signer)?;
         let app_data_json = self.app_data_json.clone().ok_or(Error::OrderCreationInvalid {
             field: "app_data",
