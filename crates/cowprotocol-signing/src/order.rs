@@ -850,25 +850,29 @@ mod tests {
     }
 
     /// Locks the typed-data `types`."Order" table built by
-    /// [`order_typed_data`] against the canonical
-    /// `<eip712::Order as SolStruct>::eip712_root_type()` (field names and
-    /// Solidity types, in declaration order). If the `sol!` struct changes,
-    /// this trips rather than letting the JS-facing table silently drift.
+    /// [`order_typed_data`] against the hardcoded 12-field GPv2 order
+    /// type, in declaration order. Hardcoded rather than re-derived
+    /// from `eip712_root_type()` so the table and the production
+    /// parser cannot drift together: any change to the `sol!` struct,
+    /// the parser, or the JSON shaping trips this independently. The
+    /// same canonical type string is hash-locked by
+    /// `order_type_hash_matches_canonical_signature`.
     #[test]
-    fn order_typed_data_table_matches_sol_struct() {
-        use alloy_sol_types::SolStruct;
-
-        let root = <eip712::Order as SolStruct>::eip712_root_type();
-        let expected: Vec<(&str, &str)> = root
-            .strip_prefix("Order(")
-            .and_then(|s| s.strip_suffix(')'))
-            .unwrap()
-            .split(',')
-            .map(|field| {
-                let (ty, name) = field.split_once(' ').unwrap();
-                (name, ty)
-            })
-            .collect();
+    fn order_typed_data_table_matches_canonical_gpv2_fields() {
+        let expected: [(&str, &str); 12] = [
+            ("sellToken", "address"),
+            ("buyToken", "address"),
+            ("receiver", "address"),
+            ("sellAmount", "uint256"),
+            ("buyAmount", "uint256"),
+            ("validTo", "uint32"),
+            ("appData", "bytes32"),
+            ("feeAmount", "uint256"),
+            ("kind", "string"),
+            ("partiallyFillable", "bool"),
+            ("sellTokenBalance", "string"),
+            ("buyTokenBalance", "string"),
+        ];
 
         let typed = order_typed_data(&sample_order(), 1, SETTLEMENT);
         let table = typed["types"]["Order"].as_array().unwrap();

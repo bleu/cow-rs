@@ -25,7 +25,7 @@ use {
         signature::{EcdsaSignature, SignatureError, ecdsa_recover, ecdsa_wire, sign_ecdsa},
         signing_scheme::EcdsaSigningScheme,
     },
-    alloy_primitives::{B256, Bytes},
+    alloy_primitives::B256,
     serde::{Deserialize, Serialize},
 };
 
@@ -38,7 +38,7 @@ use {
 /// Single-cancel uses singular `orderUid`; the array variant uses
 /// plural `orderUids`.
 mod eip712 {
-    use alloy_sol_types::sol;
+    use {super::OrderUid, alloy_primitives::Bytes, alloy_sol_types::sol};
 
     sol! {
         struct OrderCancellation {
@@ -47,6 +47,22 @@ mod eip712 {
 
         struct OrderCancellations {
             bytes[] orderUids;
+        }
+    }
+
+    /// The single-cancel EIP-712 payload for `uid`. The one place the
+    /// `OrderUid` to `bytes orderUid` projection is written.
+    pub(super) fn single(uid: &OrderUid) -> OrderCancellation {
+        OrderCancellation {
+            orderUid: Bytes::from(uid.0),
+        }
+    }
+
+    /// The collection-cancel EIP-712 payload for `uids`. The one place
+    /// the `&[OrderUid]` to `bytes[] orderUids` projection is written.
+    pub(super) fn collection(uids: &[OrderUid]) -> OrderCancellations {
+        OrderCancellations {
+            orderUids: uids.iter().map(|u| Bytes::from(u.0)).collect(),
         }
     }
 }
@@ -74,10 +90,7 @@ impl SignedOrderCancellation {
     /// private `eip712::OrderCancellation` declaration.
     pub fn hash_struct(uid: &OrderUid) -> B256 {
         use alloy_sol_types::SolStruct;
-        eip712::OrderCancellation {
-            orderUid: Bytes::from(uid.0),
-        }
-        .eip712_hash_struct()
+        eip712::single(uid).eip712_hash_struct()
     }
 
     /// Sign a single-order cancellation. The caller chooses the ECDSA
@@ -88,10 +101,7 @@ impl SignedOrderCancellation {
         domain: &DomainSeparator,
         signer: &S,
     ) -> Result<Self, SignatureError> {
-        let payload = eip712::OrderCancellation {
-            orderUid: Bytes::from(order_uid.0),
-        };
-        let signature = sign_ecdsa(scheme, domain, &payload, signer)?;
+        let signature = sign_ecdsa(scheme, domain, &eip712::single(&order_uid), signer)?;
         Ok(Self {
             order_uid,
             signature,
@@ -105,9 +115,7 @@ impl SignedOrderCancellation {
         &self,
         domain: &DomainSeparator,
     ) -> Result<alloy_primitives::Address, SignatureError> {
-        let payload = eip712::OrderCancellation {
-            orderUid: Bytes::from(self.order_uid.0),
-        };
+        let payload = eip712::single(&self.order_uid);
         Ok(ecdsa_recover(&self.signature, self.signing_scheme, domain, &payload)?.signer)
     }
 }
@@ -152,10 +160,7 @@ impl OrderCancellations {
     /// private `eip712::OrderCancellations` declaration.
     pub fn hash_struct(&self) -> B256 {
         use alloy_sol_types::SolStruct;
-        eip712::OrderCancellations {
-            orderUids: self.order_uids.iter().map(|u| Bytes::from(u.0)).collect(),
-        }
-        .eip712_hash_struct()
+        eip712::collection(&self.order_uids).eip712_hash_struct()
     }
 
     /// Sign the collection with an ECDSA signer.
@@ -165,19 +170,13 @@ impl OrderCancellations {
         domain: &DomainSeparator,
         signer: &S,
     ) -> Result<SignedOrderCancellations, SignatureError> {
-        let payload = self.eip712_payload();
+        let payload = eip712::collection(&self.order_uids);
         let signature = sign_ecdsa(scheme, domain, &payload, signer)?;
         Ok(SignedOrderCancellations {
             order_uids: self.order_uids,
             signature,
             signing_scheme: scheme,
         })
-    }
-
-    fn eip712_payload(&self) -> eip712::OrderCancellations {
-        eip712::OrderCancellations {
-            orderUids: self.order_uids.iter().map(|u| Bytes::from(u.0)).collect(),
-        }
     }
 }
 
@@ -202,10 +201,7 @@ impl SignedOrderCancellations {
         &self,
         domain: &DomainSeparator,
     ) -> Result<alloy_primitives::Address, SignatureError> {
-        let payload = OrderCancellations {
-            order_uids: self.order_uids.clone(),
-        }
-        .eip712_payload();
+        let payload = eip712::collection(&self.order_uids);
         Ok(ecdsa_recover(&self.signature, self.signing_scheme, domain, &payload)?.signer)
     }
 }
@@ -214,7 +210,7 @@ impl SignedOrderCancellations {
 mod tests {
     use {
         super::*,
-        alloy_primitives::{U256, b256, keccak256},
+        alloy_primitives::{Bytes, U256, b256, keccak256},
         alloy_signer_local::PrivateKeySigner,
     };
 

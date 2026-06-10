@@ -152,6 +152,19 @@ impl Signature {
         }
     }
 
+    /// View the off-chain ECDSA payload and its scheme, or `None` for
+    /// the EIP-1271 / PreSign variants. The one place "is this an
+    /// off-chain ECDSA signature" is answered for a constructed value;
+    /// pairs with [`SigningScheme::try_to_ecdsa_scheme`], which answers
+    /// the same question for a bare scheme.
+    pub const fn as_ecdsa(&self) -> Option<(&EcdsaSignature, EcdsaSigningScheme)> {
+        match self {
+            Self::Eip712(s) => Some((s, EcdsaSigningScheme::Eip712)),
+            Self::EthSign(s) => Some((s, EcdsaSigningScheme::EthSign)),
+            Self::Eip1271(_) | Self::PreSign => None,
+        }
+    }
+
     /// Encode the signature as the bytes the orderbook expects in the
     /// `signature` field of `POST /api/v1/orders` / `DELETE /api/v1/orders`.
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -171,15 +184,10 @@ impl Signature {
     /// `from`: the owner is carried explicitly on the orderbook crate's
     /// `OrderCreation` submission body.
     pub fn from_bytes(scheme: SigningScheme, bytes: &[u8]) -> Result<Self, SignatureError> {
+        if let Some(ecdsa_scheme) = scheme.try_to_ecdsa_scheme() {
+            return Ok(Self::from_ecdsa(parse_ecdsa(bytes)?, ecdsa_scheme));
+        }
         match scheme {
-            SigningScheme::Eip712 => Ok(Self::from_ecdsa(
-                parse_ecdsa(bytes)?,
-                EcdsaSigningScheme::Eip712,
-            )),
-            SigningScheme::EthSign => Ok(Self::from_ecdsa(
-                parse_ecdsa(bytes)?,
-                EcdsaSigningScheme::EthSign,
-            )),
             SigningScheme::Eip1271 => {
                 if bytes.len() > EIP1271_MAX_LEN {
                     return Err(SignatureError::Eip1271TooLong {
@@ -195,6 +203,9 @@ impl Signature {
                 }
                 Ok(Self::PreSign)
             }
+            SigningScheme::Eip712 | SigningScheme::EthSign => {
+                unreachable!("ECDSA schemes handled by try_to_ecdsa_scheme above")
+            }
         }
     }
 
@@ -208,21 +219,9 @@ impl Signature {
         domain: &DomainSeparator,
         payload: &T,
     ) -> Result<Option<Recovered>, SignatureError> {
-        match self {
-            Self::Eip712(s) => Ok(Some(ecdsa_recover(
-                s,
-                EcdsaSigningScheme::Eip712,
-                domain,
-                payload,
-            )?)),
-            Self::EthSign(s) => Ok(Some(ecdsa_recover(
-                s,
-                EcdsaSigningScheme::EthSign,
-                domain,
-                payload,
-            )?)),
-            Self::Eip1271(_) | Self::PreSign => Ok(None),
-        }
+        self.as_ecdsa()
+            .map(|(s, scheme)| ecdsa_recover(s, scheme, domain, payload))
+            .transpose()
     }
 }
 
@@ -456,75 +455,38 @@ mod tests {
         assert!(Signature::from_bytes(SigningScheme::Eip1271, &at_limit).is_ok());
     }
 
+    /// The pre-decode visitor in `deserialize_capped_hex` must reject
+    /// an over-cap hex string before `const_hex::decode` allocates a
+    /// buffer for it, and accept a payload exactly at the cap. Both
+    /// JSON entry points (`from_str`, which streams the raw string to
+    /// the visitor, and `from_value`, which hands it an owned string)
+    /// must agree.
     #[test]
-    fn deserialize_rejects_oversize_eip1271_payload() {
-        // One byte over the EIP-1271 cap, expressed as hex. The
-        // pre-decode visitor in `deserialize_capped_hex` must reject
-        // it before `const_hex::decode` allocates a buffer for the
-        // hex string, surfaced through `serde_json::from_value` as a
-        // custom error referencing the cap.
-        let oversize_hex = format!("0x{}", "00".repeat(EIP1271_MAX_LEN + 1));
-        let body = json!({
-            "signingScheme": "eip1271",
-            "signature": oversize_hex,
-        });
-        let err = serde_json::from_value::<Signature>(body)
-            .expect_err("oversize signature payload must be rejected on deserialise");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("cap") || msg.contains(&EIP1271_MAX_LEN.to_string()),
-            "error should reference the EIP-1271 length cap, got: {msg}"
-        );
-
-        // The same payload encoded at the cap still decodes (decoding
-        // produces an all-zero EIP-1271 blob, valid per `from_bytes`'s
-        // length-only check).
-        let at_limit_hex = format!("0x{}", "00".repeat(EIP1271_MAX_LEN));
-        let body = json!({
-            "signingScheme": "eip1271",
-            "signature": at_limit_hex,
-        });
-        let sig: Signature = serde_json::from_value(body).unwrap();
-        assert!(matches!(sig, Signature::Eip1271(ref b) if b.len() == EIP1271_MAX_LEN));
-    }
-
-    #[test]
-    fn deserialize_rejects_oversize_hex_string_pre_decode() {
-        // One byte over the cap, exercised through the JSON string
-        // directly so the visitor sees the raw hex before
-        // `const_hex::decode` would allocate a buffer for it.
+    fn deserialize_enforces_eip1271_cap_pre_decode() {
         let oversize_hex = format!("0x{}", "00".repeat(EIP1271_MAX_LEN + 1));
         let payload =
             format!("{{\"signingScheme\":\"eip1271\",\"signature\":\"{oversize_hex}\"}}",);
-        let err = serde_json::from_str::<Signature>(&payload)
-            .expect_err("oversize hex string must be rejected before decode");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("cap") || msg.contains(&EIP1271_MAX_LEN.to_string()),
-            "error should mention the byte cap, got: {msg}",
-        );
-    }
+        for err in [
+            serde_json::from_str::<Signature>(&payload)
+                .expect_err("oversize hex string must be rejected before decode"),
+            serde_json::from_value::<Signature>(serde_json::from_str(&payload).unwrap())
+                .expect_err("oversize signature payload must be rejected on deserialise"),
+        ] {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("cap") || msg.contains(&EIP1271_MAX_LEN.to_string()),
+                "error should reference the EIP-1271 length cap, got: {msg}",
+            );
+        }
 
-    #[test]
-    fn deserialize_accepts_at_limit_eip1271_hex() {
+        // The same payload encoded exactly at the cap still decodes
+        // (an all-zero EIP-1271 blob, valid per `from_bytes`'s
+        // length-only check).
         let at_limit_hex = format!("0x{}", "00".repeat(EIP1271_MAX_LEN));
-        assert_eq!(at_limit_hex.len(), EIP1271_MAX_LEN * 2 + 2);
         let payload =
             format!("{{\"signingScheme\":\"eip1271\",\"signature\":\"{at_limit_hex}\"}}",);
         let sig: Signature = serde_json::from_str(&payload).unwrap();
         assert!(matches!(sig, Signature::Eip1271(ref b) if b.len() == EIP1271_MAX_LEN));
-    }
-
-    #[test]
-    fn presign_accepts_empty_and_legacy_20_byte_payloads() {
-        assert_eq!(
-            Signature::from_bytes(SigningScheme::PreSign, &[]).unwrap(),
-            Signature::PreSign
-        );
-        assert_eq!(
-            Signature::from_bytes(SigningScheme::PreSign, &[0xff; 20]).unwrap(),
-            Signature::PreSign
-        );
     }
 
     /// Pins the exact PreSign length boundary so a future tightening
