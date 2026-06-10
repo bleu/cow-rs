@@ -40,7 +40,7 @@ pub use self::{
 };
 
 #[cfg(feature = "http-client")]
-pub use self::order_book::{OrderBookApiBuilder, ReqwestTransport};
+pub use self::{order_book::OrderBookApiBuilder, transport::ReqwestTransport};
 
 #[cfg(feature = "subgraph")]
 pub use self::subgraph::{

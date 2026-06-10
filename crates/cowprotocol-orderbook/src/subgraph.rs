@@ -42,11 +42,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::{
     chain::Chain,
     error::{Error, Result},
-    order_book::MAX_RESPONSE_BYTES,
+    transport::{HttpMethod, HttpRequest, HttpTransport, ReqwestTransport},
 };
-// Only consumed by `ClientBuilder::timeout`, which is gated out on wasm.
-#[cfg(not(target_arch = "wasm32"))]
-use crate::order_book::DEFAULT_HTTP_TIMEOUT;
 
 /// Returned by [`SubgraphClient::for_chain_gateway`] when the chain has
 /// no published subgraph deployment.
@@ -62,12 +59,14 @@ pub enum SubgraphError {
     /// The subgraph returned a non-empty `errors` array. GraphQL servers
     /// emit HTTP 200 even for query errors, so we surface them as a
     /// dedicated variant.
-    #[error("subgraph returned {} graphql error(s); first: {first}", errors.len())]
+    #[error(
+        "subgraph returned {} graphql error(s); first: {}",
+        errors.len(),
+        errors.first().map_or("<no message>", |e| e.message.as_str())
+    )]
     GraphQl {
         /// Full list of errors.
         errors: Vec<GraphQlError>,
-        /// First error message, for easy `{}` printing.
-        first: String,
     },
     /// The response envelope was missing both `data` and `errors`, had a
     /// non-conformant shape, or a query whose result the API contract
@@ -178,21 +177,22 @@ struct HourlyTotalsData {
     hourly_totals: Vec<HourlyTotal>,
 }
 
+/// Variables for the `last_*_volume` queries: how many timestamp-ordered
+/// rows to return.
 #[derive(Debug, Serialize)]
-struct DaysVariables {
-    days: u32,
-}
-
-#[derive(Debug, Serialize)]
-struct HoursVariables {
-    hours: u32,
+struct FirstVariables {
+    first: u32,
 }
 
 /// Thin GraphQL client for the CoW subgraph.
+///
+/// `T` is the [`HttpTransport`] backend the queries ride on; it defaults
+/// to [`ReqwestTransport`]. The transport applies the shared
+/// [`MAX_RESPONSE_BYTES`](crate::order_book::MAX_RESPONSE_BYTES) body cap.
 #[derive(Clone)]
-pub struct SubgraphClient {
+pub struct SubgraphClient<T = ReqwestTransport> {
     url: url::Url,
-    client: reqwest::Client,
+    transport: T,
     bearer: Option<String>,
 }
 
@@ -202,8 +202,9 @@ pub struct SubgraphClient {
 /// (`https://gateway.thegraph.com/api/<key>/subgraphs/id/<id>`), so
 /// rendering the URL in full would still leak the credential even
 /// with `bearer` masked. Without a bearer the URL is a Studio
-/// endpoint and safe to print verbatim.
-impl std::fmt::Debug for SubgraphClient {
+/// endpoint and safe to print verbatim. The transport field is
+/// elided, hence `..`.
+impl<T> std::fmt::Debug for SubgraphClient<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let url_view = if self.bearer.is_some() {
             format!(
@@ -216,33 +217,32 @@ impl std::fmt::Debug for SubgraphClient {
         };
         f.debug_struct("SubgraphClient")
             .field("url", &url_view)
-            .field("client", &self.client)
             .field("bearer", &self.bearer.as_ref().map(|_| "<redacted>"))
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl SubgraphClient {
     /// Build a client against an explicit subgraph URL. No authorisation
     /// header is attached: use [`SubgraphClient::with_bearer_token`] for
-    /// the production gateway. The default reqwest client enforces
-    /// [`DEFAULT_HTTP_TIMEOUT`].
+    /// the production gateway. The default reqwest transport enforces
+    /// [`DEFAULT_HTTP_TIMEOUT`] on native targets.
+    ///
+    /// [`DEFAULT_HTTP_TIMEOUT`]: crate::order_book::DEFAULT_HTTP_TIMEOUT
     pub fn new(url: url::Url) -> Self {
-        Self {
-            url,
-            client: build_client(),
-            bearer: None,
-        }
+        Self::new_with_transport(url, ReqwestTransport::default())
     }
 
     /// Build a client that sends `Authorization: Bearer <token>` with
     /// every request. The Graph's production gateway
     /// (`gateway.thegraph.com`) requires this. The default reqwest
-    /// client enforces [`DEFAULT_HTTP_TIMEOUT`].
+    /// transport enforces [`DEFAULT_HTTP_TIMEOUT`] on native targets.
+    ///
+    /// [`DEFAULT_HTTP_TIMEOUT`]: crate::order_book::DEFAULT_HTTP_TIMEOUT
     pub fn with_bearer_token(url: url::Url, token: impl Into<String>) -> Self {
         Self {
             url,
-            client: build_client(),
+            transport: ReqwestTransport::default(),
             bearer: Some(token.into()),
         }
     }
@@ -267,6 +267,18 @@ impl SubgraphClient {
         ))
         .expect("hard-coded gateway URL");
         Ok(Self::with_bearer_token(url, api_key))
+    }
+}
+
+impl<T: HttpTransport> SubgraphClient<T> {
+    /// Build a client over a caller-supplied [`HttpTransport`]. No
+    /// authorisation header is attached.
+    pub const fn new_with_transport(url: url::Url, transport: T) -> Self {
+        Self {
+            url,
+            transport,
+            bearer: None,
+        }
     }
 
     /// The subgraph URL the client points at.
@@ -298,38 +310,47 @@ impl SubgraphClient {
             .ok_or(Error::Subgraph(SubgraphError::EmptyResponse))
     }
 
-    /// `query LastDaysVolume($days: Int!)`: the last `days` daily volume
+    /// `query LastDaysVolume($first: Int!)`: the last `days` daily volume
     /// rows, most recent first.
     pub async fn last_days_volume(&self, days: u32) -> Result<Vec<DailyTotal>> {
         let data: DailyTotalsData = self
-            .execute(
-                r"query LastDaysVolume($days: Int!) {
-                    dailyTotals(orderBy: timestamp, orderDirection: desc, first: $days) {
+            .last_volume_rows(
+                r"query LastDaysVolume($first: Int!) {
+                    dailyTotals(orderBy: timestamp, orderDirection: desc, first: $first) {
                         timestamp
                         volumeUsd
                     }
                 }",
-                Some(DaysVariables { days }),
+                days,
             )
             .await?;
         Ok(data.daily_totals)
     }
 
-    /// `query LastHoursVolume($hours: Int!)`: the last `hours` hourly
+    /// `query LastHoursVolume($first: Int!)`: the last `hours` hourly
     /// volume rows, most recent first.
     pub async fn last_hours_volume(&self, hours: u32) -> Result<Vec<HourlyTotal>> {
         let data: HourlyTotalsData = self
-            .execute(
-                r"query LastHoursVolume($hours: Int!) {
-                    hourlyTotals(orderBy: timestamp, orderDirection: desc, first: $hours) {
+            .last_volume_rows(
+                r"query LastHoursVolume($first: Int!) {
+                    hourlyTotals(orderBy: timestamp, orderDirection: desc, first: $first) {
                         timestamp
                         volumeUsd
                     }
                 }",
-                Some(HoursVariables { hours }),
+                hours,
             )
             .await?;
         Ok(data.hourly_totals)
+    }
+
+    /// Shared body of the `last_*_volume` queries: fetch the `first` most
+    /// recent rows of a timestamp-ordered aggregate.
+    async fn last_volume_rows<TData>(&self, query: &str, first: u32) -> Result<TData>
+    where
+        TData: DeserializeOwned,
+    {
+        self.execute(query, Some(FirstVariables { first })).await
     }
 
     /// Send an arbitrary GraphQL query. Returns the decoded `data` field.
@@ -348,25 +369,30 @@ impl SubgraphClient {
         TData: DeserializeOwned,
     {
         let body = Request { query, variables };
-        let mut req = self.client.post(self.url.clone()).json(&body);
-        if let Some(token) = &self.bearer {
-            req = req.bearer_auth(token);
-        }
-        let response = req.send().await?;
-        let status = response.status();
-        let text = read_capped_text(response).await?;
-        if !status.is_success() {
+        let response = self
+            .transport
+            .execute(HttpRequest {
+                method: HttpMethod::Post,
+                url: self.url.clone(),
+                json_body: Some(serde_json::to_vec(&body)?),
+                bearer: self.bearer.clone(),
+            })
+            .await?;
+        // GraphQL gateways attach useful diagnostics to non-2xx
+        // responses, but those bodies are not orderbook `ApiError`
+        // envelopes: surface the raw status + body verbatim instead of
+        // decoding through `HttpResponse::into_status_error`, which
+        // would mislabel them as `Error::OrderbookApi`.
+        if !response.is_success() {
             return Err(Error::UnexpectedStatus {
-                status: status.as_u16(),
-                body: text,
+                status: response.status,
+                body: response.body,
             });
         }
-        let envelope: Envelope<TData> = serde_json::from_str(&text)?;
+        let envelope: Envelope<TData> = serde_json::from_str(&response.body)?;
         if !envelope.errors.is_empty() {
-            let first = envelope.errors[0].message.clone();
             return Err(Error::Subgraph(SubgraphError::GraphQl {
                 errors: envelope.errors,
-                first,
             }));
         }
         envelope
@@ -384,41 +410,11 @@ impl SubgraphClient {
     }
 }
 
-/// Build the default reqwest client. Mirrors the orderbook builder so
-/// both clients agree on [`DEFAULT_HTTP_TIMEOUT`]. `ClientBuilder::timeout`
-/// is non-wasm32 only; the wasm backend defers to the browser's fetch
-/// timeout.
-fn build_client() -> reqwest::Client {
-    let builder = reqwest::Client::builder();
-    #[cfg(not(target_arch = "wasm32"))]
-    let builder = builder.timeout(DEFAULT_HTTP_TIMEOUT);
-    builder.build().expect("reqwest defaults cannot fail")
-}
-
-/// Read a response body as UTF-8 text, rejecting payloads above
-/// [`MAX_RESPONSE_BYTES`]. Early-rejects on `Content-Length` and
-/// re-checks the materialised body as a backstop. Kept local to avoid
-/// widening the orderbook module's API surface.
-async fn read_capped_text(response: reqwest::Response) -> Result<String> {
-    if let Some(declared_len) = response.content_length()
-        && declared_len > MAX_RESPONSE_BYTES as u64
-    {
-        return Err(Error::ResponseTooLarge {
-            max: MAX_RESPONSE_BYTES,
-        });
-    }
-    let text = response.text().await?;
-    if text.len() > MAX_RESPONSE_BYTES {
-        return Err(Error::ResponseTooLarge {
-            max: MAX_RESPONSE_BYTES,
-        });
-    }
-    Ok(text)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_arch = "wasm32"))]
+    use crate::order_book::MAX_RESPONSE_BYTES;
 
     #[test]
     fn totals_round_trips_through_serde() {
@@ -491,11 +487,11 @@ mod tests {
     #[test]
     fn request_body_includes_variables_when_present() {
         let body = Request {
-            query: "query LastDaysVolume($days: Int!) { dailyTotals(first: $days) { timestamp } }",
-            variables: Some(DaysVariables { days: 7 }),
+            query: "query LastDaysVolume($first: Int!) { dailyTotals(first: $first) { timestamp } }",
+            variables: Some(FirstVariables { first: 7 }),
         };
         let json = serde_json::to_value(&body).unwrap();
-        assert_eq!(json["variables"]["days"], 7);
+        assert_eq!(json["variables"]["first"], 7);
         assert!(json["query"].as_str().unwrap().contains("LastDaysVolume"));
     }
 
@@ -555,6 +551,25 @@ mod tests {
 
         let no_token = SubgraphClient::new(url::Url::parse("https://example.test/").unwrap());
         assert!(format!("{no_token:?}").contains("None"));
+
+        // Subgraph queries now travel as `HttpRequest`s, so a logging
+        // transport sees the bearer there too: its `Debug` must redact
+        // it just like the client's.
+        let request = HttpRequest {
+            method: HttpMethod::Post,
+            url: url::Url::parse("https://example.test/").unwrap(),
+            json_body: None,
+            bearer: Some(secret.to_owned()),
+        };
+        let request_rendered = format!("{request:?}");
+        assert!(
+            !request_rendered.contains(secret),
+            "bearer token leaked through HttpRequest Debug: {request_rendered}"
+        );
+        assert!(
+            request_rendered.contains("redacted"),
+            "expected '<redacted>' marker in HttpRequest Debug output, got: {request_rendered}"
+        );
     }
 
     #[test]
@@ -614,6 +629,67 @@ mod tests {
             matches!(err, Error::Subgraph(SubgraphError::EmptyResponse)),
             "expected EmptyResponse, got {err:?}"
         );
+    }
+
+    /// A non-2xx response must surface the raw [`Error::UnexpectedStatus`]
+    /// even when the body happens to parse as an orderbook `ApiError`
+    /// envelope. Gateways are not the orderbook: decoding their errors
+    /// through `HttpResponse::into_status_error` would mislabel them as
+    /// [`Error::OrderbookApi`](crate::error::Error::OrderbookApi).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn execute_keeps_unexpected_status_for_api_error_shaped_body() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path},
+        };
+
+        let server = MockServer::start().await;
+        let api_error_body = r#"{"errorType":"NoLiquidity","description":"boom"}"#;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(500).set_body_string(api_error_body))
+            .mount(&server)
+            .await;
+
+        let client = SubgraphClient::new(server.uri().parse().unwrap());
+        let err = client
+            .execute::<(), serde_json::Value>("query { totals { orders } }", None)
+            .await
+            .unwrap_err();
+        match err {
+            Error::UnexpectedStatus { status, body } => {
+                assert_eq!(status, 500);
+                assert_eq!(body, api_error_body);
+            }
+            other => panic!("expected UnexpectedStatus, got {other:?}"),
+        }
+    }
+
+    /// The bearer token must reach the wire as an `Authorization: Bearer`
+    /// header: the mock only matches when the header is present.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn execute_sends_bearer_token_as_authorization_header() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{header, method, path},
+        };
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("authorization", "Bearer tok_abc"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"data":{"ok":true}}"#))
+            .mount(&server)
+            .await;
+
+        let client = SubgraphClient::with_bearer_token(server.uri().parse().unwrap(), "tok_abc");
+        let data: serde_json::Value = client
+            .execute_no_vars("query { totals { orders } }")
+            .await
+            .unwrap();
+        assert_eq!(data["ok"], true);
     }
 
     /// A response one byte over [`MAX_RESPONSE_BYTES`] must surface

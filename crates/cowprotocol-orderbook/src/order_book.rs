@@ -53,7 +53,7 @@ pub use flow::{OrderSubmission, QuoteRequestBuilder, QuotedOrder};
 #[cfg(feature = "http-client")]
 mod client;
 #[cfg(feature = "http-client")]
-pub use client::{OrderBookApiBuilder, ReqwestTransport};
+pub use client::OrderBookApiBuilder;
 
 #[cfg(test)]
 #[path = "order_book/tests.rs"]

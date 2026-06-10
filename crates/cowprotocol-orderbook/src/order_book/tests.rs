@@ -15,12 +15,12 @@ use alloy_primitives::{Address, U256, address};
 // items that no longer exist.
 #[cfg(feature = "http-client")]
 use super::api::OrdersByUidsRequest;
-#[cfg(all(feature = "http-client", not(target_arch = "wasm32")))]
-use super::client::read_capped_body;
 #[cfg(feature = "http-client")]
 use crate::chain::Chain;
 #[cfg(feature = "http-client")]
 use crate::order::OrderUid;
+#[cfg(all(feature = "http-client", not(target_arch = "wasm32")))]
+use crate::transport::reqwest::read_capped_body;
 
 /// All-zero EIP-712 placeholder signature for wire-shape tests. Not
 /// recoverable; never pass it to recovery paths.

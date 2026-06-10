@@ -5,9 +5,13 @@
 //! endpoint and hands it to an [`HttpTransport`]; the transport performs
 //! the actual I/O and returns an [`HttpResponse`] whose body has already
 //! been bounded by [`MAX_RESPONSE_BYTES`]. This is what lets the native
-//! (reqwest) and `cow-sdk-wasm` (`fetch`) builds share one client and one
-//! set of endpoint logic instead of re-implementing request shaping, status
+//! (reqwest) and wasm (`fetch`) builds share one client and one set of
+//! endpoint logic instead of re-implementing request shaping, status
 //! handling and JSON decoding per target.
+//!
+//! The concrete backends live as submodules behind the `http-client`
+//! feature; the trait itself stays feature-independent so out-of-tree
+//! backends can implement it.
 //!
 //! [`OrderBookApi`]: crate::OrderBookApi
 //! [`MAX_RESPONSE_BYTES`]: crate::order_book::MAX_RESPONSE_BYTES
@@ -15,6 +19,13 @@
 use serde::de::DeserializeOwned;
 
 use crate::error::{ApiError, Error, Result};
+
+// Pathed as `self::reqwest` so the submodule never shadows the extern
+// crate of the same name under uniform paths.
+#[cfg(feature = "http-client")]
+pub(crate) mod reqwest;
+#[cfg(feature = "http-client")]
+pub use self::reqwest::ReqwestTransport;
 
 /// HTTP method for an orderbook request. Kept minimal: the orderbook only
 /// uses these four verbs.
@@ -33,7 +44,7 @@ pub enum HttpMethod {
 /// A fully-formed, transport-agnostic request the orderbook client hands to
 /// an [`HttpTransport`]. The body, when present, is already serialised JSON
 /// and implies a `content-type: application/json` header.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct HttpRequest {
     /// Request method.
     pub method: HttpMethod,
@@ -42,6 +53,22 @@ pub struct HttpRequest {
     pub url: url::Url,
     /// Pre-serialised JSON body, or `None` for body-less requests.
     pub json_body: Option<Vec<u8>>,
+    /// `Authorization: Bearer` credential for authenticated gateways (The
+    /// Graph). `None` for the orderbook.
+    pub bearer: Option<String>,
+}
+
+/// Manual `Debug` impl that renders `bearer` as `Some("<redacted>")` so a
+/// logging transport cannot leak the credential.
+impl core::fmt::Debug for HttpRequest {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("HttpRequest")
+            .field("method", &self.method)
+            .field("url", &self.url)
+            .field("json_body", &self.json_body)
+            .field("bearer", &self.bearer.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 /// The response an [`HttpTransport`] returns after applying the body-size
@@ -75,7 +102,7 @@ pub trait HttpTransport {
 
 impl HttpResponse {
     /// `true` for a 2xx status.
-    const fn is_success(&self) -> bool {
+    pub(crate) const fn is_success(&self) -> bool {
         self.status >= 200 && self.status < 300
     }
 

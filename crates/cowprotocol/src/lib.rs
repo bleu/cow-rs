@@ -153,7 +153,7 @@ pub use crate::{
 };
 
 #[cfg(feature = "http-client")]
-pub use crate::order_book::{OrderBookApiBuilder, ReqwestTransport};
+pub use crate::{order_book::OrderBookApiBuilder, transport::ReqwestTransport};
 
 /// Commonly-used SDK imports for quote, sign, and submit flows.
 ///

@@ -27,7 +27,7 @@ use super::types::{
 };
 
 #[cfg(feature = "http-client")]
-use super::client::ReqwestTransport;
+use crate::transport::ReqwestTransport;
 
 /// Wire body for `POST /api/v1/orders/by_uids`.
 #[derive(Serialize)]
@@ -381,6 +381,7 @@ impl<T: HttpTransport> OrderBookApi<T> {
                 method,
                 url,
                 json_body,
+                bearer: None,
             })
             .await
     }
@@ -438,6 +439,7 @@ impl<T: HttpTransport> OrderBookApi<T> {
                 method: HttpMethod::Get,
                 url,
                 json_body: None,
+                bearer: None,
             })
             .await?
             .decode_json()
