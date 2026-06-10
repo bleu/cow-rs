@@ -69,8 +69,9 @@ pub enum SubgraphError {
         /// First error message, for easy `{}` printing.
         first: String,
     },
-    /// The response envelope was missing both `data` and `errors`, or had
-    /// a non-conformant shape.
+    /// The response envelope was missing both `data` and `errors`, had a
+    /// non-conformant shape, or a query whose result the API contract
+    /// treats as mandatory (e.g. `totals`) came back as an empty set.
     #[error("subgraph response had neither `data` nor `errors`")]
     EmptyResponse,
 }
@@ -96,7 +97,7 @@ pub struct GraphQlError {
 /// Strings are kept as-is from the subgraph (`BigInt` / `BigDecimal`) so
 /// callers can feed them into their preferred big-number parser without
 /// lossy float conversions.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Totals {
     /// Unique tokens that have been traded through the protocol.
@@ -291,7 +292,10 @@ impl SubgraphClient {
                 }",
             )
             .await?;
-        Ok(data.totals.into_iter().next().unwrap_or_default())
+        data.totals
+            .into_iter()
+            .next()
+            .ok_or(Error::Subgraph(SubgraphError::EmptyResponse))
     }
 
     /// `query LastDaysVolume($days: Int!)`: the last `days` daily volume
@@ -584,6 +588,32 @@ mod tests {
             let err = SubgraphClient::for_chain_gateway(chain, "test-key").unwrap_err();
             assert_eq!(err, ChainSubgraphUnavailable(chain));
         }
+    }
+
+    /// An empty `totals` result set must surface
+    /// [`SubgraphError::EmptyResponse`], not a fabricated
+    /// all-empty-strings `Totals`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn totals_errors_on_empty_result_set() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path},
+        };
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"data":{"totals":[]}}"#))
+            .mount(&server)
+            .await;
+
+        let client = SubgraphClient::new(server.uri().parse().unwrap());
+        let err = client.totals().await.unwrap_err();
+        assert!(
+            matches!(err, Error::Subgraph(SubgraphError::EmptyResponse)),
+            "expected EmptyResponse, got {err:?}"
+        );
     }
 
     /// A response one byte over [`MAX_RESPONSE_BYTES`] must surface
