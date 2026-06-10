@@ -53,6 +53,8 @@ struct CancellationPayload {
 /// `T` is the [`HttpTransport`] backend. With the `http-client` feature
 /// it defaults to the target's [`DefaultTransport`]: reqwest natively,
 /// browser `fetch` on wasm32.
+// NOTE: keep in sync with the cfg twin below; only the default type
+// parameter differs.
 #[cfg(feature = "http-client")]
 #[derive(Debug, Clone)]
 pub struct OrderBookApi<T = DefaultTransport> {
@@ -70,11 +72,18 @@ pub struct OrderBookApi<T = DefaultTransport> {
 ///
 /// `T` is the [`HttpTransport`] backend (e.g. the `cow-sdk-wasm` `fetch`
 /// transport when the `http-client` feature is off).
+// NOTE: keep in sync with the cfg twin above; only the default type
+// parameter differs.
 #[cfg(not(feature = "http-client"))]
 #[derive(Debug, Clone)]
 pub struct OrderBookApi<T> {
     base_url: url::Url,
     transport: T,
+    // `Some` when built from a [`Chain`]; `None` when built from an
+    // arbitrary URL (staging / mock), where the chain is not known.
+    // [`QuotedOrder::sign_with`](super::QuotedOrder::sign_with) uses it
+    // to refuse a chain that disagrees with the signing domain, and
+    // [`Self::post_order`] to owner-verify bodies before posting.
     chain: Option<Chain>,
 }
 
@@ -116,7 +125,8 @@ impl<T: HttpTransport> OrderBookApi<T> {
     /// [`QuoteRequest::validate`] before issuing it.
     pub async fn quote(&self, request: &QuoteRequest) -> Result<OrderQuoteResponse> {
         request.validate()?;
-        self.post_json("api/v1/quote", request).await
+        self.post_json(self.endpoint("api/v1/quote")?, request)
+            .await
     }
 
     /// `POST /api/v1/orders`. Returns the assigned 56-byte UID.
@@ -134,17 +144,19 @@ impl<T: HttpTransport> OrderBookApi<T> {
         if let Some(chain) = self.chain {
             order.verify_owner(&chain.settlement_domain())?;
         }
-        self.post_json("api/v1/orders", order).await
+        self.post_json(self.endpoint("api/v1/orders")?, order).await
     }
 
     /// `GET /api/v1/orders/{uid}`.
     pub async fn order(&self, uid: &OrderUid) -> Result<Order> {
-        self.get_json(&format!("api/v1/orders/{uid}")).await
+        self.get_json(self.endpoint(&format!("api/v1/orders/{uid}"))?)
+            .await
     }
 
     /// `GET /api/v1/orders/{uid}/status`.
     pub async fn order_status(&self, uid: &OrderUid) -> Result<AuctionStatus> {
-        self.get_json(&format!("api/v1/orders/{uid}/status")).await
+        self.get_json(self.endpoint(&format!("api/v1/orders/{uid}/status"))?)
+            .await
     }
 
     /// Poll [`Self::order`] until `should_stop` returns `true`,
@@ -180,20 +192,15 @@ impl<T: HttpTransport> OrderBookApi<T> {
         offset: Option<u32>,
         limit: Option<u32>,
     ) -> Result<Vec<Order>> {
-        self.get_json_with_query(
-            &format!("api/v1/account/{owner:?}/orders"),
-            &[],
-            offset,
-            limit,
-        )
-        .await
+        let url = self.endpoint(&format!("api/v1/account/{owner:?}/orders"))?;
+        self.get_json_paginated(url, offset, limit).await
     }
 
     /// `POST /api/v1/orders/by_uids`. Returns orders in request
     /// order; unknown UIDs are omitted.
     pub async fn orders_by_uids(&self, uids: &[OrderUid]) -> Result<Vec<Order>> {
         self.post_json(
-            "api/v1/orders/by_uids",
+            self.endpoint("api/v1/orders/by_uids")?,
             &OrdersByUidsRequest { order_uids: uids },
         )
         .await
@@ -209,13 +216,10 @@ impl<T: HttpTransport> OrderBookApi<T> {
         offset: Option<u32>,
         limit: Option<u32>,
     ) -> Result<Vec<Trade>> {
-        self.get_json_with_query(
-            "api/v2/trades",
-            &[("owner", format!("{owner:?}"))],
-            offset,
-            limit,
-        )
-        .await
+        let mut url = self.endpoint("api/v2/trades")?;
+        url.query_pairs_mut()
+            .append_pair("owner", &format!("{owner:?}"));
+        self.get_json_paginated(url, offset, limit).await
     }
 
     /// `GET /api/v2/trades?orderUid=...`. Newest first; see
@@ -226,20 +230,17 @@ impl<T: HttpTransport> OrderBookApi<T> {
         offset: Option<u32>,
         limit: Option<u32>,
     ) -> Result<Vec<Trade>> {
-        self.get_json_with_query(
-            "api/v2/trades",
-            &[("orderUid", uid.to_string())],
-            offset,
-            limit,
-        )
-        .await
+        let mut url = self.endpoint("api/v2/trades")?;
+        url.query_pairs_mut()
+            .append_pair("orderUid", &uid.to_string());
+        self.get_json_paginated(url, offset, limit).await
     }
 
     /// `GET /api/v1/token/{token}/native_price`. One atomic unit of
     /// `token` in the chain's native gas token; solvers use this to
     /// denominate gas uniformly across pairs.
     pub async fn native_price(&self, token: Address) -> Result<NativePrice> {
-        self.get_json(&format!("api/v1/token/{token:?}/native_price"))
+        self.get_json(self.endpoint(&format!("api/v1/token/{token:?}/native_price"))?)
             .await
     }
 
@@ -251,14 +252,14 @@ impl<T: HttpTransport> OrderBookApi<T> {
     /// Treat it as best-effort: it could be removed without an OpenAPI
     /// bump.
     pub async fn token_metadata(&self, token: Address) -> Result<TokenMetadata> {
-        self.get_json(&format!("api/v1/token/{token:?}/metadata"))
+        self.get_json(self.endpoint(&format!("api/v1/token/{token:?}/metadata"))?)
             .await
     }
 
     /// `GET /api/v1/transactions/{hash}/orders`. Empty list for an
     /// unknown settlement.
     pub async fn orders_by_tx(&self, tx_hash: B256) -> Result<Vec<Order>> {
-        self.get_json(&format!("api/v1/transactions/{tx_hash:?}/orders"))
+        self.get_json(self.endpoint(&format!("api/v1/transactions/{tx_hash:?}/orders"))?)
             .await
     }
 
@@ -267,12 +268,12 @@ impl<T: HttpTransport> OrderBookApi<T> {
     /// cow-py / cow-sdk; per-order array is opaque JSON because the
     /// auction shape drifts across CIPs.
     pub async fn auction(&self) -> Result<Auction> {
-        self.get_json("api/v1/auction").await
+        self.get_json(self.endpoint("api/v1/auction")?).await
     }
 
     /// `GET /api/v1/users/{user}/total_surplus`.
     pub async fn total_surplus(&self, user: Address) -> Result<TotalSurplus> {
-        self.get_json(&format!("api/v1/users/{user:?}/total_surplus"))
+        self.get_json(self.endpoint(&format!("api/v1/users/{user:?}/total_surplus"))?)
             .await
     }
 
@@ -282,7 +283,9 @@ impl<T: HttpTransport> OrderBookApi<T> {
     /// the digest, so this closes the loop between what was signed
     /// and what downstream code displays.
     pub async fn app_data(&self, hash: &AppDataHash) -> Result<AppDataDocument> {
-        let document: AppDataDocument = self.get_json(&format!("api/v1/app_data/{hash}")).await?;
+        let document: AppDataDocument = self
+            .get_json(self.endpoint(&format!("api/v1/app_data/{hash}"))?)
+            .await?;
         let computed = document.computed_hash();
         if computed != *hash {
             return Err(Error::AppDataHashMismatch {
@@ -306,7 +309,7 @@ impl<T: HttpTransport> OrderBookApi<T> {
         }
         self.send(
             HttpMethod::Put,
-            &format!("api/v1/app_data/{hash}"),
+            self.endpoint(&format!("api/v1/app_data/{hash}"))?,
             Some(serde_json::to_vec(document)?),
         )
         .await?
@@ -322,7 +325,9 @@ impl<T: HttpTransport> OrderBookApi<T> {
     /// the metadata bound to the order.
     pub async fn upload_app_data(&self, document: &AppDataDocument) -> Result<AppDataHash> {
         let computed = document.computed_hash();
-        let server_hash: AppDataHash = self.put_json("api/v1/app_data", document).await?;
+        let server_hash: AppDataHash = self
+            .put_json(self.endpoint("api/v1/app_data")?, document)
+            .await?;
         if server_hash != computed {
             return Err(Error::AppDataHashMismatch {
                 expected: server_hash.to_string(),
@@ -334,7 +339,7 @@ impl<T: HttpTransport> OrderBookApi<T> {
 
     /// `GET /api/v1/version`. Plain-text liveness probe.
     pub async fn version(&self) -> Result<String> {
-        self.send(HttpMethod::Get, "api/v1/version", None)
+        self.send(HttpMethod::Get, self.endpoint("api/v1/version")?, None)
             .await?
             .decode_text()
     }
@@ -344,7 +349,7 @@ impl<T: HttpTransport> OrderBookApi<T> {
     pub async fn cancel_orders(&self, signed: &SignedOrderCancellations) -> Result<()> {
         self.send(
             HttpMethod::Delete,
-            "api/v1/orders",
+            self.endpoint("api/v1/orders")?,
             Some(serde_json::to_vec(signed)?),
         )
         .await?
@@ -361,21 +366,27 @@ impl<T: HttpTransport> OrderBookApi<T> {
         };
         self.send(
             HttpMethod::Delete,
-            &format!("api/v1/orders/{}", cancellation.order_uid),
+            self.endpoint(&format!("api/v1/orders/{}", cancellation.order_uid))?,
             Some(serde_json::to_vec(&body)?),
         )
         .await?
         .decode_empty()
     }
 
-    /// Join `path` onto the base URL and execute it through the transport.
+    /// Join `path` onto the base URL: the one-line URL construction every
+    /// endpoint performs before handing its request to [`Self::send`].
+    fn endpoint(&self, path: &str) -> Result<url::Url> {
+        Ok(self.base_url.join(path)?)
+    }
+
+    /// Execute `method` against `url` through the transport: the single
+    /// execute site every request issued by this client goes through.
     async fn send(
         &self,
         method: HttpMethod,
-        path: &str,
+        url: url::Url,
         json_body: Option<Vec<u8>>,
     ) -> Result<crate::transport::HttpResponse> {
-        let url = self.base_url.join(path)?;
         self.transport
             .execute(HttpRequest {
                 method,
@@ -386,63 +397,48 @@ impl<T: HttpTransport> OrderBookApi<T> {
             .await
     }
 
-    async fn post_json<TReq, TResp>(&self, path: &str, body: &TReq) -> Result<TResp>
+    async fn post_json<TReq, TResp>(&self, url: url::Url, body: &TReq) -> Result<TResp>
     where
         TReq: Serialize + ?Sized,
         TResp: for<'de> Deserialize<'de>,
     {
-        self.send(HttpMethod::Post, path, Some(serde_json::to_vec(body)?))
+        self.send(HttpMethod::Post, url, Some(serde_json::to_vec(body)?))
             .await?
             .decode_json()
     }
 
-    async fn put_json<TReq, TResp>(&self, path: &str, body: &TReq) -> Result<TResp>
+    async fn put_json<TReq, TResp>(&self, url: url::Url, body: &TReq) -> Result<TResp>
     where
         TReq: Serialize + ?Sized,
         TResp: for<'de> Deserialize<'de>,
     {
-        self.send(HttpMethod::Put, path, Some(serde_json::to_vec(body)?))
+        self.send(HttpMethod::Put, url, Some(serde_json::to_vec(body)?))
             .await?
             .decode_json()
     }
 
-    async fn get_json<TResp>(&self, path: &str) -> Result<TResp>
+    async fn get_json<TResp>(&self, url: url::Url) -> Result<TResp>
     where
         TResp: for<'de> Deserialize<'de>,
     {
-        self.send(HttpMethod::Get, path, None).await?.decode_json()
+        self.send(HttpMethod::Get, url, None).await?.decode_json()
     }
 
-    /// `GET path` with `pairs` plus the optional `offset` / `limit`
-    /// pagination appended to the query string, then decoded as JSON.
-    /// `pairs` carries the endpoint-specific filters (`owner`, `orderUid`).
-    async fn get_json_with_query<TResp>(
+    /// `GET url` with the optional `offset` / `limit` pagination appended
+    /// to its query string, then decoded as JSON. Endpoint-specific
+    /// filters (`owner`, `orderUid`) are appended by the caller before
+    /// the call.
+    async fn get_json_paginated<TResp>(
         &self,
-        path: &str,
-        pairs: &[(&str, String)],
+        mut url: url::Url,
         offset: Option<u32>,
         limit: Option<u32>,
     ) -> Result<TResp>
     where
         TResp: for<'de> Deserialize<'de>,
     {
-        let mut url = self.base_url.join(path)?;
-        {
-            let mut query = url.query_pairs_mut();
-            for (key, value) in pairs {
-                query.append_pair(key, value);
-            }
-            append_pagination(&mut query, offset, limit);
-        }
-        self.transport
-            .execute(HttpRequest {
-                method: HttpMethod::Get,
-                url,
-                json_body: None,
-                bearer: None,
-            })
-            .await?
-            .decode_json()
+        append_pagination(&mut url.query_pairs_mut(), offset, limit);
+        self.get_json(url).await
     }
 }
 
