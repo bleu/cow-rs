@@ -105,11 +105,20 @@ impl OrderBookApi {
         Self::builder().chain(chain)
     }
 
-    /// Type-state shortcut: start a builder already targeting an
-    /// arbitrary `base_url`. Equivalent to
-    /// `OrderBookApi::builder().base_url(base_url)`.
-    pub fn with_base_url(base_url: url::Url) -> super::OrderBookApiBuilder<super::WithTarget> {
-        Self::builder().base_url(base_url)
+    /// Production-chain client pointed at a non-canonical `base_url`
+    /// (barn, staging, recorded mock). Unlike [`Self::new_with_base_url`],
+    /// the chain is pinned so [`crate::TradingClient::from_orderbook`]
+    /// can cross-check signing-domain agreement. Use this when you
+    /// know which chain you are trading on but the orderbook lives at
+    /// a custom URL.
+    pub fn with_base_url(chain: Chain, base_url: url::Url) -> Self {
+        // `ClientBuilder::timeout` is non-wasm32 only; the wasm
+        // backend defers to the browser's fetch timeout.
+        let builder = reqwest::Client::builder();
+        #[cfg(not(target_arch = "wasm32"))]
+        let builder = builder.timeout(DEFAULT_HTTP_TIMEOUT);
+        let client = builder.build().expect("reqwest defaults cannot fail");
+        Self::from_parts(base_url, client, Some(chain))
     }
 
     /// Builder-side constructor. Crate-private so the chain / base-url

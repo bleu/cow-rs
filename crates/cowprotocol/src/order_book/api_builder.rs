@@ -17,6 +17,7 @@ use std::marker::PhantomData;
 
 use crate::chain::Chain;
 
+#[cfg(not(target_arch = "wasm32"))]
 use super::DEFAULT_HTTP_TIMEOUT;
 use super::client::OrderBookApi;
 
@@ -46,8 +47,7 @@ impl core::fmt::Debug for Target {
 /// Type-state builder for [`OrderBookApi`].
 ///
 /// Start with [`OrderBookApi::builder`] (no target yet), or jump
-/// straight to a `WithTarget` builder via [`OrderBookApi::with_chain`]
-/// or [`OrderBookApi::with_base_url`].
+/// straight to a `WithTarget` builder via [`OrderBookApi::with_chain`].
 #[must_use = "OrderBookApiBuilder does nothing until build() is called"]
 #[derive(Debug)]
 pub struct OrderBookApiBuilder<State> {
@@ -142,7 +142,7 @@ mod tests {
     }
 
     #[test]
-    fn builder_with_base_url_matches_new_with_base_url() {
+    fn builder_base_url_matches_new_with_base_url() {
         let url: url::Url = "https://staging.cow.fi/".parse().unwrap();
         let from_builder = OrderBookApi::builder().base_url(url.clone()).build();
         let from_new = OrderBookApi::new_with_base_url(url);
@@ -155,6 +155,25 @@ mod tests {
     fn builder_client_override_preserved() {
         let custom = reqwest::Client::builder().build().unwrap();
         let api = OrderBookApi::with_chain(Chain::Gnosis).client(custom).build();
+        assert_eq!(api.chain(), Some(Chain::Gnosis));
+    }
+
+    #[test]
+    fn with_base_url_pins_chain_and_url() {
+        let barn: url::Url = "https://barn.api.cow.fi/mainnet/".parse().unwrap();
+        let api = OrderBookApi::with_base_url(Chain::Mainnet, barn.clone());
+        assert_eq!(api.chain(), Some(Chain::Mainnet));
+        assert_eq!(api.base_url(), &barn);
+    }
+
+    #[test]
+    fn with_base_url_overrides_canonical_url_for_chain() {
+        // The whole point of with_base_url(chain, url): the URL is NOT
+        // the chain's canonical one, but the chain still drives the
+        // signing-domain cross-check.
+        let staging: url::Url = "https://staging.cow.fi/".parse().unwrap();
+        let api = OrderBookApi::with_base_url(Chain::Gnosis, staging);
+        assert_ne!(api.base_url().as_str(), Chain::Gnosis.orderbook_base_url().as_str());
         assert_eq!(api.chain(), Some(Chain::Gnosis));
     }
 }
