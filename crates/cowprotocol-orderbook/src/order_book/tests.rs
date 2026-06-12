@@ -83,6 +83,28 @@ mod client_config {
     }
 
     #[test]
+    fn with_base_url_pins_chain_and_url() {
+        let barn: url::Url = "https://barn.api.cow.fi/mainnet/".parse().unwrap();
+        let api = OrderBookApi::with_base_url(Chain::Mainnet, barn.clone());
+        assert_eq!(api.chain(), Some(Chain::Mainnet));
+        assert_eq!(api.base_url(), &barn);
+    }
+
+    #[test]
+    fn with_base_url_overrides_canonical_url_for_chain() {
+        // The whole point of with_base_url(chain, url): the URL is NOT
+        // the chain's canonical one, but the chain still drives the
+        // signing-domain cross-check.
+        let staging: url::Url = "https://staging.cow.fi/".parse().unwrap();
+        let api = OrderBookApi::with_base_url(Chain::Gnosis, staging);
+        assert_ne!(
+            api.base_url().as_str(),
+            Chain::Gnosis.orderbook_base_url().as_str()
+        );
+        assert_eq!(api.chain(), Some(Chain::Gnosis));
+    }
+
+    #[test]
     fn base_url_gets_trailing_slash_added() {
         let api = OrderBookApi::new_with_base_url(
             url::Url::parse("https://example.test/orderbook").unwrap(),
