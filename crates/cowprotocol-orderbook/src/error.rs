@@ -339,7 +339,11 @@ mod tests {
 
     #[test]
     fn known_retriable_kinds_hint_true() {
-        for error_type in ["InsufficientFee", "TooManyLimitOrders", "PriceExceedsMarketPrice"] {
+        for error_type in [
+            "InsufficientFee",
+            "TooManyLimitOrders",
+            "PriceExceedsMarketPrice",
+        ] {
             let e = ApiError {
                 error_type: error_type.to_owned(),
                 description: String::new(),
