@@ -130,8 +130,7 @@ impl OrderBookApi {
     /// signing domain. Use this when you know which chain you are
     /// trading on but the orderbook lives at a custom URL.
     pub fn with_base_url(chain: Chain, base_url: url::Url) -> Self {
-        Self::new_with_transport(base_url, DefaultTransport::default())
-            .with_chain_hint(chain)
+        Self::new_with_transport(base_url, DefaultTransport::default()).with_chain_hint(chain)
     }
 
     /// Client around a pre-configured [`reqwest::Client`] (native targets
