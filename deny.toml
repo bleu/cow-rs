@@ -15,8 +15,8 @@ yanked = "warn"
 ignore = [
     # paste: pulled via alloy-sol-macro-expander → syn-solidity.
     "RUSTSEC-2024-0436",
-    # derivative: pulled via ark-* (transitive of alloy-primitives → ruint).
-    "RUSTSEC-2024-0388",
+    # proc-macro-error2: pulled via alloy-sol-macro → alloy-sol-types.
+    "RUSTSEC-2026-0173",
 ]
 
 [licenses]
