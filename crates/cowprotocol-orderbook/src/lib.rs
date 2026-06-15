@@ -24,7 +24,7 @@ pub mod subgraph;
 pub mod transport;
 
 pub use self::{
-    error::{ApiError, Error, Result},
+    error::{ApiError, Error, OrderPostErrorKind, Result},
     eth_flow::{ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowOrder},
     order_book::{
         AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, Order,
