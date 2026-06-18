@@ -24,11 +24,19 @@ use crate::error::{ApiError, Error, Result};
 // crate of the same name under uniform paths.
 #[cfg(all(feature = "http-client", not(target_arch = "wasm32")))]
 pub(crate) mod reqwest;
+/// Native HTTP backend (`reqwest`). Present only on non-`wasm32`
+/// targets; `wasm32` builds expose `FetchTransport` instead. Prefer
+/// [`DefaultTransport`] in cross-target code so the right backend is
+/// selected automatically.
 #[cfg(all(feature = "http-client", not(target_arch = "wasm32")))]
 pub use self::reqwest::ReqwestTransport;
 
 #[cfg(all(feature = "http-client", target_arch = "wasm32"))]
 mod fetch;
+/// Browser `fetch` HTTP backend. Present only on `wasm32` targets;
+/// native builds expose `ReqwestTransport` instead. Prefer
+/// [`DefaultTransport`] in cross-target code so the right backend is
+/// selected automatically.
 #[cfg(all(feature = "http-client", target_arch = "wasm32"))]
 pub use self::fetch::FetchTransport;
 
@@ -115,6 +123,32 @@ pub struct HttpResponse {
 /// would make the trait unimplementable there. Native callers drive it with
 /// a direct `.await` (no `tokio::spawn`), so the missing `Send` bound is not
 /// a limitation in practice.
+///
+/// # Implementing a custom backend
+///
+/// The trait is feature-independent, so out-of-tree backends can
+/// implement it without enabling `http-client`. A backend provides one
+/// `async fn execute`, returning an [`HttpResponse`] whose `body` is the
+/// decoded UTF-8 text (status handling and JSON decoding happen in
+/// [`OrderBookApi`](crate::OrderBookApi)). This logging wrapper forwards
+/// to an inner transport, then hands the result back unchanged:
+///
+/// ```
+/// use cowprotocol_orderbook::error::Result;
+/// use cowprotocol_orderbook::{HttpRequest, HttpResponse, HttpTransport};
+///
+/// struct Logged<T>(T);
+///
+/// impl<T: HttpTransport> HttpTransport for Logged<T> {
+///     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse> {
+///         eprintln!("{:?} {}", request.method, request.url);
+///         self.0.execute(request).await
+///     }
+/// }
+/// ```
+///
+/// Pass an instance to
+/// [`OrderBookApi::new_with_transport`](crate::OrderBookApi::new_with_transport).
 #[allow(async_fn_in_trait)]
 pub trait HttpTransport {
     /// Execute `request` and return the capped response, or an [`Error`] for

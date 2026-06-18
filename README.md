@@ -198,7 +198,7 @@ const sig = sign_eip712(response.quote, 'mainnet', PRIVATE_KEY_HEX);
 
 // 3. Submit (network).
 const creation = build_order_creation(
-  response.quote, sig, response.from, '{}', response.id,
+  response.quote, sig, response.from, 'mainnet', '{}', response.id,
 );
 const uid = await post_order('mainnet', creation);
 console.log(`https://explorer.cow.fi/orders/${uid}`);
@@ -275,7 +275,7 @@ const sig = {
   v: bytes[64],
 };
 
-const creation = build_order_creation(response.quote, sig, ACCOUNT, '{}', response.id);
+const creation = build_order_creation(response.quote, sig, ACCOUNT, 'mainnet', '{}', response.id);
 const uid = await post_order('mainnet', creation);
 ```
 

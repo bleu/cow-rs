@@ -22,7 +22,7 @@ them manually:
 
 ```sh
 # 1. Build the wasm package (output is git-ignored).
-(cd crates/cow-sdk-wasm && wasm-pack build --target web --dev)
+(cd crates/cow-sdk-wasm && wasm-pack build --target web --dev --features in_shim_signing)
 # 2. Serve the workspace over HTTP so ES-module imports resolve.
 #    Bind to loopback: the default binds all interfaces and would expose
 #    the whole workspace (including .git) to others on the network.

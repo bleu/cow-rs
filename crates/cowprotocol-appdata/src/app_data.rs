@@ -36,11 +36,20 @@ pub const COW_RS_WASM_APP_CODE: &str = "cow-rs-wasm";
 /// `Validator::DEFAULT_SIZE_LIMIT` in `cowprotocol/services`.
 pub const APP_DATA_SIZE_LIMIT: usize = 8192;
 
-/// Canonical app-data JSON document. Mirrors cow-sdk's
-/// `@cowprotocol/app-data` v1.x schema and cow-py's `AppDataDoc`.
-/// Common fields are typed; hooks remain opaque JSON. Every field
-/// except `version` is optional and skipped when unset.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+/// Canonical app-data JSON document. Models the common fields of
+/// cow-sdk's `@cowprotocol/app-data` v1.x document and cow-py's
+/// `AppDataDoc`; it is not a schema validator. This crate shape-validates
+/// through serde and bounds the canonical-JSON size, but does not check
+/// the document against the published `@cowprotocol/app-data` JSON
+/// schema: the canonical-JSON encoding and the orderbook are the source
+/// of truth. Common fields are typed; hooks remain opaque JSON. Every
+/// field except `version` is optional and skipped when unset.
+///
+/// Construct via [`AppDataDoc::new`] or [`AppDataDoc::sdk_attribution`],
+/// which both pin `version` to [`LATEST_APP_DATA_VERSION`]. There is
+/// deliberately no `Default`: an empty `version` is not a valid schema
+/// version and would hash to a digest no other tooling reproduces.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataDoc {
     /// Schema SemVer, e.g. `"1.6.0"`.

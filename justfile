@@ -19,7 +19,7 @@ wasm-check:
 # Dev build for the in-browser harness (fast, unoptimised). Outputs to
 # crates/cow-sdk-wasm/pkg/ which is what test-harness/index.html imports.
 wasm-build:
-	cd crates/cow-sdk-wasm && wasm-pack build --target web --dev --scope cowdao-grants
+	cd crates/cow-sdk-wasm && wasm-pack build --target web --dev --scope cowdao-grants --features in_shim_signing
 
 # Build the harness then serve the workspace so test-harness/index.html
 # can resolve the wasm package via relative ES-module imports.
