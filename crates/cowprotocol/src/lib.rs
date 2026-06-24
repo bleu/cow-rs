@@ -128,9 +128,12 @@ pub use crate::{
     cancellation::{OrderCancellations, SignedOrderCancellation, SignedOrderCancellations},
     chain::{Chain, UnsupportedChain},
     composable::{
-        COMPOSABLE_COW, CURRENT_BLOCK_TIMESTAMP_FACTORY, ComposableCoW, ConditionalOrderParams,
-        EXTENSIBLE_FALLBACK_HANDLER, PayloadStruct, Proof, ProofLocation, TWAP_HANDLER, TwapData,
-        TwapDuration, TwapError, TwapStart, TwapStaticInput, forwarder_signature,
+        BatchOrderOutcome, COMPOSABLE_COW, CURRENT_BLOCK_TIMESTAMP_FACTORY, ComposableCoW,
+        ComposableCoWError, ComposableCoWErrors, ConditionalOrderParams,
+        EXTENSIBLE_FALLBACK_HANDLER, IConditionalOrder, PayloadStruct, PollOutcome, Proof,
+        ProofLocation, TWAP_HANDLER, TwapData, TwapDuration, TwapError, TwapStart, TwapStaticInput,
+        decode_batch_order_result, decode_batch_order_results, decode_composable_cow_error,
+        decode_conditional_order_revert, forwarder_signature, registered_topic_filter_by_handler,
         safe_handler_signature,
     },
     contracts::{

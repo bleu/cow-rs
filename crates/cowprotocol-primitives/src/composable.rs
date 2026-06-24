@@ -30,7 +30,7 @@ mod twap;
 pub use twap::*;
 
 use alloy_primitives::{Address, B256, Bytes, U256, address};
-use alloy_sol_types::{SolCall, SolValue, sol};
+use alloy_sol_types::{SolCall, SolError, SolEvent, SolValue, sol};
 
 use crate::chain::Chain;
 use crate::contracts::{GPV2_ORDER_TYPE_HASH, GPv2OrderData};
@@ -114,6 +114,29 @@ sol! {
             ConditionalOrderParams params
         );
 
+        /// Additive companion to [`ComposableCoW::ConditionalOrderCreated`],
+        /// emitted alongside it in `create()` / `createWithContext()`
+        /// whenever `dispatch == true`. The indexed `handler` and `ctx`
+        /// (`= H(params)`) let watch towers and indexers filter at the
+        /// RPC level: an `eth_subscribe logs` subscription with
+        /// `topics: [REGISTERED_HASH, null, handlerAddr]` only delivers
+        /// orders for one handler (TWAP, GoodAfterTime, ...). The
+        /// existing [`ComposableCoW::ConditionalOrderCreated`] signature
+        /// is intentionally untouched so indexers keyed on its topic-0
+        /// hash continue to work.
+        ///
+        /// Topic-0 is
+        /// `keccak256("ConditionalOrderRegistered(address,address,bytes32,(address,bytes32,bytes))")`,
+        /// locked by `composable_cow_event_topic_hashes_match_keccak`.
+        /// Source: `composable-cow/src/ComposableCoW.sol`
+        ///.
+        event ConditionalOrderRegistered(
+            address indexed owner,
+            address indexed handler,
+            bytes32 indexed ctx,
+            ConditionalOrderParams params
+        );
+
         /// Emitted by `setSwapGuard` when an owner installs (or
         /// removes, with `address(0)`) a guard contract that may veto
         /// otherwise-valid orders before settlement.
@@ -193,6 +216,153 @@ sol! {
         /// callers can verify their off-chain leaf matches what the
         /// contract stores.
         function hash(ConditionalOrderParams params) external pure returns (bytes32);
+
+        // --- M2 additive views ---
+
+        /// One element of a [`batchGetTradeableOrdersWithSignature`]
+        /// call. Mirrors the 4-argument list of
+        /// `getTradeableOrderWithSignature` 1:1 (owner, params,
+        /// offchainInput, proof). Source:
+        /// `composable-cow/src/ComposableCoW.sol`
+        ///.
+        struct BatchOrderRequest {
+            address owner;
+            ConditionalOrderParams params;
+            bytes offchainInput;
+            bytes32[] proof;
+        }
+
+        /// One element of a [`batchGetTradeableOrdersWithSignature`]
+        /// result. On success, `success == true` and (`order`,
+        /// `signature`) carry the payload exactly as the per-request
+        /// `getTradeableOrderWithSignature` would have returned;
+        /// `revertData` is empty. On failure, `success == false` and
+        /// `revertData` carries the raw `selector + abi.encode(args)`
+        /// revert payload so the caller can decode polling hints like
+        /// [`PollOutcome::TryAtEpoch`] / [`PollOutcome::Never`] via
+        /// [`decode_conditional_order_revert`]. The contract's
+        /// per-request try/catch isolation guarantees one failed
+        /// request never blocks the rest of the batch.
+        ///
+        /// The embedded `GPv2OrderData` is the canonical 12-field order
+        /// struct from [`crate::contracts`] — the `sol!` macro resolves
+        /// the type by name across sibling blocks. On a failed request
+        /// the field defaults to the zero-filled struct; consumers MUST
+        /// check `success` before touching it.
+        struct BatchOrderResult {
+            bool success;
+            GPv2OrderData order;
+            bytes signature;
+            bytes revertData;
+        }
+
+        /// Batched variant of `getTradeableOrderWithSignature`,
+        /// returning one [`BatchOrderResult`] per input request in the
+        /// same order. Saves up to N-1 RPC round trips for watch
+        /// towers polling N watches on the same chain. Source:
+        /// `composable-cow/src/ComposableCoW.sol`
+        ///.
+        function batchGetTradeableOrdersWithSignature(
+            BatchOrderRequest[] requests
+        ) external view returns (BatchOrderResult[] memory);
+
+        /// Combined per-watch metadata returned by
+        /// [`getOrderInfo`]. Fields default to inert values when they
+        /// do not apply (e.g. `swapGuard == address(0)` when no guard
+        /// is set, `cabinetValue == bytes32(0)` when no cabinet slot
+        /// was written). Source:
+        /// `composable-cow/src/ComposableCoW.sol`
+        ///.
+        struct OrderInfo {
+            bytes32 hash;
+            bool authorized;
+            bytes32 cabinetValue;
+            address swapGuard;
+        }
+
+        /// Single-call view that combines `hash()`, `singleOrders`,
+        /// `cabinet` and `swapGuards` into one round trip. Source:
+        /// `composable-cow/src/ComposableCoW.sol`
+        ///.
+        function getOrderInfo(
+            address owner,
+            ConditionalOrderParams params
+        ) external view returns (OrderInfo memory);
+    }
+}
+
+sol! {
+    /// Canonical conditional-order interface defined in
+    /// `composable-cow/src/interfaces/IConditionalOrder.sol`. The five
+    /// custom errors below cover every revert a `getTradeableOrder` /
+    /// `verify` implementation is expected to raise; watch towers use
+    /// them as polling hints and the orderbook surfaces them to users
+    /// when an order cannot yet be settled.
+    ///
+    /// Only the errors are bound here — the `verify` function takes
+    /// `GPv2Order.Data` and is invoked through the EIP-1271 dispatch
+    /// path, not as a direct user-facing entry point, so a Rust
+    /// `*Call` type would be dead weight.
+    #[derive(Debug)]
+    interface IConditionalOrder {
+        /// Generic "this order is not valid right now, do not retry
+        /// without new information". Matches
+        /// `OrderNotValid(string)` in `IConditionalOrder.sol`. The
+        /// inner string is opaque human-readable context (TWAP uses it
+        /// for `"not within span"` outside of the new precise polling
+        /// hints, generic handlers use it for validation reasons).
+        error OrderNotValid(string reason);
+
+        /// "Try polling again on the next block". Matches
+        /// `PollTryNextBlock(string)` in `IConditionalOrder.sol`.
+        error PollTryNextBlock(string reason);
+
+        /// "Try polling again at the given block number". Matches
+        /// `PollTryAtBlock(uint256,string)` in `IConditionalOrder.sol`.
+        error PollTryAtBlock(uint256 blockNumber, string reason);
+
+        /// "Try polling again at the given Unix timestamp". Matches
+        /// `PollTryAtEpoch(uint256,string)` in `IConditionalOrder.sol`.
+        /// Emitted by the TWAP handler from
+        /// [the TWAP handler] for the
+        /// "before first part" (`PollTryAtEpoch(t0, ...)`) and
+        /// "between parts" (`PollTryAtEpoch(nextPartStart, ...)`)
+        /// lifecycle phases.
+        error PollTryAtEpoch(uint256 timestamp, string reason);
+
+        /// "This conditional order will never produce a tradeable
+        /// order again, the watch tower can delete it". Matches
+        /// `PollNever(string)` in `IConditionalOrder.sol`. Emitted by
+        /// the TWAP handler from [the TWAP handler] when
+        /// every part has been settled (`PollNever("all parts settled")`).
+        error PollNever(string reason);
+    }
+
+    /// The `*NotAuthed`-style custom errors `ComposableCoW` itself
+    /// raises (as opposed to the per-handler errors in
+    /// [`IConditionalOrder`]). Surfacing them lets a Rust caller decode
+    /// the revert payload of a failed
+    /// [`batchGetTradeableOrdersWithSignature`] entry without round-
+    /// tripping the bytes through a string.
+    #[derive(Debug)]
+    interface ComposableCoWErrors {
+        /// `proof` did not authenticate against the owner's merkle
+        /// root. The order is not registered.
+        error ProofNotAuthed();
+        /// `params` was not registered via `create` /
+        /// `createWithContext` by the owner. The order is not
+        /// registered.
+        error SingleOrderNotAuthed();
+        /// The owner installed a swap guard that vetoed this order.
+        error SwapGuardRestricted();
+        /// `params.handler == address(0)`, which `create` rejects.
+        error InvalidHandler();
+        /// `setSafeFallbackHandler` was called with a non-supported
+        /// fallback handler.
+        error InvalidFallbackHandler();
+        /// The handler claimed to implement
+        /// `IConditionalOrderGenerator` but does not via ERC-165.
+        error InterfaceNotSupported();
     }
 }
 
@@ -305,6 +475,284 @@ pub fn safe_handler_signature(
 /// Solidity's two-argument `abi.encode`).
 pub fn forwarder_signature(order: &GPv2OrderData, payload: &PayloadStruct) -> Vec<u8> {
     (order.clone(), payload.clone()).abi_encode_params()
+}
+
+/// Decoded `IConditionalOrder` revert returned by `getTradeableOrder`
+/// or `getTradeableOrderWithSignature`. The five variants mirror the
+/// five custom errors declared in
+/// `composable-cow/src/interfaces/IConditionalOrder.sol`; the TWAP
+/// handler's the TWAP handler in particular replaces the
+/// generic `OrderNotValid("not within span")` for the
+/// "before first part" / "between parts" lifecycle phases with the
+/// precise [`PollOutcome::TryAtEpoch`] hint, and with
+/// [`PollOutcome::Never`] for the terminal "all parts settled" phase.
+///
+/// Watch towers act on these as polling instructions: `TryNextBlock`
+/// re-polls on the next block, `TryAtBlock` / `TryAtEpoch` schedule a
+/// poll for the given trigger, `Never` deletes the watch, and
+/// `OrderNotValid` keeps the watch but does not schedule a retry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PollOutcome {
+    /// Generic "not valid right now" — keep the watch, do not poll
+    /// until something external changes. Mirrors
+    /// `OrderNotValid(string)`.
+    NotValid(String),
+    /// "Re-poll on the next block". Mirrors
+    /// `PollTryNextBlock(string)`.
+    TryNextBlock(String),
+    /// "Re-poll at the given block number". Mirrors
+    /// `PollTryAtBlock(uint256,string)`.
+    TryAtBlock {
+        /// Block number to schedule the next poll for.
+        block_number: U256,
+        /// Human-readable context the handler attached to the revert.
+        reason: String,
+    },
+    /// "Re-poll at the given Unix timestamp". Mirrors
+    /// `PollTryAtEpoch(uint256,string)`. TWAP after
+    /// the TWAP handler emits this for both the
+    /// "before first part" (`timestamp = t0`) and the "between parts"
+    /// (`timestamp = nextPartStart`) phases.
+    TryAtEpoch {
+        /// Unix timestamp (seconds) to schedule the next poll for.
+        timestamp: U256,
+        /// Human-readable context the handler attached to the revert.
+        reason: String,
+    },
+    /// "Delete the watch — this conditional order will never produce
+    /// a tradeable order again". Mirrors `PollNever(string)`. TWAP
+    /// after the TWAP handler emits this for the
+    /// "all parts settled" terminal phase.
+    Never(String),
+}
+
+/// Decode an on-chain revert payload (`selector + abi.encode(args)`)
+/// against the five [`IConditionalOrder`] custom errors and return the
+/// matching [`PollOutcome`].
+///
+/// Returns `None` when:
+///
+/// - `data.len() < 4` (no selector to match against), or
+/// - the selector does not belong to any `IConditionalOrder` error.
+///
+/// The caller is responsible for trying other error sets (e.g.
+/// [`ComposableCoWErrors`] via [`decode_composable_cow_error`], or a
+/// custom handler error) when this returns `None`.
+///
+/// Reverts emitted by `getTradeableOrder` and
+/// `getTradeableOrderWithSignature` always carry an
+/// `IConditionalOrder` error, including the TWAP-specific
+/// `PollTryAtEpoch` / `PollNever` reverts introduced by
+/// the TWAP handler. The decoder is exhaustive over the
+/// five-error set so new handlers picking from the same vocabulary
+/// (e.g. GoodAfterTime) decode out of the box.
+pub fn decode_conditional_order_revert(data: &[u8]) -> Option<PollOutcome> {
+    if data.len() < 4 {
+        return None;
+    }
+    let selector: [u8; 4] = data[..4].try_into().ok()?;
+    let args = &data[4..];
+
+    if selector == IConditionalOrder::OrderNotValid::SELECTOR {
+        let e = IConditionalOrder::OrderNotValid::abi_decode_raw(args).ok()?;
+        return Some(PollOutcome::NotValid(e.reason));
+    }
+    if selector == IConditionalOrder::PollTryNextBlock::SELECTOR {
+        let e = IConditionalOrder::PollTryNextBlock::abi_decode_raw(args).ok()?;
+        return Some(PollOutcome::TryNextBlock(e.reason));
+    }
+    if selector == IConditionalOrder::PollTryAtBlock::SELECTOR {
+        let e = IConditionalOrder::PollTryAtBlock::abi_decode_raw(args).ok()?;
+        return Some(PollOutcome::TryAtBlock {
+            block_number: e.blockNumber,
+            reason: e.reason,
+        });
+    }
+    if selector == IConditionalOrder::PollTryAtEpoch::SELECTOR {
+        let e = IConditionalOrder::PollTryAtEpoch::abi_decode_raw(args).ok()?;
+        return Some(PollOutcome::TryAtEpoch {
+            timestamp: e.timestamp,
+            reason: e.reason,
+        });
+    }
+    if selector == IConditionalOrder::PollNever::SELECTOR {
+        let e = IConditionalOrder::PollNever::abi_decode_raw(args).ok()?;
+        return Some(PollOutcome::Never(e.reason));
+    }
+    None
+}
+
+/// `*NotAuthed`-style errors that `ComposableCoW` itself can raise
+/// (versus per-handler errors in [`PollOutcome`]). Returned from
+/// [`decode_composable_cow_error`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum ComposableCoWError {
+    /// The supplied merkle proof did not authenticate against the
+    /// owner's published root.
+    #[error("ComposableCoW.ProofNotAuthed")]
+    ProofNotAuthed,
+    /// The supplied `ConditionalOrderParams` was not registered via
+    /// `create` / `createWithContext`.
+    #[error("ComposableCoW.SingleOrderNotAuthed")]
+    SingleOrderNotAuthed,
+    /// The owner installed a swap guard that vetoed this order.
+    #[error("ComposableCoW.SwapGuardRestricted")]
+    SwapGuardRestricted,
+    /// `params.handler == address(0)`.
+    #[error("ComposableCoW.InvalidHandler")]
+    InvalidHandler,
+    /// A non-supported fallback handler was supplied.
+    #[error("ComposableCoW.InvalidFallbackHandler")]
+    InvalidFallbackHandler,
+    /// The handler claimed `IConditionalOrderGenerator` but failed the
+    /// ERC-165 supportsInterface check.
+    #[error("ComposableCoW.InterfaceNotSupported")]
+    InterfaceNotSupported,
+}
+
+/// Decode an on-chain revert payload against the `*NotAuthed`-style
+/// errors `ComposableCoW` itself raises. Returns `None` when the
+/// selector does not belong to that set; callers typically try
+/// [`decode_conditional_order_revert`] first and fall back here.
+pub fn decode_composable_cow_error(data: &[u8]) -> Option<ComposableCoWError> {
+    if data.len() < 4 {
+        return None;
+    }
+    let selector: [u8; 4] = data[..4].try_into().ok()?;
+
+    if selector == ComposableCoWErrors::ProofNotAuthed::SELECTOR {
+        return Some(ComposableCoWError::ProofNotAuthed);
+    }
+    if selector == ComposableCoWErrors::SingleOrderNotAuthed::SELECTOR {
+        return Some(ComposableCoWError::SingleOrderNotAuthed);
+    }
+    if selector == ComposableCoWErrors::SwapGuardRestricted::SELECTOR {
+        return Some(ComposableCoWError::SwapGuardRestricted);
+    }
+    if selector == ComposableCoWErrors::InvalidHandler::SELECTOR {
+        return Some(ComposableCoWError::InvalidHandler);
+    }
+    if selector == ComposableCoWErrors::InvalidFallbackHandler::SELECTOR {
+        return Some(ComposableCoWError::InvalidFallbackHandler);
+    }
+    if selector == ComposableCoWErrors::InterfaceNotSupported::SELECTOR {
+        return Some(ComposableCoWError::InterfaceNotSupported);
+    }
+    None
+}
+
+/// Per-request decoded outcome of a
+/// [`ComposableCoW::batchGetTradeableOrdersWithSignatureCall`] call. Each
+/// input request lowers to exactly one of these on the way out, in
+/// the same order as the original request slice.
+///
+/// `Submitted` carries the discrete order and EIP-1271 signature blob
+/// the caller would forward to the orderbook. `PollHint` carries a
+/// decoded [`PollOutcome`] when the per-request revert was one of the
+/// five [`IConditionalOrder`] errors — TWAP's new
+/// `PollTryAtEpoch(t0, ...)`, `PollTryAtEpoch(nextPartStart, ...)`
+/// and `PollNever("all parts settled")` from
+/// the TWAP handler all decode here.
+/// `ComposableCoWError` carries a decoded `*NotAuthed`-style error
+/// from [`ComposableCoWError`]. `UnknownRevert` is the escape hatch
+/// for any other revert payload (raw `selector + args`); off-chain
+/// indexers should treat it as opaque and surface the bytes for
+/// human inspection.
+///
+/// `PartialEq` / `Eq` are deliberately not derived: `GPv2OrderData` in
+/// `Submitted` does not implement them, and comparing decoded
+/// outcomes for equality is not a flow this crate needs to support.
+/// Use `matches!` plus field destructuring in tests.
+#[derive(Clone, Debug)]
+pub enum BatchOrderOutcome {
+    /// `success == true` in the on-chain [`ComposableCoW::BatchOrderResult`].
+    ///
+    /// The `GPv2OrderData` payload is boxed to keep the
+    /// [`BatchOrderOutcome`] enum compact: the 12-field order struct
+    /// is ~320 bytes — large enough that every other variant
+    /// (`PollHint`, `ComposableCoWError`, `UnknownRevert`) would pay
+    /// the size cost on every collection element. The indirection is
+    /// transparent to callers via auto-deref / `*order` when needed.
+    Submitted {
+        /// The discrete order to submit to the CoW Protocol orderbook.
+        order: Box<GPv2OrderData>,
+        /// EIP-1271 signature blob accompanying the order.
+        signature: Bytes,
+    },
+    /// `success == false` and the decoded revert matched one of the
+    /// five [`IConditionalOrder`] errors.
+    PollHint(PollOutcome),
+    /// `success == false` and the decoded revert matched one of the
+    /// `*NotAuthed`-style errors `ComposableCoW` raises itself.
+    ComposableCoWError(ComposableCoWError),
+    /// `success == false` and the revert did not match any error we
+    /// know how to decode (e.g. a handler-specific custom error). The
+    /// raw revert payload is preserved verbatim for the caller.
+    UnknownRevert(Bytes),
+}
+
+/// Lower one [`ComposableCoW::BatchOrderResult`] into the
+/// [`BatchOrderOutcome`] taxonomy. `success` chooses between the
+/// success branch (which keeps `order` + `signature`) and the
+/// failure branch (which decodes `revertData` against
+/// [`IConditionalOrder`] errors first, then `ComposableCoW` errors,
+/// then falls back to [`BatchOrderOutcome::UnknownRevert`]).
+///
+/// Pure function: takes a borrowed result, clones what it keeps. No
+/// network, no `Provider` — callers wrap their own RPC layer around
+/// it. This mirrors the lower-level helpers (`safe_handler_signature`,
+/// `forwarder_signature`) already in this module: cow-rs binds ABI
+/// types and offers pure helpers, the caller assembles the
+/// `eth_call` themselves.
+pub fn decode_batch_order_result(result: &ComposableCoW::BatchOrderResult) -> BatchOrderOutcome {
+    if result.success {
+        return BatchOrderOutcome::Submitted {
+            order: Box::new(result.order.clone()),
+            signature: result.signature.clone(),
+        };
+    }
+    let data = result.revertData.as_ref();
+    if let Some(poll) = decode_conditional_order_revert(data) {
+        return BatchOrderOutcome::PollHint(poll);
+    }
+    if let Some(err) = decode_composable_cow_error(data) {
+        return BatchOrderOutcome::ComposableCoWError(err);
+    }
+    BatchOrderOutcome::UnknownRevert(result.revertData.clone())
+}
+
+/// Convenience wrapper: lower every entry of an on-chain
+/// [`ComposableCoW::batchGetTradeableOrdersWithSignatureCall`] response
+/// into the [`BatchOrderOutcome`] taxonomy, preserving order.
+pub fn decode_batch_order_results(
+    results: &[ComposableCoW::BatchOrderResult],
+) -> Vec<BatchOrderOutcome> {
+    results.iter().map(decode_batch_order_result).collect()
+}
+
+/// Build a topic-filter array for
+/// `eth_subscribe`/`eth_getLogs` that returns only
+/// [`ComposableCoW::ConditionalOrderRegistered`] events whose
+/// `handler` indexed topic matches `handler`. The owner and `ctx`
+/// topics are left unconstrained (`None`).
+///
+/// Returns the four-slot Ethereum topic-filter shape: topic-0
+/// (signature hash) pinned, topic-1 (owner) unconstrained, topic-2
+/// (handler) pinned, topic-3 (`ctx`) unconstrained. Serialise the
+/// `Some(B256)` slots into JSON-RPC topic positions and leave the
+/// `None` slots as JSON `null` to keep the filter open at that
+/// position.
+///
+/// Indexed `address` topics are left-padded to 32 bytes with zeros
+/// when emitted as `log.topics[i]`, which matches the encoding the
+/// `From<Address> for B256` widening produces here.
+pub fn registered_topic_filter_by_handler(handler: Address) -> [Option<B256>; 4] {
+    [
+        Some(ComposableCoW::ConditionalOrderRegistered::SIGNATURE_HASH),
+        None,
+        Some(B256::left_padding_from(handler.as_slice())),
+        None,
+    ]
 }
 
 /// Canonical CREATE2 address of the `ComposableCoW` contract.
@@ -573,6 +1021,19 @@ mod tests {
                 &ComposableCoW::hashCall::SELECTOR,
                 b"hash((address,bytes32,bytes))",
             ),
+            // M2: batchGetTradeableOrdersWithSignature(
+            //   (address,(address,bytes32,bytes),bytes,bytes32[])[]
+            // ). The inner BatchOrderRequest tuple expands to its four
+            // fields with ConditionalOrderParams inlined as (address,bytes32,bytes).
+            (
+                &ComposableCoW::batchGetTradeableOrdersWithSignatureCall::SELECTOR,
+                b"batchGetTradeableOrdersWithSignature((address,(address,bytes32,bytes),bytes,bytes32[])[])",
+            ),
+            // M2: getOrderInfo(address,(address,bytes32,bytes))
+            (
+                &ComposableCoW::getOrderInfoCall::SELECTOR,
+                b"getOrderInfo(address,(address,bytes32,bytes))",
+            ),
         ];
         for (selector, signature) in cases {
             let expected = &keccak256(signature)[..4];
@@ -715,10 +1176,559 @@ mod tests {
             ComposableCoW::ConditionalOrderCreated::SIGNATURE_HASH,
             keccak256("ConditionalOrderCreated(address,(address,bytes32,bytes))")
         );
+        // M2: ConditionalOrderRegistered(address,address,bytes32,(address,bytes32,bytes))
+        assert_eq!(
+            ComposableCoW::ConditionalOrderRegistered::SIGNATURE_HASH,
+            keccak256(
+                "ConditionalOrderRegistered(address,address,bytes32,(address,bytes32,bytes))"
+            )
+        );
         // SwapGuardSet(address,address)
         assert_eq!(
             ComposableCoW::SwapGuardSet::SIGNATURE_HASH,
             keccak256("SwapGuardSet(address,address)")
         );
+    }
+
+    // --- ConditionalOrderRegistered event ---
+
+    /// The `ConditionalOrderRegistered` event indexes `owner`,
+    /// `handler` and `ctx` — three of the four event arguments. The
+    /// indexed `address` topics are left-padded to 32 bytes with
+    /// zeros, which is what `eth_subscribe`/`eth_getLogs` expects for
+    /// the `topics` filter array. Round-trip the encode/decode path
+    /// to lock this against accidental field reordering.
+    #[test]
+    fn conditional_order_registered_round_trips() {
+        let owner = address!("DeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF");
+        let handler = TWAP_HANDLER;
+        let params = ConditionalOrderParams {
+            handler,
+            salt: B256::repeat_byte(0x11),
+            staticInput: Bytes::from_static(&hex!("c0ffee")),
+        };
+        let ctx = keccak256(params.abi_encode());
+
+        let evt = ComposableCoW::ConditionalOrderRegistered {
+            owner,
+            handler,
+            ctx,
+            params,
+        };
+        // Topic-0 is the signature hash; topic-1, topic-2, topic-3 are the
+        // three indexed args left-padded to 32 bytes.
+        let topics = evt.encode_topics_array::<4>();
+        assert_eq!(
+            topics[0].0,
+            ComposableCoW::ConditionalOrderRegistered::SIGNATURE_HASH
+        );
+        assert_eq!(topics[1].0, B256::left_padding_from(owner.as_slice()));
+        assert_eq!(topics[2].0, B256::left_padding_from(handler.as_slice()));
+        assert_eq!(topics[3].0, ctx);
+    }
+
+    /// `registered_topic_filter_by_handler(h)` builds the four-slot
+    /// `[topic-0, topic-1, topic-2, topic-3]` filter the watch tower
+    /// passes to `eth_subscribe logs` to receive only events for one
+    /// handler (TWAP, GoodAfterTime, ...). Topic-0 is the signature
+    /// hash, topic-2 is the handler left-padded to 32 bytes, and
+    /// topics 1 / 3 (owner / ctx) are left open.
+    #[test]
+    fn registered_topic_filter_pins_handler_and_signature() {
+        let filter = registered_topic_filter_by_handler(TWAP_HANDLER);
+        assert_eq!(
+            filter[0],
+            Some(ComposableCoW::ConditionalOrderRegistered::SIGNATURE_HASH)
+        );
+        assert_eq!(filter[1], None);
+        assert_eq!(
+            filter[2],
+            Some(B256::left_padding_from(TWAP_HANDLER.as_slice()))
+        );
+        assert_eq!(filter[3], None);
+    }
+
+    // --- batchGetTradeableOrdersWithSignature ---
+
+    /// `BatchOrderRequest` round-trips through `abi_encode` /
+    /// `abi_decode`. The 4-field struct mirrors the
+    /// `getTradeableOrderWithSignature` argument list 1:1.
+    #[test]
+    fn batch_order_request_round_trips() {
+        let req = ComposableCoW::BatchOrderRequest {
+            owner: address!("DeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF"),
+            params: ConditionalOrderParams {
+                handler: TWAP_HANDLER,
+                salt: B256::repeat_byte(0x22),
+                staticInput: Bytes::from_static(&hex!("c0ffee")),
+            },
+            offchainInput: Bytes::from_static(b"offchain"),
+            proof: vec![B256::repeat_byte(0x33), B256::repeat_byte(0x44)],
+        };
+        let encoded = req.abi_encode();
+        let decoded = ComposableCoW::BatchOrderRequest::abi_decode(&encoded).unwrap();
+        assert_eq!(decoded.owner, req.owner);
+        assert_eq!(decoded.params.handler, req.params.handler);
+        assert_eq!(decoded.params.salt, req.params.salt);
+        assert_eq!(decoded.params.staticInput, req.params.staticInput);
+        assert_eq!(decoded.offchainInput, req.offchainInput);
+        assert_eq!(decoded.proof, req.proof);
+    }
+
+    fn sample_gpv2_order() -> GPv2OrderData {
+        GPv2OrderData {
+            sellToken: address!("6810e776880C02933D47DB1b9fc05908e5386b96"),
+            buyToken: address!("DAE5F1590db13E3B40423B5b5c5fbf175515910b"),
+            receiver: address!("DeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF"),
+            sellAmount: U256::from(1_000_u64),
+            buyAmount: U256::from(2_000_u64),
+            validTo: 1_700_000_000,
+            appData: B256::repeat_byte(0xaa),
+            feeAmount: U256::ZERO,
+            kind: B256::repeat_byte(0xbb),
+            partiallyFillable: false,
+            sellTokenBalance: B256::repeat_byte(0xcc),
+            buyTokenBalance: B256::repeat_byte(0xdd),
+        }
+    }
+
+    /// `BatchOrderResult` round-trips through `abi_encode` /
+    /// `abi_decode` with both `success = true` (carrying an order +
+    /// signature) and `success = false` (carrying a revert payload).
+    #[test]
+    fn batch_order_result_round_trips() {
+        let success = ComposableCoW::BatchOrderResult {
+            success: true,
+            order: sample_gpv2_order(),
+            signature: Bytes::from_static(b"signature-blob"),
+            revertData: Bytes::new(),
+        };
+        let encoded = success.abi_encode();
+        let decoded = ComposableCoW::BatchOrderResult::abi_decode(&encoded).unwrap();
+        assert!(decoded.success);
+        assert_eq!(decoded.order.sellToken, success.order.sellToken);
+        assert_eq!(decoded.signature, success.signature);
+        assert!(decoded.revertData.is_empty());
+
+        let failure = ComposableCoW::BatchOrderResult {
+            success: false,
+            order: GPv2OrderData {
+                sellToken: Address::ZERO,
+                buyToken: Address::ZERO,
+                receiver: Address::ZERO,
+                sellAmount: U256::ZERO,
+                buyAmount: U256::ZERO,
+                validTo: 0,
+                appData: B256::ZERO,
+                feeAmount: U256::ZERO,
+                kind: B256::ZERO,
+                partiallyFillable: false,
+                sellTokenBalance: B256::ZERO,
+                buyTokenBalance: B256::ZERO,
+            },
+            signature: Bytes::new(),
+            revertData: Bytes::from_static(&hex!("deadbeef")),
+        };
+        let encoded = failure.abi_encode();
+        let decoded = ComposableCoW::BatchOrderResult::abi_decode(&encoded).unwrap();
+        assert!(!decoded.success);
+        assert_eq!(decoded.revertData.as_ref(), &hex!("deadbeef"));
+    }
+
+    /// `decode_batch_order_result` lowers a successful entry to
+    /// `BatchOrderOutcome::Submitted` carrying the same order and
+    /// signature.
+    #[test]
+    fn decode_batch_order_result_success() {
+        let order = sample_gpv2_order();
+        let sig = Bytes::from_static(b"signature-blob");
+        let result = ComposableCoW::BatchOrderResult {
+            success: true,
+            order: order.clone(),
+            signature: sig.clone(),
+            revertData: Bytes::new(),
+        };
+        match decode_batch_order_result(&result) {
+            BatchOrderOutcome::Submitted {
+                order: out_order,
+                signature,
+            } => {
+                assert_eq!(out_order.sellToken, order.sellToken);
+                assert_eq!(out_order.buyToken, order.buyToken);
+                assert_eq!(signature, sig);
+            }
+            other => panic!("expected Submitted, got {other:?}"),
+        }
+    }
+
+    /// `decode_batch_order_result` lowers a failed entry whose
+    /// revert payload is a `PollTryAtEpoch(timestamp, reason)` into
+    /// `BatchOrderOutcome::PollHint(PollOutcome::TryAtEpoch { ... })`,
+    /// preserving `timestamp` and `reason` byte-exact.
+    #[test]
+    fn decode_batch_order_result_poll_try_at_epoch() {
+        let revert = IConditionalOrder::PollTryAtEpoch {
+            timestamp: U256::from(1_700_000_000_u64),
+            reason: "between parts".to_string(),
+        };
+        let payload = revert.abi_encode();
+        let result = ComposableCoW::BatchOrderResult {
+            success: false,
+            order: sample_gpv2_order(),
+            signature: Bytes::new(),
+            revertData: Bytes::from(payload),
+        };
+        match decode_batch_order_result(&result) {
+            BatchOrderOutcome::PollHint(PollOutcome::TryAtEpoch { timestamp, reason }) => {
+                assert_eq!(timestamp, U256::from(1_700_000_000_u64));
+                assert_eq!(reason, "between parts");
+            }
+            other => panic!("expected PollHint(TryAtEpoch), got {other:?}"),
+        }
+    }
+
+    /// `decode_batch_order_result` lowers a failed entry whose
+    /// revert payload is a `*NotAuthed`-style `ComposableCoW` error
+    /// into `BatchOrderOutcome::ComposableCoWError(...)`.
+    #[test]
+    fn decode_batch_order_result_composable_cow_error() {
+        let payload = ComposableCoWErrors::SingleOrderNotAuthed::SELECTOR.to_vec();
+        let result = ComposableCoW::BatchOrderResult {
+            success: false,
+            order: sample_gpv2_order(),
+            signature: Bytes::new(),
+            revertData: Bytes::from(payload),
+        };
+        match decode_batch_order_result(&result) {
+            BatchOrderOutcome::ComposableCoWError(ComposableCoWError::SingleOrderNotAuthed) => {}
+            other => panic!("expected ComposableCoWError(SingleOrderNotAuthed), got {other:?}"),
+        }
+    }
+
+    /// `decode_batch_order_result` falls back to `UnknownRevert`
+    /// when the selector does not match either error set. The raw
+    /// payload is preserved verbatim.
+    #[test]
+    fn decode_batch_order_result_unknown_revert() {
+        let payload = hex!("12345678ff").to_vec();
+        let result = ComposableCoW::BatchOrderResult {
+            success: false,
+            order: sample_gpv2_order(),
+            signature: Bytes::new(),
+            revertData: Bytes::from(payload.clone()),
+        };
+        match decode_batch_order_result(&result) {
+            BatchOrderOutcome::UnknownRevert(bytes) => assert_eq!(bytes.as_ref(), &payload[..]),
+            other => panic!("expected UnknownRevert, got {other:?}"),
+        }
+    }
+
+    /// `decode_batch_order_results` preserves order: feed a mixed
+    /// success/PollHint/UnknownRevert batch and the output enum
+    /// variants line up 1:1 with the inputs.
+    #[test]
+    fn decode_batch_order_results_preserves_order() {
+        let success = ComposableCoW::BatchOrderResult {
+            success: true,
+            order: sample_gpv2_order(),
+            signature: Bytes::from_static(b"sig-1"),
+            revertData: Bytes::new(),
+        };
+        let poll_never = IConditionalOrder::PollNever {
+            reason: "all parts settled".to_string(),
+        };
+        let poll_payload = poll_never.abi_encode();
+        let poll = ComposableCoW::BatchOrderResult {
+            success: false,
+            order: sample_gpv2_order(),
+            signature: Bytes::new(),
+            revertData: Bytes::from(poll_payload),
+        };
+        let unknown = ComposableCoW::BatchOrderResult {
+            success: false,
+            order: sample_gpv2_order(),
+            signature: Bytes::new(),
+            revertData: Bytes::from_static(&hex!("aabbccdd")),
+        };
+
+        let outcomes = decode_batch_order_results(&[success, poll, unknown]);
+        assert_eq!(outcomes.len(), 3);
+        assert!(matches!(outcomes[0], BatchOrderOutcome::Submitted { .. }));
+        assert!(matches!(
+            outcomes[1],
+            BatchOrderOutcome::PollHint(PollOutcome::Never(ref r)) if r == "all parts settled"
+        ));
+        assert!(matches!(outcomes[2], BatchOrderOutcome::UnknownRevert(_)));
+    }
+
+    // --- getOrderInfo ---
+
+    /// `OrderInfo` round-trips through `abi_encode` / `abi_decode`,
+    /// locking the 4-field struct layout against accidental
+    /// reordering.
+    #[test]
+    fn order_info_round_trips() {
+        let info = ComposableCoW::OrderInfo {
+            hash: B256::repeat_byte(0x55),
+            authorized: true,
+            cabinetValue: B256::repeat_byte(0x66),
+            swapGuard: address!("AAAaAaaaAaAaaAaaAaaaaaAAaAAaaaaaaaAaaaAa"),
+        };
+        let encoded = info.abi_encode();
+        let decoded = ComposableCoW::OrderInfo::abi_decode(&encoded).unwrap();
+        assert_eq!(decoded.hash, info.hash);
+        assert!(decoded.authorized);
+        assert_eq!(decoded.cabinetValue, info.cabinetValue);
+        assert_eq!(decoded.swapGuard, info.swapGuard);
+    }
+
+    /// `getOrderInfo(owner, params)` round-trips with the canonical
+    /// selector. Locks the most common watch-tower view call from
+    /// the order-info accessor.
+    #[test]
+    fn get_order_info_call_round_trips() {
+        let owner = address!("DeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF");
+        let params = ConditionalOrderParams {
+            handler: TWAP_HANDLER,
+            salt: B256::repeat_byte(0x77),
+            staticInput: Bytes::from_static(&hex!("c0ffee")),
+        };
+        let call = ComposableCoW::getOrderInfoCall {
+            owner,
+            params: params.clone(),
+        };
+        let encoded = call.abi_encode();
+        assert_eq!(&encoded[..4], &ComposableCoW::getOrderInfoCall::SELECTOR);
+        let decoded = ComposableCoW::getOrderInfoCall::abi_decode(&encoded).unwrap();
+        assert_eq!(decoded.owner, owner);
+        assert_eq!(decoded.params.handler, params.handler);
+        assert_eq!(decoded.params.salt, params.salt);
+        assert_eq!(decoded.params.staticInput, params.staticInput);
+    }
+
+    // --- IConditionalOrder revert decoder ---
+
+    /// All five `IConditionalOrder` errors decode into the matching
+    /// [`PollOutcome`] variant, with `timestamp` / `blockNumber` /
+    /// `reason` arguments preserved byte-for-byte. Locks the decoder
+    /// against TWAP's new behaviour from the TWAP handler:
+    /// `PollTryAtEpoch(t0, "before first part")`,
+    /// `PollNever("all parts settled")`, and
+    /// `PollTryAtEpoch(nextPartStart, "between parts")`.
+    #[test]
+    fn decode_conditional_order_revert_covers_all_five_errors() {
+        // OrderNotValid("not within span") — the defensive fallback
+        // the TWAP handler still raises outside the new precise
+        // polling phases.
+        let err = IConditionalOrder::OrderNotValid {
+            reason: "not within span".to_string(),
+        };
+        let payload = err.abi_encode();
+        assert_eq!(
+            decode_conditional_order_revert(&payload),
+            Some(PollOutcome::NotValid("not within span".to_string()))
+        );
+
+        // PollTryNextBlock("nudge")
+        let err = IConditionalOrder::PollTryNextBlock {
+            reason: "nudge".to_string(),
+        };
+        let payload = err.abi_encode();
+        assert_eq!(
+            decode_conditional_order_revert(&payload),
+            Some(PollOutcome::TryNextBlock("nudge".to_string()))
+        );
+
+        // PollTryAtBlock(blockNumber, "later")
+        let err = IConditionalOrder::PollTryAtBlock {
+            blockNumber: U256::from(19_000_000_u64),
+            reason: "later".to_string(),
+        };
+        let payload = err.abi_encode();
+        assert_eq!(
+            decode_conditional_order_revert(&payload),
+            Some(PollOutcome::TryAtBlock {
+                block_number: U256::from(19_000_000_u64),
+                reason: "later".to_string(),
+            })
+        );
+
+        // PollTryAtEpoch(t0, "before first part") — TWAP M2 phase 1.
+        let err = IConditionalOrder::PollTryAtEpoch {
+            timestamp: U256::from(1_700_000_000_u64),
+            reason: "before first part".to_string(),
+        };
+        let payload = err.abi_encode();
+        assert_eq!(
+            decode_conditional_order_revert(&payload),
+            Some(PollOutcome::TryAtEpoch {
+                timestamp: U256::from(1_700_000_000_u64),
+                reason: "before first part".to_string(),
+            })
+        );
+
+        // PollTryAtEpoch(nextPartStart, "between parts") — TWAP M2 phase 3.
+        let err = IConditionalOrder::PollTryAtEpoch {
+            timestamp: U256::from(1_700_003_600_u64),
+            reason: "between parts".to_string(),
+        };
+        let payload = err.abi_encode();
+        assert_eq!(
+            decode_conditional_order_revert(&payload),
+            Some(PollOutcome::TryAtEpoch {
+                timestamp: U256::from(1_700_003_600_u64),
+                reason: "between parts".to_string(),
+            })
+        );
+
+        // PollNever("all parts settled") — TWAP M2 phase 2 (terminal).
+        let err = IConditionalOrder::PollNever {
+            reason: "all parts settled".to_string(),
+        };
+        let payload = err.abi_encode();
+        assert_eq!(
+            decode_conditional_order_revert(&payload),
+            Some(PollOutcome::Never("all parts settled".to_string()))
+        );
+    }
+
+    /// Short payloads and selectors outside the five-error set
+    /// return `None` (no panic, no spurious match) so callers can
+    /// safely cascade to other decoders.
+    #[test]
+    fn decode_conditional_order_revert_returns_none_for_unrelated_payloads() {
+        assert_eq!(decode_conditional_order_revert(&[]), None);
+        assert_eq!(decode_conditional_order_revert(&hex!("aa")), None);
+        assert_eq!(
+            decode_conditional_order_revert(&hex!("12345678deadbeef")),
+            None
+        );
+        // A ComposableCoW `*NotAuthed` selector is NOT an
+        // IConditionalOrder error and must not decode here.
+        assert_eq!(
+            decode_conditional_order_revert(&ComposableCoWErrors::SingleOrderNotAuthed::SELECTOR),
+            None
+        );
+    }
+
+    /// The five `IConditionalOrder` error selectors must match the
+    /// canonical `keccak256(signature)[..4]` values. Typos in the
+    /// `sol!` field names or order would break the decoder.
+    #[test]
+    fn conditional_order_error_selectors_match_keccak() {
+        let cases: &[(&[u8; 4], &[u8])] = &[
+            (
+                &IConditionalOrder::OrderNotValid::SELECTOR,
+                b"OrderNotValid(string)",
+            ),
+            (
+                &IConditionalOrder::PollTryNextBlock::SELECTOR,
+                b"PollTryNextBlock(string)",
+            ),
+            (
+                &IConditionalOrder::PollTryAtBlock::SELECTOR,
+                b"PollTryAtBlock(uint256,string)",
+            ),
+            (
+                &IConditionalOrder::PollTryAtEpoch::SELECTOR,
+                b"PollTryAtEpoch(uint256,string)",
+            ),
+            (
+                &IConditionalOrder::PollNever::SELECTOR,
+                b"PollNever(string)",
+            ),
+        ];
+        for (selector, signature) in cases {
+            let expected = &keccak256(signature)[..4];
+            assert_eq!(
+                selector.as_slice(),
+                expected,
+                "selector for {} does not match keccak256(signature)",
+                std::str::from_utf8(signature).unwrap(),
+            );
+        }
+    }
+
+    /// The six `ComposableCoW` `*NotAuthed`-style error selectors
+    /// must match the canonical `keccak256(signature)[..4]` values.
+    #[test]
+    fn composable_cow_error_selectors_match_keccak() {
+        let cases: &[(&[u8; 4], &[u8])] = &[
+            (
+                &ComposableCoWErrors::ProofNotAuthed::SELECTOR,
+                b"ProofNotAuthed()",
+            ),
+            (
+                &ComposableCoWErrors::SingleOrderNotAuthed::SELECTOR,
+                b"SingleOrderNotAuthed()",
+            ),
+            (
+                &ComposableCoWErrors::SwapGuardRestricted::SELECTOR,
+                b"SwapGuardRestricted()",
+            ),
+            (
+                &ComposableCoWErrors::InvalidHandler::SELECTOR,
+                b"InvalidHandler()",
+            ),
+            (
+                &ComposableCoWErrors::InvalidFallbackHandler::SELECTOR,
+                b"InvalidFallbackHandler()",
+            ),
+            (
+                &ComposableCoWErrors::InterfaceNotSupported::SELECTOR,
+                b"InterfaceNotSupported()",
+            ),
+        ];
+        for (selector, signature) in cases {
+            let expected = &keccak256(signature)[..4];
+            assert_eq!(
+                selector.as_slice(),
+                expected,
+                "selector for {} does not match keccak256(signature)",
+                std::str::from_utf8(signature).unwrap(),
+            );
+        }
+    }
+
+    /// `decode_composable_cow_error` covers every variant of
+    /// [`ComposableCoWError`] and returns `None` for unrelated
+    /// selectors so the cascade stays safe.
+    #[test]
+    fn decode_composable_cow_error_covers_all_variants() {
+        let cases = [
+            (
+                ComposableCoWErrors::ProofNotAuthed::SELECTOR,
+                ComposableCoWError::ProofNotAuthed,
+            ),
+            (
+                ComposableCoWErrors::SingleOrderNotAuthed::SELECTOR,
+                ComposableCoWError::SingleOrderNotAuthed,
+            ),
+            (
+                ComposableCoWErrors::SwapGuardRestricted::SELECTOR,
+                ComposableCoWError::SwapGuardRestricted,
+            ),
+            (
+                ComposableCoWErrors::InvalidHandler::SELECTOR,
+                ComposableCoWError::InvalidHandler,
+            ),
+            (
+                ComposableCoWErrors::InvalidFallbackHandler::SELECTOR,
+                ComposableCoWError::InvalidFallbackHandler,
+            ),
+            (
+                ComposableCoWErrors::InterfaceNotSupported::SELECTOR,
+                ComposableCoWError::InterfaceNotSupported,
+            ),
+        ];
+        for (selector, expected) in cases {
+            assert_eq!(decode_composable_cow_error(&selector), Some(expected));
+        }
+        // Unrelated selector (an IConditionalOrder error) returns None.
+        assert_eq!(
+            decode_composable_cow_error(&IConditionalOrder::PollNever::SELECTOR),
+            None
+        );
+        assert_eq!(decode_composable_cow_error(&[]), None);
     }
 }
