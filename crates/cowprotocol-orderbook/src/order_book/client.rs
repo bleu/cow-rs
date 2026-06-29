@@ -46,8 +46,12 @@ impl<Target> OrderBookApiBuilder<Target> {
         }
     }
 
-    /// Use a pre-configured [`reqwest::Client`] for the orderbook API
-    /// (native targets only; wasm32 builds drive the browser's `fetch`).
+    /// Use a pre-configured [`reqwest::Client`] for the orderbook API.
+    ///
+    /// Native targets only: this method is absent on `wasm32`, where the
+    /// browser's `fetch` global is the only backend. Cross-target code
+    /// should call [`Self::with_transport`] with a [`DefaultTransport`]
+    /// instead, which resolves to the correct backend per target.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn with_client(mut self, client: reqwest::Client) -> Self {
         self.transport = Some(ReqwestTransport::new(client));
@@ -124,9 +128,13 @@ impl OrderBookApi {
         Self::new_with_transport(base_url, DefaultTransport::default())
     }
 
-    /// Client around a pre-configured [`reqwest::Client`] (native targets
-    /// only; wasm32 builds drive the browser's `fetch`). Use for custom
+    /// Client around a pre-configured [`reqwest::Client`]. Use for custom
     /// timeouts, proxies, TLS roots, or auth middleware.
+    ///
+    /// Native targets only: this constructor is absent on `wasm32`, where
+    /// the browser's `fetch` global is the only backend. Cross-target
+    /// code should build over a [`DefaultTransport`] via
+    /// [`Self::new_with_transport`] (or the chain constructors) instead.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn with_client(base_url: url::Url, client: reqwest::Client) -> Self {
         Self::new_with_transport(base_url, ReqwestTransport::new(client))

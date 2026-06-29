@@ -1,4 +1,24 @@
 //! CoW Protocol orderbook DTOs, quote builders, and HTTP client.
+//!
+//! # HTTP transport
+//!
+//! The `http-client` feature (enabled by default) gives every
+//! constructor a working backend without naming a transport. The
+//! ergonomic constructors build over [`DefaultTransport`], a type alias
+//! resolved per target: `ReqwestTransport` on native builds and
+//! `FetchTransport` (the browser `fetch` global) on `wasm32`. Only one
+//! concrete type exists per target, so `ReqwestTransport` is absent on
+//! `wasm32` and `FetchTransport` is absent on native; name
+//! [`DefaultTransport`] in cross-target code rather than a concrete
+//! backend.
+//!
+//! On native targets `http-client` links `reqwest`; on `wasm32` it
+//! links `js-sys`, `wasm-bindgen`, and `wasm-bindgen-futures` and never
+//! links `reqwest`. To supply your own backend, implement
+//! [`HttpTransport`] and pass it to
+//! [`OrderBookApi::new_with_transport`]: the trait itself stays
+//! feature-independent, so an out-of-tree backend needs neither
+//! `http-client` nor either concrete transport.
 
 #![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]

@@ -22,15 +22,15 @@ pub(crate) const CID_CODEC_RAW: u64 = 0x55;
 pub(crate) const MULTIHASH_KECCAK_256: u64 = 0x1b;
 /// Upper bound on an app-data CID string. A CIDv1 wrapping a 32-byte
 /// keccak-256 digest is ~59 chars in canonical base32 and ~75 in
-/// base16; anything far longer is malformed or hostile. Capping before
-/// `cid::Cid::from_str` stops an attacker from forcing proportional
-/// allocation in the upstream multibase decoder.
+/// base16; anything far longer is malformed or pathologically long.
+/// Capping before `cid::Cid::from_str` bounds the allocation the
+/// upstream multibase decoder would otherwise make for the input.
 pub const MAX_CID_STR_LEN: usize = 128;
 
 /// Parse an [`AppDataCid`] from its string form, rejecting input above
 /// [`MAX_CID_STR_LEN`] before the upstream multibase decoder allocates.
 /// Prefer this over `s.parse::<AppDataCid>()` whenever the string comes
-/// from untrusted input (a hostile orderbook, user-supplied metadata).
+/// from untrusted input (user-supplied or arbitrary off-chain metadata).
 pub fn parse_app_data_cid(s: &str) -> Result<AppDataCid, AppDataCidError> {
     if s.len() > MAX_CID_STR_LEN {
         return Err(AppDataCidError::CidTooLong {
@@ -54,8 +54,9 @@ pub fn app_data_cid(hash: AppDataHash) -> AppDataCid {
 
 /// Recover the embedded 32-byte digest from an [`AppDataCid`].
 /// Validates the codec, multihash code, and digest length match
-/// `cidv1(raw=0x55, multihash=keccak-256/32)` so a hostile string cannot
-/// silently re-route the orderbook lookup to a different document.
+/// `cidv1(raw=0x55, multihash=keccak-256/32)`, so a CID with the wrong
+/// codec, multihash, or digest length is rejected rather than silently
+/// mapping to a different digest.
 pub fn app_data_hash_from_cid(cid: &AppDataCid) -> Result<AppDataHash, AppDataCidError> {
     if cid.codec() != CID_CODEC_RAW {
         return Err(AppDataCidError::UnexpectedCodec(cid.codec()));

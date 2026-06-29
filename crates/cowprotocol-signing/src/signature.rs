@@ -27,8 +27,9 @@ use crate::domain::DomainSeparator;
 use crate::signing_scheme::{EcdsaSigningScheme, SigningScheme};
 
 /// Maximum accepted EIP-1271 payload, in bytes. Matches the
-/// `cowprotocol/services` cap (32 KiB); a hostile orderbook could
-/// otherwise return a multi-MB payload that buffers as a `Vec<u8>`.
+/// `cowprotocol/services` cap (32 KiB), bounding how large an
+/// over-the-wire signature payload may be before it buffers into a
+/// `Vec<u8>`.
 pub const EIP1271_MAX_LEN: usize = 32 * 1024;
 
 /// Raw ECDSA signature (`r || s || v`, 65 bytes). Type-aliased onto

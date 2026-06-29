@@ -21,10 +21,15 @@
 //!    the key. Production integrations sign with viem / ethers /
 //!    Safe and never pass a raw private key to wasm.
 //! 2. **External signing** (recommended for production): build the
-//!    EIP-712 hash with [`order_struct_hash`] +
-//!    [`eip712_message_hash`], have the caller's wallet (viem,
-//!    ethers, Safe, WalletConnect) sign it, then feed the (r, s, v)
-//!    back through [`build_order_creation`].
+//!    full EIP-712 typed-data envelope with [`eip712_payload`], have
+//!    the caller's wallet (viem, ethers, Safe, WalletConnect) sign it
+//!    via `signTypedData`, then feed the (r, s, v) back through
+//!    [`build_order_creation`]. [`eip712_payload`] returns
+//!    `{ domain, primaryType, types, message }` ready for viem / ethers
+//!    and normalises a null `receiver` to `address(0)`. Callers that
+//!    only need the 32-byte digest can instead compose
+//!    [`order_struct_hash`] + [`eip712_message_hash`], the lower-level
+//!    path that yields the same hash.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![deny(unsafe_code)]

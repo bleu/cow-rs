@@ -1138,10 +1138,7 @@ mod pipeline {
     #[tokio::test]
     async fn build_rejects_oversize_app_data_before_any_request() {
         let transport = MockTransport::default();
-        let doc = AppDataDoc {
-            app_code: Some("x".repeat(APP_DATA_SIZE_LIMIT + 1)),
-            ..AppDataDoc::default()
-        };
+        let doc = AppDataDoc::new("x".repeat(APP_DATA_SIZE_LIMIT + 1));
         let err = mock_api(&transport)
             .quote_builder()
             .with_sell_token(USDC)

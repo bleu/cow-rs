@@ -478,7 +478,12 @@ where
 pub struct OrderQuoteResponse {
     /// Quoted [`OrderQuote`]; project via [`Self::try_to_order_data`].
     pub quote: OrderQuote,
-    /// Order owner; echoed from the request.
+    /// Order owner. Must equal `request.from`: this is the address the
+    /// orderbook indexes the order under and the address the SDK packs
+    /// into the UID, so a mismatch silently binds the signature to a
+    /// different owner than intended. [`Self::try_to_order_data`]
+    /// validates this for you; a hand-built [`OrderData`] that skips that
+    /// path is the caller's responsibility to check.
     pub from: Address,
     /// ISO-8601 expiry of the quote, as the orderbook reports it.
     /// Informational only: the authoritative expiry the SDK signs into
