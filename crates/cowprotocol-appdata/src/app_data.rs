@@ -42,7 +42,7 @@ pub const APP_DATA_SIZE_LIMIT: usize = 8192;
 /// through serde and bounds the canonical-JSON size, but does not check
 /// the document against the published `@cowprotocol/app-data` JSON
 /// schema: the canonical-JSON encoding and the orderbook are the source
-/// of truth. Common fields are typed; hooks remain opaque JSON. Every
+/// of truth. All modelled fields, including hooks, are typed. Every
 /// field except `version` is optional and skipped when unset.
 ///
 /// Construct via [`AppDataDoc::new`] or [`AppDataDoc::sdk_attribution`],
@@ -65,9 +65,9 @@ pub struct AppDataDoc {
     pub metadata: AppDataMetadata,
 }
 
-/// `metadata` sub-document of [`AppDataDoc`]. Hooks stay opaque so
-/// callers can thread arbitrary pre/post arrays without this crate
-/// chasing schema tweaks.
+/// `metadata` sub-document of [`AppDataDoc`]. Carries SDK / partner
+/// attribution, typed pre/post [`AppDataHooks`], and the other optional
+/// metadata fields.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataMetadata {
@@ -86,7 +86,7 @@ pub struct AppDataMetadata {
     /// Optional UTM campaign tracking.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utm: Option<AppDataUtm>,
-    /// Pre- and post-trade hooks; opaque JSON ([`AppDataHooks`]).
+    /// Pre- and post-trade hooks ([`AppDataHooks`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hooks: Option<AppDataHooks>,
     /// Optional flashloan parameters.
@@ -125,12 +125,12 @@ pub struct AppDataOrderClass {
 /// `recipient` on the wire, matching
 /// `cowprotocol/services::app_data::PartnerFee`.
 ///
-/// Both fields are crate-private: every public path
-/// ([`AppDataDoc::with_partner_fee`],
-/// [`AppDataDoc::with_partner_fee_policy`], and `Deserialize`) routes
-/// through [`AppDataPartnerFee::new`], the single bps-validation
-/// chokepoint, so a caller cannot assemble an over-cap fee and fold it
-/// into a signed digest. Read the fields back with
+/// Both fields are crate-private. `Deserialize` and
+/// [`AppDataPartnerFee::new`] validate the bps cap eagerly; the
+/// [`AppDataDoc`] builders defer it to finalisation
+/// ([`AppDataDoc::try_hash`] / [`AppDataDoc::hash`] /
+/// [`AppDataDoc::prepare`]). Either way an over-cap fee cannot reach a
+/// signed digest. Read the fields back with
 /// [`AppDataPartnerFee::policy`] / [`AppDataPartnerFee::recipient`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppDataPartnerFee {
@@ -231,8 +231,9 @@ impl<'de> Deserialize<'de> for AppDataPartnerFee {
 
 /// Reject [`FeePolicy`] values whose bps fields exceed
 /// [`PARTNER_FEE_BPS_MAX`]. A hostile document otherwise pins a
-/// `bps = u64::MAX` that the contract silently clamps. Private: every
-/// public path routes through [`AppDataPartnerFee::new`].
+/// `bps = u64::MAX` that the contract silently clamps. Private: called
+/// from [`AppDataPartnerFee::new`], the deserialiser, and the
+/// [`AppDataDoc`] finalisation path.
 fn validate_fee_policy(policy: &FeePolicy) -> Result<(), AppDataError> {
     let check = |field: &'static str, value: u16| -> Result<(), AppDataError> {
         if value > PARTNER_FEE_BPS_MAX {
@@ -388,9 +389,39 @@ pub struct AppDataUtm {
     pub utm_term: Option<String>,
 }
 
-/// Opaque hooks payload alias; the nested arrays are intentionally
-/// not modelled.
-pub type AppDataHooks = serde_json::Value;
+/// `metadata.hooks`: the pre- and post-trade hook calls a solver runs
+/// around settlement. Mirrors the `@cowprotocol/app-data` hooks schema
+/// (`hooks/v0.2.0.json`): an optional `version` plus `pre` and `post`
+/// arrays of [`Hook`] interactions. The arrays are always serialised
+/// (empty included) so consumers can read `hooks.pre` / `hooks.post`
+/// unconditionally.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppDataHooks {
+    /// Optional hooks-schema version (e.g. `"0.1.0"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Hook calls executed before the trade is settled.
+    #[serde(default)]
+    pub pre: Vec<Hook>,
+    /// Hook calls executed after the trade is settled.
+    #[serde(default)]
+    pub post: Vec<Hook>,
+}
+
+/// A single hook interaction: one contract call a solver executes as
+/// part of an order's pre- or post-trade [`AppDataHooks`].
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Hook {
+    /// Address of the contract to call.
+    pub target: Address,
+    /// Calldata for the call; serialises as `0x`-prefixed hex.
+    pub call_data: Bytes,
+    /// Gas limit for the call, as a decimal string (the schema's
+    /// `gasLimit`).
+    pub gas_limit: String,
+}
 
 impl AppDataDoc {
     /// Minimal constructor. Pins `version` to [`LATEST_APP_DATA_VERSION`]
@@ -433,24 +464,33 @@ impl AppDataDoc {
     }
 
     /// Attach a *volume* partner fee (`bps` of the swap value to
-    /// `recipient`). Fails closed via [`AppDataError::FeeOutOfRange`]
-    /// when `bps > PARTNER_FEE_BPS_MAX` (`10_000`), so an
-    /// attacker-controlled value cannot be folded into the signed
-    /// app-data digest unchecked.
-    pub fn with_partner_fee(self, bps: u16, recipient: Address) -> Result<Self, AppDataError> {
+    /// `recipient`). Infallible, so the builder chain stays fluent: the
+    /// `bps <= PARTNER_FEE_BPS_MAX` (`10_000`) cap is enforced when the
+    /// document is finalised by [`Self::try_hash`] / [`Self::hash`] /
+    /// [`Self::prepare`], so an over-cap value still cannot reach a
+    /// signed digest. Use [`AppDataPartnerFee::new`] for eager
+    /// validation at value-construction time.
+    #[must_use]
+    pub const fn with_partner_fee(self, bps: u16, recipient: Address) -> Self {
         self.with_partner_fee_policy(FeePolicy::Volume { bps }, recipient)
     }
 
-    /// Attach a partner fee with an explicit [`FeePolicy`]. Fails
-    /// closed via [`AppDataError::FeeOutOfRange`] on any over-cap
-    /// `bps` / `maxVolumeBps`; see [`Self::with_partner_fee`].
-    pub fn with_partner_fee_policy(
-        mut self,
-        policy: FeePolicy,
-        recipient: Address,
-    ) -> Result<Self, AppDataError> {
-        self.metadata.partner_fee = Some(AppDataPartnerFee::new(policy, recipient)?);
-        Ok(self)
+    /// Attach a partner fee with an explicit [`FeePolicy`]. Infallible;
+    /// the over-cap `bps` / `maxVolumeBps` check runs at finalisation,
+    /// see [`Self::with_partner_fee`].
+    #[must_use]
+    pub const fn with_partner_fee_policy(mut self, policy: FeePolicy, recipient: Address) -> Self {
+        self.metadata.partner_fee = Some(AppDataPartnerFee { policy, recipient });
+        self
+    }
+
+    /// Attach pre- and post-trade [`AppDataHooks`]. Restores the fluent
+    /// chain for hooks, the only metadata field that previously had no
+    /// builder method.
+    #[must_use]
+    pub fn with_hooks(mut self, hooks: AppDataHooks) -> Self {
+        self.metadata.hooks = Some(hooks);
+        self
     }
 
     /// Attach a typed [`AppDataFlashloan`].
@@ -519,10 +559,24 @@ impl AppDataDoc {
             .expect("AppDataDoc must fit within APP_DATA_SIZE_LIMIT")
     }
 
-    /// Fallible [`Self::hash`]; rejects documents above
-    /// [`APP_DATA_SIZE_LIMIT`] before the orderbook would.
+    /// Fallible [`Self::hash`]; rejects an over-cap partner fee or a
+    /// document above [`APP_DATA_SIZE_LIMIT`] before the orderbook
+    /// would.
     pub fn try_hash(&self) -> Result<AppDataHash, AppDataError> {
-        let json = self.canonical_json();
+        self.try_hash_of(&self.canonical_json())
+    }
+
+    /// Validate the finalised document and hash the supplied canonical
+    /// JSON. Shared by [`Self::try_hash`] and [`Self::prepare`] so both
+    /// run the same partner-fee and size checks over a single
+    /// [`Self::canonical_json`] call.
+    fn try_hash_of(&self, json: &str) -> Result<AppDataHash, AppDataError> {
+        // Partner-fee bps validation is deferred from the builder to
+        // here, so the only way an over-cap fee reaches a digest is
+        // blocked at the point the digest is produced.
+        if let Some(partner_fee) = &self.metadata.partner_fee {
+            validate_fee_policy(&partner_fee.policy)?;
+        }
         if json.len() > APP_DATA_SIZE_LIMIT {
             return Err(AppDataError::DocumentTooLarge {
                 len: json.len(),
@@ -531,6 +585,41 @@ impl AppDataDoc {
         }
         Ok(keccak256(json.as_bytes()))
     }
+
+    /// Derive the three correlated submission artifacts in one call,
+    /// all from a single [`Self::canonical_json`] so they cannot drift:
+    /// the `fullAppData` body to submit, its [`AppDataHash`] for the
+    /// signed `Order.appData` field, and the IPFS [`AppDataCid`] the
+    /// orderbook pins. Validates the partner fee and document size like
+    /// [`Self::try_hash`].
+    pub fn prepare(&self) -> Result<PreparedAppData, AppDataError> {
+        let full_app_data = self.canonical_json();
+        let hash = self.try_hash_of(&full_app_data)?;
+        let cid = app_data_cid(hash);
+        Ok(PreparedAppData {
+            full_app_data,
+            hash,
+            cid,
+        })
+    }
+}
+
+/// The three correlated artifacts an order submission derives from one
+/// [`AppDataDoc`], produced together by [`AppDataDoc::prepare`] so the
+/// bytes submitted, the digest signed, and the CID pinned cannot
+/// disagree.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedAppData {
+    /// Canonical JSON body. Submit verbatim as
+    /// `AppDataDocument.full_app_data` (and the
+    /// `PUT /api/v1/app_data/{hash}` body); the orderbook hashes these
+    /// exact bytes.
+    pub full_app_data: String,
+    /// `keccak256(full_app_data)`: the digest embedded in the signed
+    /// `Order.appData` field.
+    pub hash: AppDataHash,
+    /// IPFS CIDv1 the orderbook pins the document under.
+    pub cid: AppDataCid,
 }
 
 impl std::str::FromStr for AppDataDoc {
