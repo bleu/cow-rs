@@ -31,6 +31,27 @@ pub fn app_data_cid_from_hash(hash_hex: &str) -> Result<String, JsValue> {
     Ok(app_data_cid(hash).to_string())
 }
 
+/// The three correlated submission artifacts for an app-data document,
+/// derived together so they cannot drift: `{ fullAppData, hash, cid }`.
+/// `fullAppData` is the canonical JSON to submit, `hash` the digest to
+/// embed in `OrderData.app_data` before signing, and `cid` the IPFS CID
+/// the orderbook pins. Mirrors the native
+/// [`AppDataDoc::prepare`](cowprotocol::AppDataDoc::prepare); prefer it
+/// over calling [`app_data_hash_from_json`] and
+/// [`app_data_cid_from_hash`] separately. The input is re-canonicalised,
+/// so `fullAppData` is what you should submit regardless of the input
+/// formatting.
+#[wasm_bindgen]
+pub fn app_data_prepared(json: &str) -> Result<JsValue, JsValue> {
+    let doc = json.parse::<AppDataDoc>().map_err(js_err("parse failed"))?;
+    let prepared = doc.prepare().map_err(js_err("prepare failed"))?;
+    to_js(&serde_json::json!({
+        "fullAppData": prepared.full_app_data,
+        "hash": prepared.hash.to_string(),
+        "cid": prepared.cid.to_string(),
+    }))
+}
+
 /// 32-byte digest of `keccak256("{}")`: the empty app-data sentinel.
 #[wasm_bindgen]
 pub fn empty_app_data_hash() -> String {
