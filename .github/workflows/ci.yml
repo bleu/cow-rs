@@ -214,10 +214,9 @@ jobs:
     name: semver-checks
     runs-on: ubuntu-latest
     # Gates against accidental SemVer breakage on the published
-    # `cowprotocol` crate. Non-blocking (`continue-on-error: true`) until
-    # the first crates.io publish establishes a baseline; flip to
-    # blocking and add to `ci-success.needs` once 1.0.0-alpha is up.
-    continue-on-error: true
+    # `cowprotocol` crate. Blocking now that 0.1.0 establishes a
+    # crates.io baseline; cargo-semver-checks applies Cargo's 0.x rules
+    # (breaking changes require a minor bump).
     env:
       RUSTFLAGS: ""
     steps:
@@ -238,8 +237,7 @@ jobs:
     name: ci-success
     # Aggregator job: single status check for branch protection so the
     # required-check list does not need to change every time a job is
-    # added or renamed. `semver-checks` is intentionally not listed
-    # while it is still non-blocking.
+    # added or renamed.
     runs-on: ubuntu-latest
     if: always()
     needs:
@@ -253,6 +251,7 @@ jobs:
       - wasm-test-signing
       - docs
       - deny
+      - semver-checks
     steps:
       - name: Verify all required jobs succeeded
         run: |
