@@ -286,8 +286,7 @@ impl OrderCreation {
         &self,
         domain: &crate::domain::DomainSeparator,
     ) -> std::result::Result<Address, crate::signature::SignatureError> {
-        let payload = crate::order::eip712::Order::from(&self.order_data());
-        match self.signature.recover(domain, &payload)? {
+        match self.order_data().recover_signer(domain, &self.signature)? {
             Some(recovered) if recovered.signer == self.from => Ok(self.from),
             Some(recovered) => Err(crate::signature::SignatureError::SignerMismatch {
                 declared: self.from,
