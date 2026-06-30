@@ -52,7 +52,7 @@ pub use {
     },
     signing::{
         build_order_creation, build_order_creation_eip1271, eip712_message_hash, eip712_payload,
-        order_struct_hash, order_uid,
+        ethsign_digest, order_struct_hash, order_uid,
     },
 };
 
