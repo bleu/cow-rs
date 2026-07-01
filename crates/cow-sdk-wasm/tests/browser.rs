@@ -268,11 +268,11 @@ async fn get_quote_simple_parses_response_via_mock_fetch() {
     }"#;
     let _mock = install_mock_fetch(200, Box::leak(body.to_string().into_boxed_str()));
     let payload = get_quote_simple(
-        "mainnet",
         "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
         "0x6B175474E89094C44Da98b954EedeAC495271d0F",
         "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
         "100000000",
+        "mainnet",
     )
     .await
     .unwrap_or_else(|err| panic!("get_quote_simple: {}", err.as_string().unwrap_or_default()));
@@ -337,7 +337,7 @@ async fn get_quote_accepts_pinned_app_data() {
         }"#,
     )
     .unwrap();
-    let response = get_quote("mainnet", request)
+    let response = get_quote(request, "mainnet")
         .await
         .unwrap_or_else(|err| panic!("get_quote: {}", err.as_string().unwrap_or_default()));
     let quote = Reflect::get(&response, &JsValue::from_str("quote")).expect("quote present");
@@ -476,7 +476,7 @@ async fn build_order_cancellation_round_trips_into_cancel_order() {
     // Round-trip: hand the emitted payload straight to cancel_order. A
     // successful DELETE returns 2xx with an empty body.
     let _mock = install_mock_fetch(200, "");
-    cancel_order("mainnet", cancellation)
+    cancel_order(cancellation, "mainnet")
         .await
         .unwrap_or_else(|err| panic!("cancel_order: {}", err.as_string().unwrap_or_default()));
     restore_real_fetch();
@@ -689,7 +689,7 @@ async fn post_order_rejects_wrong_from_locally() {
     let creation_json = serde_json::to_string(&creation).expect("creation to json");
     let creation_js = JSON::parse(&creation_json).expect("JSON.parse creation");
 
-    let err = post_order("mainnet", creation_js)
+    let err = post_order(creation_js, "mainnet")
         .await
         .expect_err("expected signer mismatch before fetch");
     let msg = err.as_string().unwrap_or_default();

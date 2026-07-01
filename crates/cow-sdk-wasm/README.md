@@ -28,11 +28,11 @@ const info = chain_info('mainnet');
 console.log(info.settlement, info.orderbookBaseUrl);
 
 const { response, uid } = await get_quote_simple(
-  'mainnet',
   '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // USDC
   '0x6B175474E89094C44Da98b954EedeAC495271d0F', // DAI
   '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
   '100000000',
+  'mainnet',
 );
 ```
 
@@ -75,7 +75,7 @@ const request = {
   kind:      'sell',
   sellAmountBeforeFee: '25000000', // 25 USDC, 6 decimals
 };
-const response = await get_quote('base', request);
+const response = await get_quote(request, 'base');
 
 // 2. Build this SDK's attribution app-data so the orderbook indexer
 //    can count the order. Pure compute, no network.
@@ -117,7 +117,7 @@ const creation = build_order_creation(
 );
 
 // 6. POST /api/v1/orders. Returns the assigned 56-byte UID.
-const uid = await post_order('base', creation);
+const uid = await post_order(creation, 'base');
 console.log(`https://explorer.cow.fi/base/orders/${uid}`);
 ```
 

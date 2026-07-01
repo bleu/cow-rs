@@ -186,11 +186,11 @@ await init();
 
 // 1. Quote (network).
 const { response } = await get_quote_simple(
-  'mainnet',
   '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // USDC
   '0x6B175474E89094C44Da98b954EedeAC495271d0F', // DAI
   '0x70997970C51812dc3A010C7d01b50e0d17dc79C8', // owner
   '100000000', // 100 USDC, 6 decimals
+  'mainnet',
 );
 
 // 2. Sign in-shim.
@@ -200,7 +200,7 @@ const sig = sign_eip712(response.quote, 'mainnet', PRIVATE_KEY_HEX);
 const creation = build_order_creation(
   response.quote, sig, response.from, 'mainnet', '{}', response.id,
 );
-const uid = await post_order('mainnet', creation);
+const uid = await post_order(creation, 'mainnet');
 console.log(`https://explorer.cow.fi/orders/${uid}`);
 ```
 
@@ -222,11 +222,11 @@ import init, {
 await init();
 
 const { response } = await get_quote_simple(
-  'mainnet',
   '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
   '0x6B175474E89094C44Da98b954EedeAC495271d0F',
   ACCOUNT,
   '100000000',
+  'mainnet',
 );
 const payload = eip712_payload(response.quote, 'mainnet');
 ```
@@ -276,7 +276,7 @@ const sig = {
 };
 
 const creation = build_order_creation(response.quote, sig, ACCOUNT, 'mainnet', '{}', response.id);
-const uid = await post_order('mainnet', creation);
+const uid = await post_order(creation, 'mainnet');
 ```
 
 **Conformance**. `eip712_payload` produces the digest

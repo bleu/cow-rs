@@ -34,6 +34,19 @@
 //!    [`cancellation_ethsign_digest`] produce what the wallet signs,
 //!    then [`build_order_cancellation`] lifts the (r, s, v) into the
 //!    `DELETE`-order payload [`cancel_order`] expects.
+//!
+//! # Parameter-ordering convention
+//!
+//! Every exported function orders its arguments the same way, so callers
+//! build muscle memory instead of consulting the docs per call: the
+//! **primary subject or payload comes first** (the `orderData`, the
+//! `orderUid`, the quote `request`, the token being priced), **then the
+//! `chain`**, **then any auxiliaries** (`owner`, app-data JSON), with
+//! **optional pagination or ids last** (`offset` / `limit`, `quoteId`).
+//! Functions taking only a payload (or only a `chain`) are unaffected.
+//! When the payload is spread across several positional arguments (for
+//! example [`get_quote_simple`]'s token tuple), those stay grouped up
+//! front and `chain` follows the group.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![deny(unsafe_code)]
