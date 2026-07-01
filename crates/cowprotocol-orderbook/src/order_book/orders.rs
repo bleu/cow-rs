@@ -112,8 +112,11 @@ pub struct Order {
 /// - `signing_scheme`, `signature` and `from` carry the owner's signature
 ///   along with the order.
 ///
-/// Use [`OrderCreation::from_signed_order_data`] to assemble the body once
-/// the owner has signed [`crate::OrderQuoteResponse::try_to_order_data`].
+/// Use [`Self::new`] to assemble the body once the owner has signed
+/// [`crate::OrderQuoteResponse::try_to_order_data`], or [`Self::builder`]
+/// when it helps to name each field explicitly (IDE completion, WASM
+/// callers, or setting the optional `quote_id` conditionally). Both
+/// enforce the same invariants and normalise the receiver identically.
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", try_from = "OrderCreationWire")]
@@ -212,8 +215,8 @@ impl TryFrom<OrderCreationWire> for OrderCreation {
     type Error = crate::error::Error;
 
     /// Reassemble an [`OrderCreation`] from its wire form, applying the
-    /// same invariants [`OrderCreation::from_signed_order_data`] enforces
-    /// on the construction path: the signature payload must parse for the
+    /// same invariants [`OrderCreation::new`] enforces on the construction
+    /// path: the signature payload must parse for the
     /// declared scheme, `from` must be non-zero, and
     /// `keccak256(app_data) == app_data_hash`. Without the digest check, a
     /// hostile orderbook (or any intermediary) could hand the SDK a body
@@ -234,7 +237,7 @@ impl TryFrom<OrderCreationWire> for OrderCreation {
             sell_token_balance: wire.sell_token_balance,
             buy_token_balance: wire.buy_token_balance,
         };
-        Self::from_signed_order_data(
+        Self::new(
             &order_data,
             signature,
             wire.from,
@@ -309,17 +312,19 @@ impl OrderCreation {
         }
     }
 
-    /// Assemble a submission body from a signed [`OrderData`] plus the
-    /// metadata required by the orderbook (`from`, signature, app-data
-    /// document, optional quote id).
+    /// Canonical constructor: assemble a submission body from a signed
+    /// [`OrderData`] plus the metadata required by the orderbook (`from`,
+    /// signature, app-data document, optional quote id). Use
+    /// [`Self::builder`] for the argument-collecting builder equivalent.
     ///
     /// Validates that `from` is non-zero (the orderbook rejects every
     /// scheme with `from = Address::ZERO`, and the contract-signed schemes
-    /// `Eip1271` / `PreSign` carry the owner explicitly there). Callers
-    /// who want to additionally cross-check that `from` matches the
-    /// recovered signer of an ECDSA signature can call
-    /// [`OrderCreation::verify_owner`] on the assembled body.
-    pub fn from_signed_order_data(
+    /// `Eip1271` / `PreSign` carry the owner explicitly there) and that
+    /// `keccak256(app_data_json)` equals the signed `order_data.app_data`
+    /// digest. Callers who want to additionally cross-check that `from`
+    /// matches the recovered signer of an ECDSA signature can call
+    /// [`Self::verify_owner`] on the assembled body.
+    pub fn new(
         order_data: &OrderData,
         signature: Signature,
         from: Address,
@@ -370,6 +375,86 @@ impl OrderCreation {
             quote_id,
         })
     }
+
+    /// Start an [`OrderCreationBuilder`] from the required fields. The
+    /// optional `quote_id` is supplied through
+    /// [`OrderCreationBuilder::with_quote_id`], and
+    /// [`OrderCreationBuilder::build`] runs the same validation as
+    /// [`Self::new`].
+    pub const fn builder(
+        order_data: &OrderData,
+        signature: Signature,
+        from: Address,
+        app_data_json: String,
+    ) -> OrderCreationBuilder {
+        OrderCreationBuilder::new(order_data, signature, from, app_data_json)
+    }
+
+    /// Renamed to [`OrderCreation::new`]; retained as a delegating alias.
+    #[deprecated(since = "0.2.0", note = "renamed to OrderCreation::new")]
+    pub fn from_signed_order_data(
+        order_data: &OrderData,
+        signature: Signature,
+        from: Address,
+        app_data_json: String,
+        quote_id: Option<i64>,
+    ) -> Result<Self> {
+        Self::new(order_data, signature, from, app_data_json, quote_id)
+    }
+}
+
+/// Argument-collecting builder for [`OrderCreation`], the discoverable
+/// counterpart to [`OrderCreation::new`].
+///
+/// Start it with [`OrderCreation::builder`], which takes the required
+/// fields (signed [`OrderData`], `signature`, owner `from`, and the
+/// canonical app-data JSON). The optional `quote_id` is set through
+/// [`Self::with_quote_id`]. [`Self::build`] validates and assembles the
+/// body exactly as [`OrderCreation::new`] does, returning the same
+/// [`Result`].
+#[derive(Clone, Debug)]
+pub struct OrderCreationBuilder {
+    order_data: OrderData,
+    signature: Signature,
+    from: Address,
+    app_data_json: String,
+    quote_id: Option<i64>,
+}
+
+impl OrderCreationBuilder {
+    const fn new(
+        order_data: &OrderData,
+        signature: Signature,
+        from: Address,
+        app_data_json: String,
+    ) -> Self {
+        Self {
+            order_data: *order_data,
+            signature,
+            from,
+            app_data_json,
+            quote_id: None,
+        }
+    }
+
+    /// Set the optional `quote_id` returned by `POST /api/v1/quote`.
+    #[must_use]
+    pub const fn with_quote_id(mut self, quote_id: i64) -> Self {
+        self.quote_id = Some(quote_id);
+        self
+    }
+
+    /// Validate and assemble the [`OrderCreation`], delegating to
+    /// [`OrderCreation::new`].
+    pub fn build(self) -> Result<OrderCreation> {
+        OrderCreation::new(
+            &self.order_data,
+            self.signature,
+            self.from,
+            self.app_data_json,
+            self.quote_id,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -414,11 +499,11 @@ mod tests {
         PrivateKeySigner::from_bytes(&U256::from(1u64).to_be_bytes().into()).unwrap()
     }
 
-    /// `from_signed_order_data` rejects a zero `from` address locally
-    /// rather than letting the orderbook reject it.
+    /// `new` rejects a zero `from` address locally rather than letting
+    /// the orderbook reject it.
     #[test]
-    fn from_signed_order_data_rejects_zero_from_address() {
-        let err = OrderCreation::from_signed_order_data(
+    fn new_rejects_zero_from_address() {
+        let err = OrderCreation::new(
             &OrderData::default(),
             zero_eip712_signature(),
             Address::ZERO,
@@ -432,12 +517,11 @@ mod tests {
         );
     }
 
-    /// R21: `from_signed_order_data` rejects an `app_data` JSON document
-    /// whose keccak256 does not match the `OrderData::app_data` digest the
-    /// user signed against.
+    /// R21: `new` rejects an `app_data` JSON document whose keccak256 does
+    /// not match the `OrderData::app_data` digest the user signed against.
     #[test]
-    fn from_signed_order_data_rejects_app_data_digest_mismatch() {
-        let err = OrderCreation::from_signed_order_data(
+    fn new_rejects_app_data_digest_mismatch() {
+        let err = OrderCreation::new(
             &empty_app_data_order(),
             zero_eip712_signature(),
             address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
@@ -465,7 +549,7 @@ mod tests {
     /// be relayed downstream.
     #[test]
     fn deserialise_rejects_app_data_digest_mismatch() {
-        let creation = OrderCreation::from_signed_order_data(
+        let creation = OrderCreation::new(
             &empty_app_data_order(),
             zero_eip712_signature(),
             address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
@@ -487,9 +571,9 @@ mod tests {
     /// positive owner assertion for an obviously bogus body.
     #[test]
     fn verify_owner_rejects_zero_from_for_onchain_schemes() {
-        // Build the OrderCreation directly, bypassing
-        // `from_signed_order_data` (which already rejects zero-from), so we
-        // reproduce the wire shape an attacker could synthesise.
+        // Build the OrderCreation directly, bypassing `new` (which already
+        // rejects zero-from), so we reproduce the wire shape an attacker
+        // could synthesise.
         let creation = OrderCreation {
             sell_token: Address::ZERO,
             buy_token: Address::ZERO,
@@ -536,7 +620,7 @@ mod tests {
             .sign(EcdsaSigningScheme::Eip712, &domain, &signer)
             .unwrap();
         // Build the body with the *wrong* declared owner.
-        let creation = OrderCreation::from_signed_order_data(
+        let creation = OrderCreation::new(
             &order_data,
             signature,
             impostor,
@@ -569,7 +653,7 @@ mod tests {
         let signature = order_data
             .sign(EcdsaSigningScheme::Eip712, &domain, &signer)
             .unwrap();
-        let creation = OrderCreation::from_signed_order_data(
+        let creation = OrderCreation::new(
             &order_data,
             signature,
             owner,
@@ -623,5 +707,77 @@ mod tests {
             ),
             "signature failure must survive lifting into Error::VerifyOwner"
         );
+    }
+
+    /// The deprecated `from_signed_order_data` alias must still delegate to
+    /// [`OrderCreation::new`], producing an identical body.
+    #[test]
+    #[allow(deprecated)]
+    fn from_signed_order_data_delegates_to_new() {
+        let owner = address!("70997970C51812dc3A010C7d01b50e0d17dc79C8");
+        let via_new = OrderCreation::new(
+            &empty_app_data_order(),
+            zero_eip712_signature(),
+            owner,
+            EMPTY_APP_DATA_JSON.to_owned(),
+            Some(42),
+        )
+        .unwrap();
+        let via_alias = OrderCreation::from_signed_order_data(
+            &empty_app_data_order(),
+            zero_eip712_signature(),
+            owner,
+            EMPTY_APP_DATA_JSON.to_owned(),
+            Some(42),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&via_new).unwrap(),
+            serde_json::to_value(&via_alias).unwrap()
+        );
+    }
+
+    /// [`OrderCreationBuilder`] produces the same body as
+    /// [`OrderCreation::new`] with the equivalent `quote_id`.
+    #[test]
+    fn builder_matches_new() {
+        let owner = address!("70997970C51812dc3A010C7d01b50e0d17dc79C8");
+        let via_new = OrderCreation::new(
+            &empty_app_data_order(),
+            zero_eip712_signature(),
+            owner,
+            EMPTY_APP_DATA_JSON.to_owned(),
+            Some(7),
+        )
+        .unwrap();
+        let via_builder = OrderCreation::builder(
+            &empty_app_data_order(),
+            zero_eip712_signature(),
+            owner,
+            EMPTY_APP_DATA_JSON.to_owned(),
+        )
+        .with_quote_id(7)
+        .build()
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&via_new).unwrap(),
+            serde_json::to_value(&via_builder).unwrap()
+        );
+    }
+
+    /// The builder's `quote_id` is optional; omitting it matches
+    /// [`OrderCreation::new`] with `None`.
+    #[test]
+    fn builder_defaults_quote_id_to_none() {
+        let owner = address!("70997970C51812dc3A010C7d01b50e0d17dc79C8");
+        let creation = OrderCreation::builder(
+            &empty_app_data_order(),
+            zero_eip712_signature(),
+            owner,
+            EMPTY_APP_DATA_JSON.to_owned(),
+        )
+        .build()
+        .unwrap();
+        assert_eq!(creation.quote_id, None);
     }
 }

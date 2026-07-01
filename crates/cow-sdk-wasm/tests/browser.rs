@@ -532,7 +532,7 @@ fn sdk_app_data_json_and_hash_are_consistent() {
 #[wasm_bindgen_test]
 fn build_order_creation_rejects_overflowing_quote_id() {
     // App-data hash matching the canonical empty document `"{}"`, so
-    // `from_signed_order_data` cannot reject the body on the
+    // `OrderCreation::new` cannot reject the body on the
     // hash-mismatch path before the `quote_id` check fires. Use the
     // app-data hash sentinel from the SDK for the same reason.
     let empty_hash = empty_app_data_hash();

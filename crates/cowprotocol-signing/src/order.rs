@@ -74,7 +74,7 @@ pub struct OrderData {
     /// is semantically equal to `None`, but raw `OrderData` you build and
     /// sign yourself is not normalised: the `Some(ZERO)` to `None` collapse
     /// only happens when you go through the orderbook crate's
-    /// `OrderCreation::from_signed_order_data`.
+    /// `OrderCreation::new`.
     #[serde(default)]
     pub receiver: Option<Address>,
     /// Atomic units of `sell_token`.

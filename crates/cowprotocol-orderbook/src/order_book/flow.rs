@@ -532,7 +532,7 @@ impl<T: HttpTransport + Clone> QuotedOrder<T> {
                 reason: "full app-data JSON is required to submit a quote pinned \
                          by a non-empty hash",
             })?;
-        let order = OrderCreation::from_signed_order_data(
+        let order = OrderCreation::new(
             &order_data,
             signature,
             self.response.from,

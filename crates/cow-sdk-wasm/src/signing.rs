@@ -245,7 +245,7 @@ fn to_quote_id(quote_id: Option<u64>) -> Result<Option<i64>, JsValue> {
 /// Shared tail of [`build_order_creation`] and
 /// [`build_order_creation_eip1271`]: thread the parsed `signature`,
 /// `owner`, `chain`, app-data JSON and `quote_id` into core's
-/// `OrderCreation::from_signed_order_data`, then run the local
+/// `OrderCreation::new`, then run the local
 /// `verify_owner` guard against the chain's settlement domain before
 /// handing the body back to JS. The two public exports differ only in
 /// how they build `signature`.
@@ -260,7 +260,7 @@ fn assemble_creation(
     let owner = parse_address(owner)?;
     let domain = parse_chain(chain)?.settlement_domain();
     let quote_id = to_quote_id(quote_id)?;
-    let creation = cowprotocol::OrderCreation::from_signed_order_data(
+    let creation = cowprotocol::OrderCreation::new(
         &order,
         signature,
         owner,
