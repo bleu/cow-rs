@@ -207,15 +207,15 @@ fn sign_with_scheme(
 pub fn build_order_creation(
     order_data: JsValue,
     signature: JsValue,
-    owner: &str,
     chain: &str,
+    owner: &str,
     app_data_json: &str,
     quote_id: Option<u64>,
 ) -> Result<JsValue, JsValue> {
     let order: OrderData = from_js(order_data)?;
     let (ecdsa, scheme) = ecdsa_from_bag(signature)?;
     let signature = Signature::from_ecdsa(ecdsa, scheme);
-    assemble_creation(order, signature, owner, chain, app_data_json, quote_id)
+    assemble_creation(order, signature, chain, owner, app_data_json, quote_id)
 }
 
 /// The `{ signingScheme, r, s, v }` bag both external-signing builders
@@ -258,7 +258,7 @@ fn to_quote_id(quote_id: Option<u64>) -> Result<Option<i64>, JsValue> {
 
 /// Shared tail of [`build_order_creation`] and
 /// [`build_order_creation_eip1271`]: thread the parsed `signature`,
-/// `owner`, `chain`, app-data JSON and `quote_id` into core's
+/// `chain`, `owner`, app-data JSON and `quote_id` into core's
 /// `OrderCreation::from_signed_order_data`, then run the local
 /// `verify_owner` guard against the chain's settlement domain before
 /// handing the body back to JS. The two public exports differ only in
@@ -266,8 +266,8 @@ fn to_quote_id(quote_id: Option<u64>) -> Result<Option<i64>, JsValue> {
 fn assemble_creation(
     order: OrderData,
     signature: Signature,
-    owner: &str,
     chain: &str,
+    owner: &str,
     app_data_json: &str,
     quote_id: Option<u64>,
 ) -> Result<JsValue, JsValue> {
@@ -310,8 +310,8 @@ fn assemble_creation(
 pub fn build_order_creation_eip1271(
     order_data: JsValue,
     signature_hex: &str,
-    owner: &str,
     chain: &str,
+    owner: &str,
     app_data_json: &str,
     quote_id: Option<u64>,
 ) -> Result<JsValue, JsValue> {
@@ -321,7 +321,7 @@ pub fn build_order_creation_eip1271(
         .map_err(js_err("invalid signature hex"))?;
     let signature = Signature::from_bytes(SigningScheme::Eip1271, &bytes)
         .map_err(js_err("invalid eip1271 signature"))?;
-    assemble_creation(order, signature, owner, chain, app_data_json, quote_id)
+    assemble_creation(order, signature, chain, owner, app_data_json, quote_id)
 }
 
 /// Canonical EIP-712 typed-data payload for a single-order cancellation,

@@ -110,8 +110,8 @@ const v = parseInt(signatureHex.slice(130, 132), 16);
 const creation = build_order_creation(
   orderData,
   { signingScheme: 'eip712', r, s, v },
-  account,
   'base', // chain: selects the EIP-712 domain used for owner recovery
+  account,
   appDataJson, // PUT against /api/v1/app_data/{hash} by the orderbook
   response.id, // quote_id for solver fee accounting
 );

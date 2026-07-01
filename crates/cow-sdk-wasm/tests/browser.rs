@@ -620,8 +620,8 @@ fn build_order_creation_rejects_overflowing_quote_id() {
     let err = build_order_creation(
         order_js,
         signature,
-        "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
         "mainnet",
+        "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
         "{}",
         Some(u64::MAX),
     )
