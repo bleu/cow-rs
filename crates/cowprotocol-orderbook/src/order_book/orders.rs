@@ -765,6 +765,25 @@ mod tests {
         );
     }
 
+    /// [`OrderCreationBuilder::build`] surfaces the same validation error
+    /// as [`OrderCreation::new`], locking the one-line delegation against
+    /// future divergence.
+    #[test]
+    fn builder_build_surfaces_new_validation_error() {
+        let err = OrderCreation::builder(
+            &empty_app_data_order(),
+            zero_eip712_signature(),
+            Address::ZERO,
+            EMPTY_APP_DATA_JSON.to_owned(),
+        )
+        .build()
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::OrderCreationInvalid { field: "from", .. }),
+            "got: {err}"
+        );
+    }
+
     /// The builder's `quote_id` is optional; omitting it matches
     /// [`OrderCreation::new`] with `None`.
     #[test]
