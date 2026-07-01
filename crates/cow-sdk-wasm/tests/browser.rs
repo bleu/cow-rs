@@ -30,9 +30,9 @@ use {
 
 use cow_sdk_wasm::{
     app_data_cid_from_hash, app_data_hash_from_json, build_order_cancellation,
-    build_order_creation, cancel_order, chain_info, domain_separator, empty_app_data_hash,
-    get_quote, get_quote_simple, order_uid, post_order, sdk_app_data_hash, sdk_app_data_json,
-    to_signed_order_data, version,
+    build_order_creation, cancel_order, cancellation_eip712_payload, cancellation_ethsign_digest,
+    chain_info, domain_separator, empty_app_data_hash, get_quote, get_quote_simple, order_uid,
+    post_order, sdk_app_data_hash, sdk_app_data_json, to_signed_order_data, version,
 };
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -480,6 +480,79 @@ async fn build_order_cancellation_round_trips_into_cancel_order() {
         .await
         .unwrap_or_else(|err| panic!("cancel_order: {}", err.as_string().unwrap_or_default()));
     restore_real_fetch();
+}
+
+/// `cancellation_eip712_payload` returns the `{ domain, primaryType,
+/// types, message }` envelope a wallet's `signTypedData` accepts. Assert
+/// the wasm wiring threads the right chain accessors (`c.id()` into
+/// `domain.chainId`), pins `primaryType` to `OrderCancellation`,
+/// round-trips the uid into `message.orderUid`, and omits the
+/// `EIP712Domain` typedef so viem / ethers do not throw on a duplicate.
+#[wasm_bindgen_test]
+fn cancellation_eip712_payload_has_expected_envelope() {
+    let uid = format!("0x{}", "22".repeat(56));
+    let payload = cancellation_eip712_payload(&uid, "mainnet").unwrap_or_else(|err| {
+        panic!(
+            "cancellation_eip712_payload: {}",
+            err.as_string().unwrap_or_default()
+        )
+    });
+
+    let primary_type = Reflect::get(&payload, &JsValue::from_str("primaryType"))
+        .expect("primaryType present")
+        .as_string()
+        .expect("primaryType string");
+    assert_eq!(primary_type, "OrderCancellation");
+
+    let domain = Reflect::get(&payload, &JsValue::from_str("domain")).expect("domain present");
+    let chain_id = Reflect::get(&domain, &JsValue::from_str("chainId"))
+        .expect("chainId present")
+        .as_f64()
+        .expect("chainId number");
+    assert_eq!(chain_id, 1.0, "mainnet chainId should be 1");
+
+    let message = Reflect::get(&payload, &JsValue::from_str("message")).expect("message present");
+    let order_uid = Reflect::get(&message, &JsValue::from_str("orderUid"))
+        .expect("orderUid present")
+        .as_string()
+        .expect("orderUid string");
+    assert_eq!(
+        order_uid, uid,
+        "message.orderUid should round-trip the input"
+    );
+
+    // The `EIP712Domain` typedef is deliberately omitted so ethers v6 /
+    // viem build it from the `domain` object instead of throwing on a
+    // duplicate entry.
+    let types = Reflect::get(&payload, &JsValue::from_str("types")).expect("types present");
+    assert!(
+        !Reflect::has(&types, &JsValue::from_str("EIP712Domain")).unwrap_or(true),
+        "types should omit the EIP712Domain entry",
+    );
+    assert!(
+        Reflect::has(&types, &JsValue::from_str("OrderCancellation")).unwrap_or(false),
+        "types should carry the OrderCancellation entry",
+    );
+}
+
+/// `cancellation_ethsign_digest` returns the 0x-prefixed 32-byte digest
+/// an injected wallet must `personal_sign`. Assert the shape at the wasm
+/// boundary; the exact hash is locked in `cowprotocol-signing`.
+#[wasm_bindgen_test]
+fn cancellation_ethsign_digest_is_32_byte_hex() {
+    let uid = format!("0x{}", "22".repeat(56));
+    let digest = cancellation_ethsign_digest(&uid, "mainnet").unwrap_or_else(|err| {
+        panic!(
+            "cancellation_ethsign_digest: {}",
+            err.as_string().unwrap_or_default()
+        )
+    });
+    assert!(digest.starts_with("0x"), "no 0x prefix: {digest}");
+    assert_eq!(
+        digest.len(),
+        2 + 64,
+        "expected 32 bytes (64 hex chars): {digest}"
+    );
 }
 
 // ===== In-shim signing (feature-gated) =================================
