@@ -47,7 +47,7 @@ every protocol-critical path byte-for-byte against
 
 ```toml
 [dependencies]
-cowprotocol = "1.0.0-alpha.3"
+cowprotocol = "0.1.0"
 ```
 
 The crate is published as `cowprotocol` on crates.io (the `cow-rs` name was already taken on
@@ -368,9 +368,9 @@ cd tools/vector-gen && npm install && npm run gen > vectors.json
 
 ## Status
 
-**1.0.0-alpha**: the public API is locked unless a critical conformance
-issue forces a break. Patch releases (`1.0.0-alpha.N`) bring additive
-features and bug fixes; breaking changes only on minor or major bumps.
+**0.1.x**: pre-1.0, so the public API may still change. Patch releases
+(`0.1.N`) bring additive features and bug fixes; breaking changes land on
+minor bumps (`0.2.0`, ...) per Cargo's `0.x` SemVer rules.
 
 Production readiness:
 
