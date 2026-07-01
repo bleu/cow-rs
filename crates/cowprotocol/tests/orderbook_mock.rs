@@ -9,9 +9,9 @@
 
 use alloy_primitives::{Address, B256, U256, address};
 use cowprotocol::{
-    AppDataHash, BuyTokenDestination, Chain, OrderBookApi, OrderCancellations, OrderCreation,
-    OrderData, OrderKind, OrderUid, QuoteRequest, SellTokenSource, Signature,
-    SignedOrderCancellation, SigningScheme, order_book::AppDataDocument,
+    AppDataHash, BuyTokenDestination, Chain, OrderBookApi, OrderCancellation, OrderCancellations,
+    OrderCreation, OrderData, OrderKind, OrderUid, QuoteRequest, SellTokenSource, Signature,
+    SigningScheme, order_book::AppDataDocument,
 };
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -245,13 +245,9 @@ async fn cancel_order_puts_uid_in_path_and_omits_it_from_body() {
         Chain::Mainnet.id(),
         address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
     );
-    let cancellation = SignedOrderCancellation::sign(
-        uid,
-        cowprotocol::EcdsaSigningScheme::Eip712,
-        &domain,
-        &signer,
-    )
-    .unwrap();
+    let cancellation = OrderCancellation::from(uid)
+        .sign(cowprotocol::EcdsaSigningScheme::Eip712, &domain, &signer)
+        .unwrap();
 
     api(&server).cancel_order(&cancellation).await.unwrap();
 }

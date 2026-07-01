@@ -12,7 +12,7 @@ use {
 #[cfg(feature = "in_shim_signing")]
 use {
     crate::parse_uid, alloy_primitives::B256, alloy_signer_local::PrivateKeySigner,
-    cowprotocol::SignedOrderCancellation,
+    cowprotocol::OrderCancellation,
 };
 
 #[cfg(feature = "in_shim_signing")]
@@ -324,8 +324,8 @@ pub fn cancel_order_signed(
     let c = parse_chain(chain)?;
     let domain = c.settlement_domain();
     let signer = parse_signer(private_key_hex)?;
-    let cancellation =
-        SignedOrderCancellation::sign(uid, EcdsaSigningScheme::Eip712, &domain, &signer)
-            .map_err(js_err("sign cancellation failed"))?;
+    let cancellation = OrderCancellation::from(uid)
+        .sign(EcdsaSigningScheme::Eip712, &domain, &signer)
+        .map_err(js_err("sign cancellation failed"))?;
     to_js(&cancellation)
 }

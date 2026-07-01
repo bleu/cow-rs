@@ -125,7 +125,10 @@ pub use crate::{
         EMPTY_APP_DATA_JSON, FeePolicy, LATEST_APP_DATA_VERSION, MAX_CID_STR_LEN, app_data_cid,
         app_data_hash_from_cid, parse_app_data_cid,
     },
-    cancellation::{OrderCancellations, SignedOrderCancellation, SignedOrderCancellations},
+    cancellation::{
+        OrderCancellation, OrderCancellations, SignedOrderCancellation, SignedOrderCancellations,
+        cancellation_typed_data,
+    },
     chain::{Chain, UnsupportedChain},
     composable::{
         COMPOSABLE_COW, CURRENT_BLOCK_TIMESTAMP_FACTORY, ComposableCoW, ConditionalOrderParams,

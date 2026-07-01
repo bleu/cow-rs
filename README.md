@@ -139,7 +139,7 @@ assert_eq!(uid.0.len(), 56);
 | `signature` | `Signature` (all four schemes), `EcdsaSignature`, `Recovered`, `SignatureError` |
 | `domain` | `DomainSeparator`, `hashed_eip712_message`, `hashed_ethsign_message` |
 | `chain` | `Chain` (ten networks) with `orderbook_base_url`, `orderbook_barn_url`, `settlement`, `vault_relayer`, `subgraph_gateway_deployment_id` |
-| `cancellation` | `SignedOrderCancellation` (single), `OrderCancellations` (collection), `SignedOrderCancellations` |
+| `cancellation` | `OrderCancellation` (unsigned single), `OrderCancellations` (unsigned collection), `SignedOrderCancellation` / `SignedOrderCancellations` (signed bodies), `cancellation_typed_data` (EIP-712 envelope) |
 | `app_data` | `AppDataHash`, `AppDataDoc` (canonical JSON + keccak digest), `AppDataCid` (IPFS CIDv1 derivation), `AppDataDoc::sdk_attribution` for the SDK's `appCode` tag |
 | `eth_flow` | `EthFlowOrder` (non-zero `receiver` enforced at construction), `ETH_FLOW_PRODUCTION`, `ETH_FLOW_STAGING` |
 | `composable` | `ConditionalOrderParams`, `Proof`, `ComposableCoW` events, `TwapData` + `TwapStaticInput`, plus deployment addresses |

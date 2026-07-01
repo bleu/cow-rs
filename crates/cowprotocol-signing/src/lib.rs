@@ -23,7 +23,10 @@ pub mod app_data {
 }
 
 pub use self::{
-    cancellation::{OrderCancellations, SignedOrderCancellation, SignedOrderCancellations},
+    cancellation::{
+        OrderCancellation, OrderCancellations, SignedOrderCancellation, SignedOrderCancellations,
+        cancellation_typed_data,
+    },
     order::{
         BUY_ETH_ADDRESS, BuyTokenDestination, OrderClass, OrderData, OrderKind, OrderUid,
         OrderUidParseError, OrderUidParts, SellTokenSource, order_typed_data, parse_order_uid,
