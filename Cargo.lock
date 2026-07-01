@@ -1021,7 +1021,7 @@ dependencies = [
 
 [[package]]
 name = "cowprotocol"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -1055,7 +1055,7 @@ dependencies = [
 
 [[package]]
 name = "cowprotocol-orderbook"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "alloy-primitives",
  "alloy-signer-local",
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "cowprotocol-signing"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
