@@ -36,6 +36,9 @@ getrandom = { workspace = true, features = ["js"] }
 
 [dev-dependencies]
 alloy-signer-local.workspace = true
+# Dev-only: implements the async `Signer` trait for a mock signer that
+# exercises the `sign_ecdsa_async` error-mapping path.
+async-trait.workspace = true
 hex-literal.workspace = true
 # Dev-only: drives the `#[tokio::test]` async round trips. Dev
 # dependencies never reach downstream builds, so the wasm graph and the

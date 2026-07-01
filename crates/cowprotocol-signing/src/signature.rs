@@ -693,6 +693,54 @@ mod tests {
         }
     }
 
+    /// Async-only signer (implements [`alloy_signer::Signer`] but not
+    /// [`SignerSync`]) whose `sign_hash` always fails, mirroring a remote
+    /// or KMS backend that rejects the request.
+    struct FailingAsyncSigner;
+
+    #[async_trait::async_trait]
+    impl Signer for FailingAsyncSigner {
+        async fn sign_hash(&self, _hash: &B256) -> Result<PrimSignature, alloy_signer::Error> {
+            Err(alloy_signer::Error::message("remote signer offline"))
+        }
+
+        fn address(&self) -> alloy_primitives::Address {
+            alloy_primitives::Address::ZERO
+        }
+
+        fn chain_id(&self) -> Option<alloy_primitives::ChainId> {
+            None
+        }
+
+        fn set_chain_id(&mut self, _chain_id: Option<alloy_primitives::ChainId>) {}
+    }
+
+    /// [`sign_ecdsa_async`] accepts a signer that implements only the async
+    /// [`Signer`] trait, and maps the signer's own error into
+    /// [`SignatureError::SignerOther`] with its message preserved.
+    #[tokio::test]
+    async fn sign_ecdsa_async_maps_signer_error() {
+        let domain = crate::domain::settlement_domain(
+            1,
+            alloy_primitives::address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
+        );
+        let payload = probe_payload([0u8; 32]);
+
+        let err = sign_ecdsa_async(
+            EcdsaSigningScheme::Eip712,
+            &domain,
+            &payload,
+            &FailingAsyncSigner,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            SignatureError::SignerOther(ref msg) if msg.contains("remote signer offline")
+        ));
+    }
+
     #[test]
     fn recover_returns_none_for_onchain_schemes() {
         let domain = crate::domain::DomainSeparator::default();
