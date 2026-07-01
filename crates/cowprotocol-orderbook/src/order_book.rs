@@ -51,7 +51,7 @@ mod api;
 pub use api::OrderBookApi;
 
 mod flow;
-pub use flow::{OrderSubmission, QuoteRequestBuilder, QuotedOrder};
+pub use flow::{OrderSubmission, QuoteRequestBuilder, QuotedOrder, ReadyQuoteRequestBuilder};
 
 #[cfg(feature = "http-client")]
 mod client;

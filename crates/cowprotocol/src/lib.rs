@@ -149,8 +149,8 @@ pub use crate::{
     order_book::{
         AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, Order,
         OrderBookApi, OrderCreation, OrderQuote, OrderQuoteResponse, OrderStatus, OrderSubmission,
-        PriceQuality, QuoteAppData, QuoteRequest, QuoteRequestBuilder, QuotedOrder, TokenMetadata,
-        TotalSurplus, Trade,
+        PriceQuality, QuoteAppData, QuoteRequest, QuoteRequestBuilder, QuotedOrder,
+        ReadyQuoteRequestBuilder, TokenMetadata, TotalSurplus, Trade,
     },
     quote_amounts::{
         Amounts as QuoteAmounts, DEFAULT_SLIPPAGE_BPS, OrderCosts, ProtocolFeeBps,
@@ -181,7 +181,7 @@ pub mod prelude {
         AppDataDoc, AppDataHash, Chain, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON, Error,
         OrderBookApi, OrderCreation, OrderData, OrderKind, OrderQuoteResponse, OrderSubmission,
         OrderUid, PriceQuality, QuoteAppData, QuoteRequest, QuoteRequestBuilder, QuotedOrder,
-        Result, Signature, SigningScheme, settlement_domain,
+        ReadyQuoteRequestBuilder, Result, Signature, SigningScheme, settlement_domain,
     };
 
     #[cfg(feature = "http-client")]

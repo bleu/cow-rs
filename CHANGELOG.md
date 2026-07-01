@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ProofLocation` (`repr(u8)`, mirrors cow-sdk's enum) with `From<ProofLocation> for U256` and `Proof::new(location, data)`, replacing hand-assembled `U256` location codes.
 - `Chain` now implements `Serialize` (as the integer chain id), making the serde boundary symmetric; the `Deserialize` `expecting` message now admits slug strings, which were always accepted.
 - `TryFrom<alloy_chains::NamedChain> for Chain`, so `OrderBookApi::new(NamedChain::Gnosis.try_into()?)` works (new `alloy-chains` dependency, default features off).
+- `ReadyQuoteRequestBuilder<T>`, an alias for the fully-set `QuoteRequestBuilder<T, Set, Set, Set, Set>` state (the one in which `build` / `into_request` exist), re-exported alongside `QuoteRequestBuilder`; the `flow` module now documents how the type-state markers advance so IDE signatures are decipherable.
 
 ### Changed
 
