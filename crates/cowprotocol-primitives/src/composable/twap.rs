@@ -229,6 +229,128 @@ impl TwapData {
     pub fn leaf_id(&self, salt: B256) -> Result<B256, TwapError> {
         Ok(keccak256(self.to_params(salt)?.abi_encode()))
     }
+
+    /// Start a [`TwapDataBuilder`] from the three addresses every TWAP
+    /// needs. Set the remaining parameters with the builder's `with_*`
+    /// methods, then call [`TwapDataBuilder::build`].
+    pub const fn builder(
+        sell_token: Address,
+        buy_token: Address,
+        receiver: Address,
+    ) -> TwapDataBuilder {
+        TwapDataBuilder {
+            sell_token,
+            buy_token,
+            receiver,
+            sell_amount: U256::ZERO,
+            buy_amount: U256::ZERO,
+            time_between_parts: 0,
+            number_of_parts: 0,
+            start: TwapStart::AtMiningTime,
+            duration: TwapDuration::Auto,
+            app_data: B256::ZERO,
+        }
+    }
+}
+
+/// Fluent builder for [`TwapData`].
+///
+/// Obtain one from [`TwapData::builder`] with the sell, buy and receiver
+/// addresses, set the remaining parameters with the `with_*` methods,
+/// then call [`TwapDataBuilder::build`] to validate and produce a
+/// [`TwapData`]. The same checks as [`TwapData::static_input`] run once
+/// at build time, so a malformed parameter set surfaces its
+/// [`TwapError`] before the order is used.
+///
+/// Unset numeric fields default to `0` and therefore fail validation
+/// until set; `start` defaults to [`TwapStart::AtMiningTime`],
+/// `duration` to [`TwapDuration::Auto`], and `app_data` to the zero
+/// digest.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct TwapDataBuilder {
+    sell_token: Address,
+    buy_token: Address,
+    receiver: Address,
+    sell_amount: U256,
+    buy_amount: U256,
+    time_between_parts: u32,
+    number_of_parts: u32,
+    start: TwapStart,
+    duration: TwapDuration,
+    app_data: B256,
+}
+
+impl TwapDataBuilder {
+    /// Set the total sell amount across every part, in atomic units.
+    #[must_use]
+    pub const fn with_sell_amount(mut self, sell_amount: U256) -> Self {
+        self.sell_amount = sell_amount;
+        self
+    }
+
+    /// Set the total minimum buy amount across every part, in atomic
+    /// units.
+    #[must_use]
+    pub const fn with_buy_amount(mut self, buy_amount: U256) -> Self {
+        self.buy_amount = buy_amount;
+        self
+    }
+
+    /// Set the seconds between part start timestamps.
+    #[must_use]
+    pub const fn with_time_between_parts(mut self, seconds: u32) -> Self {
+        self.time_between_parts = seconds;
+        self
+    }
+
+    /// Set the number of parts the order is split into.
+    #[must_use]
+    pub const fn with_number_of_parts(mut self, number_of_parts: u32) -> Self {
+        self.number_of_parts = number_of_parts;
+        self
+    }
+
+    /// Set when the TWAP becomes active.
+    #[must_use]
+    pub const fn with_start(mut self, start: TwapStart) -> Self {
+        self.start = start;
+        self
+    }
+
+    /// Set how long each part is fillable for within its slot.
+    #[must_use]
+    pub const fn with_duration(mut self, duration: TwapDuration) -> Self {
+        self.duration = duration;
+        self
+    }
+
+    /// Set the 32-byte app-data digest applied to every part.
+    #[must_use]
+    pub const fn with_app_data(mut self, app_data: B256) -> Self {
+        self.app_data = app_data;
+        self
+    }
+
+    /// Validate the assembled parameters and produce a [`TwapData`].
+    ///
+    /// Runs the [`TwapData::static_input`] checks; returns the assembled
+    /// [`TwapData`] on success or the first [`TwapError`] otherwise.
+    pub fn build(self) -> Result<TwapData, TwapError> {
+        let data = TwapData {
+            sell_token: self.sell_token,
+            buy_token: self.buy_token,
+            receiver: self.receiver,
+            sell_amount: self.sell_amount,
+            buy_amount: self.buy_amount,
+            time_between_parts: self.time_between_parts,
+            number_of_parts: self.number_of_parts,
+            start: self.start,
+            duration: self.duration,
+            app_data: self.app_data,
+        };
+        data.static_input()?;
+        Ok(data)
+    }
 }
 
 #[cfg(test)]
@@ -421,5 +543,49 @@ mod tests {
             app_data: B256::ZERO,
         };
         assert_eq!(twap.static_input().unwrap().t0, U256::from(1u32));
+    }
+
+    /// The builder assembles the same value as a struct literal and
+    /// surfaces validation at `build()` time.
+    #[test]
+    fn builder_matches_struct_literal_and_validates() {
+        let sell_token = address!("6810e776880C02933D47DB1b9fc05908e5386b96");
+        let buy_token = address!("DAE5F1590db13E3B40423B5b5c5fbf175515910b");
+        let receiver = address!("DeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF");
+        let app_data = B256::from(hex!(
+            "d51f28edffcaaa76be4a22f6375ad289272c037f3cc072345676e88d92ced8b5"
+        ));
+        let built = TwapData::builder(sell_token, buy_token, receiver)
+            .with_sell_amount(U256::from(1_000_000_000_000_000_000_u128))
+            .with_buy_amount(U256::from(1_000_000_000_000_000_000_u128))
+            .with_time_between_parts(3600)
+            .with_number_of_parts(10)
+            .with_start(TwapStart::AtEpoch(1))
+            .with_duration(TwapDuration::LimitDuration(1800))
+            .with_app_data(app_data)
+            .build()
+            .unwrap();
+        let expected = TwapData {
+            sell_token,
+            buy_token,
+            receiver,
+            sell_amount: U256::from(1_000_000_000_000_000_000_u128),
+            buy_amount: U256::from(1_000_000_000_000_000_000_u128),
+            time_between_parts: 3600,
+            number_of_parts: 10,
+            start: TwapStart::AtEpoch(1),
+            duration: TwapDuration::LimitDuration(1800),
+            app_data,
+        };
+        assert_eq!(built, expected);
+
+        // Defaults (zero amounts / parts) fail the same checks as
+        // `static_input`, so `build()` surfaces the error.
+        assert_eq!(
+            TwapData::builder(sell_token, buy_token, receiver)
+                .build()
+                .unwrap_err(),
+            TwapError::InvalidNumParts,
+        );
     }
 }
