@@ -1,6 +1,6 @@
 [package]
 name = "cowprotocol-orderbook"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -42,7 +42,7 @@ subgraph = ["http-client"]
 
 [dependencies]
 alloy-primitives.workspace = true
-cowprotocol-appdata = { version = "0.1.0", path = "../cowprotocol-appdata" }
+cowprotocol-appdata = { version = "0.2.0", path = "../cowprotocol-appdata" }
 cowprotocol-primitives = { version = "0.1.0", path = "../cowprotocol-primitives" }
 cowprotocol-signing = { version = "0.1.0", path = "../cowprotocol-signing" }
 serde.workspace = true
