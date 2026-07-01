@@ -17,8 +17,7 @@
 //! use cowprotocol_orderbook::{Chain, OrderBookApi};
 //!
 //! let wallet = PrivateKeySigner::random();
-//! let uid = OrderBookApi::with_chain(Chain::Gnosis)
-//!     .build()
+//! let uid = OrderBookApi::new(Chain::Gnosis)
 //!     .quote_builder()
 //!     .with_sell_token(address!("e91D153E0b41518A2Ce8Dd3D7944Fa863463a97d")) // WXDAI
 //!     .with_buy_token(address!("9C58BAcC331c9aa871AFD802DB6379a98e80CEdb")) // GNO
@@ -185,8 +184,7 @@ impl QuoteParts {
 ///
 /// The deleted `TradingClient` mapped 1:1 onto this pipeline:
 ///
-/// - `TradingClient::new(chain)` becomes
-///   `OrderBookApi::with_chain(chain).build()`;
+/// - `TradingClient::new(chain)` becomes `OrderBookApi::new(chain)`;
 /// - `TradingClient::from_orderbook(chain, api)` is no longer needed:
 ///   pass the chain to [`QuotedOrder::sign_with`], which performs the
 ///   same mismatch cross-check against the client's chain hint;

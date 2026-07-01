@@ -88,7 +88,13 @@ pub struct OrderBookApi<T> {
 }
 
 impl<T: HttpTransport> OrderBookApi<T> {
-    /// Build a client around an arbitrary [`HttpTransport`] and base URL.
+    /// Build a client around an arbitrary [`HttpTransport`] and base URL:
+    /// the custom-transport tier of the constructor hierarchy, feature-
+    /// independent so an out-of-tree backend needs neither `http-client`
+    /// nor a concrete transport. With `http-client` enabled, prefer the
+    /// quick-start [`OrderBookApi::new`] / [`OrderBookApi::new_with_base_url`]
+    /// or the advanced [`OrderBookApi::builder`] instead.
+    ///
     /// The chain is left unknown; supply it with [`Self::with_chain_hint`]
     /// when the transport targets a known production chain so the quote
     /// pipeline can cross-check it and [`Self::post_order`] can

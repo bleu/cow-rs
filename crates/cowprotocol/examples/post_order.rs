@@ -76,8 +76,7 @@ async fn main() -> cowprotocol::Result<()> {
     // hostile orderbook cannot trick us into signing a swapped token /
     // receiver. The default 50 bps slippage protection applies; tune it
     // with `.with_slippage_bps(..)`.
-    let quoted = OrderBookApi::with_chain(Chain::Sepolia)
-        .build()
+    let quoted = OrderBookApi::new(Chain::Sepolia)
         .quote_builder()
         .with_sell_token(WETH_SEPOLIA)
         .with_buy_token(COW_SEPOLIA)

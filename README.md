@@ -75,8 +75,7 @@ use alloy_signer_local::PrivateKeySigner;
 
 # async fn run(signer: PrivateKeySigner) -> cowprotocol::Result<()> {
 let owner = alloy_signer::Signer::address(&signer);
-let uid = OrderBookApi::with_chain(Chain::Mainnet)
-    .build()
+let uid = OrderBookApi::new(Chain::Mainnet)
     .quote_builder()
     .with_sell_token(address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")) // USDC
     .with_buy_token(address!("6B175474E89094C44Da98b954EedeAC495271d0F")) // DAI

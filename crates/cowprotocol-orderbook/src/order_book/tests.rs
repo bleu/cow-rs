@@ -74,9 +74,21 @@ mod client_config {
     use crate::chain::Chain;
     use crate::order::OrderUid;
 
+    // Delegation test for the deprecated `OrderBookApi::with_chain`
+    // shortcut: it must still resolve to the same chain hint and base URL
+    // as the builder path it forwards to.
     #[test]
-    fn orderbook_api_builder_with_chain_sets_chain_and_url() {
+    #[allow(deprecated)]
+    fn deprecated_with_chain_delegates_to_builder() {
         let api = OrderBookApi::with_chain(Chain::Gnosis).build();
+
+        assert_eq!(api.chain(), Some(Chain::Gnosis));
+        assert_eq!(api.base_url().as_str(), "https://api.cow.fi/xdai/");
+    }
+
+    #[test]
+    fn new_sets_chain_hint_and_base_url() {
+        let api = OrderBookApi::new(Chain::Gnosis);
 
         assert_eq!(api.chain(), Some(Chain::Gnosis));
         assert_eq!(api.base_url().as_str(), "https://api.cow.fi/xdai/");
