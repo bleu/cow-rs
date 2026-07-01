@@ -162,7 +162,7 @@ pub use crate::{
     },
     signature::{
         EcdsaSignature, Recovered, Signature, SignatureError, ecdsa_from_components, ecdsa_recover,
-        parse_ecdsa, sign_ecdsa, signing_message,
+        parse_ecdsa, sign_ecdsa, sign_ecdsa_async, signing_message,
     },
     signing_scheme::{EcdsaSigningScheme, SigningScheme},
     transport::{HttpMethod, HttpRequest, HttpResponse, HttpTransport},
