@@ -107,6 +107,14 @@ pub enum Signature {
     /// the order); the on-chain calldata form is the 20-byte owner
     /// address (`GPv2Signing.sol` requires `length == 20`).
     /// [`Signature::from_bytes`] accepts both.
+    ///
+    /// Construct it with [`Signature::pre_sign`] rather than the bare
+    /// variant; `to_bytes` then yields the empty wire payload:
+    ///
+    /// ```
+    /// use cowprotocol_signing::Signature;
+    /// assert!(Signature::pre_sign().to_bytes().is_empty());
+    /// ```
     PreSign,
 }
 
@@ -131,6 +139,29 @@ impl Signature {
             EcdsaSigningScheme::Eip712 => Self::Eip712(sig),
             EcdsaSigningScheme::EthSign => Self::EthSign(sig),
         }
+    }
+
+    /// Construct an EIP-1271 (contract-wallet) signature, enforcing the
+    /// [`EIP1271_MAX_LEN`] cap that the bare [`Signature::Eip1271`]
+    /// variant skips. The named, validating constructor for the Safe /
+    /// contract-wallet flow, mirroring [`Signature::from_ecdsa`] for the
+    /// off-chain schemes.
+    pub fn eip1271(bytes: impl Into<Vec<u8>>) -> Result<Self, SignatureError> {
+        let bytes = bytes.into();
+        if bytes.len() > EIP1271_MAX_LEN {
+            return Err(SignatureError::Eip1271TooLong {
+                len: bytes.len(),
+                max: EIP1271_MAX_LEN,
+            });
+        }
+        Ok(Self::Eip1271(bytes))
+    }
+
+    /// Construct a [`Signature::PreSign`] signature for the on-chain
+    /// pre-signature flow. The pre-signature carries no payload;
+    /// [`Signature::to_bytes`] yields an empty `Vec`.
+    pub const fn pre_sign() -> Self {
+        Self::PreSign
     }
 
     /// Which signing scheme this signature corresponds to.
@@ -287,7 +318,15 @@ pub fn ecdsa_recover<T: SolStruct>(
 /// [`SolStruct::eip712_signing_hash`]; `EthSign` wraps that hash in the
 /// EIP-191 personal-sign envelope via
 /// [`alloy_primitives::eip191_hash_message`].
-fn signing_message<T: SolStruct>(
+///
+/// This is the forward counterpart to [`ecdsa_recover`]: it yields the
+/// exact 32 bytes to hand an external or async signer (hardware wallet,
+/// KMS, injected provider), whose returned signature is then lifted back
+/// with [`Signature::from_ecdsa`] / [`ecdsa_from_components`]. For an
+/// [`crate::order::OrderData`] prefer the
+/// [`OrderData::signing_hash`](crate::order::OrderData::signing_hash)
+/// wrapper, which builds the payload for you.
+pub fn signing_message<T: SolStruct>(
     signing_scheme: EcdsaSigningScheme,
     domain: &DomainSeparator,
     payload: &T,
@@ -497,6 +536,25 @@ mod tests {
             Signature::from_bytes(SigningScheme::PreSign, &[0u8; 21]),
             Err(SignatureError::PreSignLength(21))
         ));
+    }
+
+    #[test]
+    fn eip1271_constructor_enforces_cap() {
+        // At the cap is accepted; one byte over is rejected, unlike the
+        // bare `Signature::Eip1271(..)` variant which skips the check.
+        let at_cap = Signature::eip1271(vec![0u8; EIP1271_MAX_LEN]).unwrap();
+        assert_eq!(at_cap.to_bytes().len(), EIP1271_MAX_LEN);
+        assert!(matches!(
+            Signature::eip1271(vec![0u8; EIP1271_MAX_LEN + 1]),
+            Err(SignatureError::Eip1271TooLong { max, .. }) if max == EIP1271_MAX_LEN
+        ));
+    }
+
+    #[test]
+    fn pre_sign_constructor_yields_empty_wire_bytes() {
+        let sig = Signature::pre_sign();
+        assert_eq!(sig, Signature::PreSign);
+        assert!(sig.to_bytes().is_empty());
     }
 
     #[test]

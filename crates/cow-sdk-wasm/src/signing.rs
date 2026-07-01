@@ -83,6 +83,22 @@ pub fn order_struct_hash(order_data: JsValue) -> Result<String, JsValue> {
     Ok(order.hash_struct().to_string())
 }
 
+/// The exact 32-byte digest an injected wallet must `personal_sign`
+/// (EthSign / EIP-191) for this order, 0x-prefixed. Hand the wallet
+/// this value, then lift the returned (r, s, v) back through
+/// [`build_order_creation`] with `signingScheme: "ethsign"`. Unlike
+/// [`eip712_message_hash`], it applies the EIP-191 personal-sign wrap,
+/// so it is the value `personal_sign` expects (the EIP-712 path uses
+/// [`eip712_payload`] instead).
+#[wasm_bindgen]
+pub fn ethsign_digest(order_data: JsValue, chain: &str) -> Result<String, JsValue> {
+    let order: OrderData = from_js(order_data)?;
+    let c = parse_chain(chain)?;
+    Ok(order
+        .signing_hash(EcdsaSigningScheme::EthSign, &c.settlement_domain())
+        .to_string())
+}
+
 /// 56-byte `OrderUid` for the order against the given chain's domain.
 /// Returns `0x` + 112 hex chars.
 #[wasm_bindgen]
