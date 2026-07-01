@@ -187,7 +187,6 @@ fn canonical_json_sorts_keys_deterministically() {
     let doc = AppDataDoc::new("app")
         .with_referrer(address!("0000000000000000000000000000000000000001"))
         .with_partner_fee(50, address!("0000000000000000000000000000000000000002"))
-        .unwrap()
         .with_order_class(OrderClass::Limit)
         .with_slippage_bips(25)
         .with_environment("prod");
@@ -224,9 +223,7 @@ fn canonical_json_sorts_keys_deterministically() {
 #[test]
 fn partner_fee_volume_round_trips_with_legacy_bps_key() {
     let recipient = address!("00000000219AB540356CBb839CbE05303D7705FA");
-    let doc = AppDataDoc::new("app")
-        .with_partner_fee(75, recipient)
-        .unwrap();
+    let doc = AppDataDoc::new("app").with_partner_fee(75, recipient);
     let json = doc.canonical_json();
     // Volume serialises with the legacy `"bps"` key so existing
     // app-data hashes stay stable. The `recipient` is in the same
@@ -248,15 +245,13 @@ fn partner_fee_volume_round_trips_with_legacy_bps_key() {
 #[test]
 fn partner_fee_surplus_emits_typed_keys() {
     let recipient = address!("00000000219AB540356CBb839CbE05303D7705FA");
-    let doc = AppDataDoc::new("app")
-        .with_partner_fee_policy(
-            FeePolicy::Surplus {
-                bps: 25,
-                max_volume_bps: 100,
-            },
-            recipient,
-        )
-        .unwrap();
+    let doc = AppDataDoc::new("app").with_partner_fee_policy(
+        FeePolicy::Surplus {
+            bps: 25,
+            max_volume_bps: 100,
+        },
+        recipient,
+    );
     let json = doc.canonical_json();
     assert!(json.contains(r#""maxVolumeBps":100"#), "got: {json}");
     assert!(json.contains(r#""surplusBps":25"#), "got: {json}");
@@ -277,15 +272,13 @@ fn partner_fee_surplus_emits_typed_keys() {
 #[test]
 fn partner_fee_price_improvement_emits_typed_keys() {
     let recipient = address!("00000000219AB540356CBb839CbE05303D7705FA");
-    let doc = AppDataDoc::new("app")
-        .with_partner_fee_policy(
-            FeePolicy::PriceImprovement {
-                bps: 30,
-                max_volume_bps: 150,
-            },
-            recipient,
-        )
-        .unwrap();
+    let doc = AppDataDoc::new("app").with_partner_fee_policy(
+        FeePolicy::PriceImprovement {
+            bps: 30,
+            max_volume_bps: 150,
+        },
+        recipient,
+    );
     let json = doc.canonical_json();
     assert!(json.contains(r#""priceImprovementBps":30"#), "got: {json}");
     assert!(json.contains(r#""maxVolumeBps":150"#), "got: {json}");
@@ -312,17 +305,17 @@ fn partner_fee_deserialises_volume_bps_alias() {
     assert_eq!(fee.recipient(), recipient);
 }
 
-/// The builder paths refuse to fold an over-cap `bps` into the
-/// document. Locks R10 closed: a previous `const fn` builder
-/// accepted `u32::MAX` without checking against
-/// `PARTNER_FEE_BPS_MAX`, so an attacker-controlled partner-fee
-/// tier could be committed to the signed app-data digest.
+/// An over-cap `bps` cannot reach a signed digest. The builder defers
+/// the check, so finalisation (`try_hash` / `hash` / `prepare`) is what
+/// refuses to fold an attacker-controlled partner-fee tier into the
+/// app-data hash.
 #[test]
-fn partner_fee_builder_rejects_over_cap_bps() {
+fn partner_fee_over_cap_rejected_at_finalisation() {
     let recipient = address!("00000000219AB540356CBb839CbE05303D7705FA");
 
     let err = AppDataDoc::new("app")
         .with_partner_fee(10_001, recipient)
+        .try_hash()
         .unwrap_err();
     assert!(matches!(
         err,
@@ -342,6 +335,7 @@ fn partner_fee_builder_rejects_over_cap_bps() {
             },
             recipient,
         )
+        .try_hash()
         .unwrap_err();
     assert!(matches!(
         err,
@@ -360,6 +354,7 @@ fn partner_fee_builder_rejects_over_cap_bps() {
             },
             recipient,
         )
+        .prepare()
         .unwrap_err();
     assert!(matches!(
         err,
@@ -373,6 +368,7 @@ fn partner_fee_builder_rejects_over_cap_bps() {
     // At the cap is still accepted.
     let _ = AppDataDoc::new("app")
         .with_partner_fee(PARTNER_FEE_BPS_MAX, recipient)
+        .try_hash()
         .expect("bps at the cap must be accepted");
 }
 
@@ -458,18 +454,51 @@ fn order_class_serialises_as_lowercase() {
 }
 
 #[test]
-fn hooks_pass_through_as_opaque_json() {
-    let mut doc = AppDataDoc::new("app");
-    doc.metadata.hooks = Some(serde_json::json!({
-        "version": "0.1.0",
-        "pre": [{"target": "0xabc", "callData": "0xdef", "gasLimit": "21000"}],
-        "post": [],
-    }));
+fn hooks_typed_round_trip() {
+    use alloy_primitives::Bytes;
+
+    let target = address!("0000000000000000000000000000000000000abc");
+    let hooks = AppDataHooks {
+        version: Some("0.1.0".to_string()),
+        pre: vec![Hook {
+            target,
+            call_data: Bytes::from_static(&[0xde, 0xf0]),
+            gas_limit: "21000".to_string(),
+        }],
+        post: Vec::new(),
+    };
+    let doc = AppDataDoc::new("app").with_hooks(hooks.clone());
     let json = doc.canonical_json();
+    // Camel-cased keys; `pre`/`post` are always emitted, sorted before
+    // `version`.
+    assert!(
+        json.contains(r#""hooks":{"post":[],"pre":[{"callData":"0xdef0","gasLimit":"21000","#),
+        "got: {json}",
+    );
+
     let parsed: AppDataDoc = serde_json::from_str(&json).unwrap();
-    let hooks = parsed.metadata.hooks.expect("hooks preserved");
-    assert_eq!(hooks["version"], "0.1.0");
-    assert_eq!(hooks["pre"][0]["target"], "0xabc");
+    assert_eq!(parsed.metadata.hooks, Some(hooks));
+}
+
+#[test]
+fn prepare_bundles_match_granular_accessors() {
+    let doc = AppDataDoc::new("app")
+        .with_referrer(address!("0000000000000000000000000000000000000001"))
+        .with_environment("prod");
+    let prepared = doc.prepare().expect("prepare");
+    assert_eq!(prepared.full_app_data, doc.canonical_json());
+    assert_eq!(prepared.hash, doc.hash());
+    assert_eq!(prepared.cid, app_data_cid(doc.hash()));
+}
+
+#[test]
+fn prepare_rejects_over_cap_partner_fee() {
+    let recipient = address!("00000000219AB540356CBb839CbE05303D7705FA");
+    let err = AppDataDoc::new("app")
+        .with_partner_fee(10_001, recipient)
+        .prepare()
+        .unwrap_err();
+    assert!(matches!(err, AppDataError::FeeOutOfRange { .. }));
 }
 
 /// Round-trip every byte position so any off-by-one in the base32 packer
