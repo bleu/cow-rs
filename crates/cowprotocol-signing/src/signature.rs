@@ -101,6 +101,10 @@ pub enum Signature {
     /// `abi.encodePacked(owner, signature)` (owner in the first 20
     /// bytes), so feeding these bytes straight into
     /// `GPv2Settlement.settle()` yields a malformed signature.
+    ///
+    /// Construct it with [`Signature::eip1271`] rather than the bare
+    /// variant: the constructor enforces the [`EIP1271_MAX_LEN`] cap,
+    /// which direct variant construction skips.
     Eip1271(Vec<u8>),
     /// On-chain pre-signature via `GPv2Signing::setPreSignature`. The
     /// orderbook wire form is an empty payload (the owner is carried on
