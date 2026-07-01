@@ -579,4 +579,49 @@ mod tests {
         .unwrap();
         assert_eq!(creation.verify_owner(&domain).unwrap(), owner);
     }
+
+    /// `verify_owner` surfaces a signature-primitive failure as
+    /// [`VerifyOwnerError::Signature`], distinct from the `SignerMismatch`
+    /// owner-check semantic. An all-zero ECDSA payload is not recoverable,
+    /// so the wrapped `recover_signer` returns a [`SignatureError`] that
+    /// must propagate through the `#[from]` arm, including once lifted into
+    /// [`Error::VerifyOwner`].
+    #[test]
+    fn verify_owner_wraps_signature_recovery_failure() {
+        // Non-zero `from` so we reach recovery rather than the zero-from
+        // guard; an Eip712 scheme so recovery is actually attempted.
+        let creation = OrderCreation {
+            sell_token: Address::ZERO,
+            buy_token: Address::ZERO,
+            receiver: None,
+            sell_amount: U256::ZERO,
+            buy_amount: U256::ZERO,
+            valid_to: 0,
+            app_data: EMPTY_APP_DATA_JSON.to_owned(),
+            app_data_hash: EMPTY_APP_DATA_HASH,
+            fee_amount: U256::ZERO,
+            kind: OrderKind::Sell,
+            partially_fillable: false,
+            sell_token_balance: SellTokenSource::default(),
+            buy_token_balance: BuyTokenDestination::default(),
+            signing_scheme: SigningScheme::Eip712,
+            signature: zero_eip712_signature(),
+            from: address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
+            quote_id: None,
+        };
+        let err = creation
+            .verify_owner(&DomainSeparator::default())
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::VerifyOwnerError::Signature(_)),
+            "got: {err:?}"
+        );
+        assert!(
+            matches!(
+                Error::from(err),
+                Error::VerifyOwner(crate::error::VerifyOwnerError::Signature(_))
+            ),
+            "signature failure must survive lifting into Error::VerifyOwner"
+        );
+    }
 }
