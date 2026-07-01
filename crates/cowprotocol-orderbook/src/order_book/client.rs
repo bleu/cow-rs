@@ -167,6 +167,11 @@ impl OrderBookApi {
     /// code should build over a [`DefaultTransport`] via
     /// [`Self::new_with_transport`] (or the chain constructors) instead.
     #[cfg(not(target_arch = "wasm32"))]
+    #[deprecated(
+        since = "0.1.1",
+        note = "use OrderBookApi::builder().with_base_url(base_url).with_client(client).build(), \
+                the advanced-HTTP tier reserved for pre-configured reqwest clients"
+    )]
     pub fn with_client(base_url: url::Url, client: reqwest::Client) -> Self {
         Self::new_with_transport(base_url, ReqwestTransport::new(client))
     }

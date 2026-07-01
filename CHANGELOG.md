@@ -65,7 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
-- `OrderBookApi::with_chain(chain)` (since 0.1.1), in favour of `OrderBookApi::new(chain)` for the quick-start path or `OrderBookApi::builder().with_chain(chain).build()` to keep configuring the builder. It was a pure alias for the builder path yet, unlike its sibling constructors, returned a builder rather than a ready client. The construction surface now reads as three tiers: `new` / `new_with_base_url` (quick start), `new_with_transport` (custom transport), and `builder()` (a pre-configured `reqwest::Client` with a chain hint or base URL).
+- `OrderBookApi::with_chain(chain)` (since 0.1.1), in favour of `OrderBookApi::new(chain)` for the quick-start path or `OrderBookApi::builder().with_chain(chain).build()` to keep configuring the builder. It was a pure alias for the builder path yet, unlike its sibling constructors, returned a builder rather than a ready client.
+- `OrderBookApi::with_client(base_url, client)` (since 0.1.1), in favour of `OrderBookApi::builder().with_base_url(base_url).with_client(client).build()`. It duplicated the advanced-HTTP builder path (identical base URL, `ReqwestTransport`, and chainless client) while sitting outside the tier hierarchy.
+- The construction surface now reads as three tiers: `new` / `new_with_base_url` (quick start), `new_with_transport` (custom transport), and `builder()` (a pre-configured `reqwest::Client` with a chain hint or base URL).
 
 ### Removed
 

@@ -86,6 +86,20 @@ mod client_config {
         assert_eq!(api.base_url().as_str(), "https://api.cow.fi/xdai/");
     }
 
+    // Delegation test for the deprecated `OrderBookApi::with_client`
+    // shortcut: it must still resolve to the same base URL and chainless
+    // client as the advanced-HTTP builder path it is superseded by.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_with_client_delegates_to_builder() {
+        let url = url::Url::parse("https://example.test/orderbook/").unwrap();
+        let api = OrderBookApi::with_client(url.clone(), reqwest::Client::new());
+
+        assert_eq!(api.chain(), None);
+        assert_eq!(api.base_url(), &url);
+    }
+
     #[test]
     fn new_sets_chain_hint_and_base_url() {
         let api = OrderBookApi::new(Chain::Gnosis);
