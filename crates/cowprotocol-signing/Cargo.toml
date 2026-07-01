@@ -37,3 +37,7 @@ getrandom = { workspace = true, features = ["js"] }
 [dev-dependencies]
 alloy-signer-local.workspace = true
 hex-literal.workspace = true
+# Dev-only: drives the `#[tokio::test]` async round trips. Dev
+# dependencies never reach downstream builds, so the wasm graph and the
+# published crate are unaffected.
+tokio = { workspace = true, features = ["macros", "rt"] }

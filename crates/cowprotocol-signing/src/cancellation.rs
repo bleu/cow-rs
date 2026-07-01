@@ -28,7 +28,9 @@ use {
     crate::{
         domain::DomainSeparator,
         order::OrderUid,
-        signature::{EcdsaSignature, SignatureError, ecdsa_recover, ecdsa_wire, sign_ecdsa},
+        signature::{
+            EcdsaSignature, SignatureError, ecdsa_recover, ecdsa_wire, sign_ecdsa, sign_ecdsa_async,
+        },
         signing_scheme::EcdsaSigningScheme,
     },
     alloy_primitives::{Address, B256},
@@ -120,6 +122,11 @@ impl OrderCancellation {
     /// Sign the cancellation with an ECDSA signer. The caller chooses the
     /// ECDSA scheme; `EthSign` adds the EIP-191 personal-sign envelope.
     /// Consumes `self`, mirroring [`OrderCancellations::sign`].
+    ///
+    /// Requires a [`SignerSync`](alloy_signer::SignerSync) signer (a raw
+    /// local key); production hardware, remote or KMS signers should use
+    /// [`Self::sign_async`] or the [`Self::signing_hash`] digest-and-lift
+    /// recipe.
     pub fn sign<S: alloy_signer::SignerSync>(
         self,
         scheme: EcdsaSigningScheme,
@@ -127,6 +134,26 @@ impl OrderCancellation {
         signer: &S,
     ) -> Result<SignedOrderCancellation, SignatureError> {
         let signature = sign_ecdsa(scheme, domain, &eip712::single(&self.order_uid), signer)?;
+        Ok(SignedOrderCancellation {
+            order_uid: self.order_uid,
+            signature,
+            signing_scheme: scheme,
+        })
+    }
+
+    /// Async counterpart to [`Self::sign`], bound on the async
+    /// [`alloy_signer::Signer`] trait rather than
+    /// [`SignerSync`](alloy_signer::SignerSync). Prefer this for
+    /// hardware, remote or KMS signers, which implement only the async
+    /// trait.
+    pub async fn sign_async<S: alloy_signer::Signer>(
+        self,
+        scheme: EcdsaSigningScheme,
+        domain: &DomainSeparator,
+        signer: &S,
+    ) -> Result<SignedOrderCancellation, SignatureError> {
+        let signature =
+            sign_ecdsa_async(scheme, domain, &eip712::single(&self.order_uid), signer).await?;
         Ok(SignedOrderCancellation {
             order_uid: self.order_uid,
             signature,
@@ -233,6 +260,10 @@ impl OrderCancellations {
     }
 
     /// Sign the collection with an ECDSA signer.
+    ///
+    /// Requires a [`SignerSync`](alloy_signer::SignerSync) signer (a raw
+    /// local key); production hardware, remote or KMS signers should use
+    /// [`Self::sign_async`].
     pub fn sign<S: alloy_signer::SignerSync>(
         self,
         scheme: EcdsaSigningScheme,
@@ -241,6 +272,24 @@ impl OrderCancellations {
     ) -> Result<SignedOrderCancellations, SignatureError> {
         let payload = eip712::collection(&self.order_uids);
         let signature = sign_ecdsa(scheme, domain, &payload, signer)?;
+        Ok(SignedOrderCancellations {
+            order_uids: self.order_uids,
+            signature,
+            signing_scheme: scheme,
+        })
+    }
+
+    /// Async counterpart to [`Self::sign`], bound on the async
+    /// [`alloy_signer::Signer`] trait. Prefer this for hardware, remote
+    /// or KMS signers, which implement only the async trait.
+    pub async fn sign_async<S: alloy_signer::Signer>(
+        self,
+        scheme: EcdsaSigningScheme,
+        domain: &DomainSeparator,
+        signer: &S,
+    ) -> Result<SignedOrderCancellations, SignatureError> {
+        let payload = eip712::collection(&self.order_uids);
+        let signature = sign_ecdsa_async(scheme, domain, &payload, signer).await?;
         Ok(SignedOrderCancellations {
             order_uids: self.order_uids,
             signature,
@@ -462,6 +511,48 @@ mod tests {
             .unwrap();
         let recovered = signed.recover_owner(&domain).unwrap();
         assert_eq!(recovered, signer.address());
+    }
+
+    /// The async cancellation twins yield byte-identical signed values to
+    /// the sync ones for a key implementing both traits, and both still
+    /// recover the signing owner. Covers the single and collection paths.
+    #[tokio::test]
+    async fn cancellation_sign_async_matches_sync() {
+        let signer = fixed_signer();
+        let domain = fixed_domain();
+        let uid = OrderUid::from([0x42; 56]);
+
+        for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
+            let sync = OrderCancellation::from(uid)
+                .sign(scheme, &domain, &signer)
+                .unwrap();
+            let asynchronous = OrderCancellation::from(uid)
+                .sign_async(scheme, &domain, &signer)
+                .await
+                .unwrap();
+            assert_eq!(sync, asynchronous);
+            assert_eq!(
+                asynchronous.recover_owner(&domain).unwrap(),
+                signer.address()
+            );
+        }
+
+        let collection = OrderCancellations {
+            order_uids: vec![OrderUid::from([0x11; 56]), OrderUid::from([0x22; 56])],
+        };
+        let sync = collection
+            .clone()
+            .sign(EcdsaSigningScheme::Eip712, &domain, &signer)
+            .unwrap();
+        let asynchronous = collection
+            .sign_async(EcdsaSigningScheme::Eip712, &domain, &signer)
+            .await
+            .unwrap();
+        assert_eq!(sync, asynchronous);
+        assert_eq!(
+            asynchronous.recover_owner(&domain).unwrap(),
+            signer.address()
+        );
     }
 
     /// `SignedOrderCancellations` serialises to the flat wire shape expected

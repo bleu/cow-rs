@@ -123,6 +123,13 @@ impl OrderData {
     /// Sign with an ECDSA signer; equivalent to
     /// [`crate::signature::sign_ecdsa`] applied to the EIP-712 view of
     /// this order.
+    ///
+    /// Requires a [`SignerSync`](alloy_signer::SignerSync) signer, which
+    /// in practice means a raw local key
+    /// (`alloy_signer_local::PrivateKeySigner`). Production hardware,
+    /// remote or KMS signers implement the async
+    /// [`alloy_signer::Signer`] trait instead, so use [`Self::sign_async`]
+    /// or the [`Self::signing_hash`] digest-and-lift recipe for those.
     pub fn sign<S: alloy_signer::SignerSync>(
         &self,
         scheme: crate::signing_scheme::EcdsaSigningScheme,
@@ -137,6 +144,10 @@ impl OrderData {
     /// [`crate::signature::EcdsaSignature`] (`r || s || v`). Useful for
     /// callers that want the unwrapped signature components without
     /// promoting through the [`crate::signature::Signature`] enum.
+    ///
+    /// Like [`Self::sign`], requires a
+    /// [`SignerSync`](alloy_signer::SignerSync) signer; production
+    /// async signers should use [`Self::sign_ecdsa_async`].
     pub fn sign_ecdsa<S: alloy_signer::SignerSync>(
         &self,
         scheme: crate::signing_scheme::EcdsaSigningScheme,
@@ -145,6 +156,39 @@ impl OrderData {
     ) -> Result<crate::signature::EcdsaSignature, crate::signature::SignatureError> {
         let payload = eip712::Order::from(self);
         crate::signature::sign_ecdsa(scheme, domain, &payload, signer)
+    }
+
+    /// Async counterpart to [`Self::sign`], bound on the async
+    /// [`alloy_signer::Signer`] trait rather than
+    /// [`SignerSync`](alloy_signer::SignerSync). Equivalent to
+    /// [`crate::signature::sign_ecdsa_async`] applied to the EIP-712 view
+    /// of this order, then lifted into the scheme-tagged
+    /// [`Signature`](crate::signature::Signature) enum. Prefer this for
+    /// hardware, remote or KMS signers, which implement only the async
+    /// trait.
+    pub async fn sign_async<S: alloy_signer::Signer>(
+        &self,
+        scheme: crate::signing_scheme::EcdsaSigningScheme,
+        domain: &DomainSeparator,
+        signer: &S,
+    ) -> Result<crate::signature::Signature, crate::signature::SignatureError> {
+        let ecdsa = self.sign_ecdsa_async(scheme, domain, signer).await?;
+        Ok(crate::signature::Signature::from_ecdsa(ecdsa, scheme))
+    }
+
+    /// Async counterpart to [`Self::sign_ecdsa`], bound on the async
+    /// [`alloy_signer::Signer`] trait. Returns the raw
+    /// [`crate::signature::EcdsaSignature`] (`r || s || v`) for callers
+    /// that do not want the scheme-tagged
+    /// [`Signature`](crate::signature::Signature) enum.
+    pub async fn sign_ecdsa_async<S: alloy_signer::Signer>(
+        &self,
+        scheme: crate::signing_scheme::EcdsaSigningScheme,
+        domain: &DomainSeparator,
+        signer: &S,
+    ) -> Result<crate::signature::EcdsaSignature, crate::signature::SignatureError> {
+        let payload = eip712::Order::from(self);
+        crate::signature::sign_ecdsa_async(scheme, domain, &payload, signer).await
     }
 
     /// Recover the address that signed this order from a scheme-tagged
@@ -548,6 +592,36 @@ mod tests {
             assert_eq!(
                 order.recover_ecdsa(scheme, &domain, &ecdsa).unwrap().signer,
                 owner,
+            );
+        }
+    }
+
+    /// The async signing twins yield byte-identical signatures to the
+    /// sync ones for a key implementing both traits, for both ECDSA
+    /// schemes and at both the scheme-tagged and raw-ECDSA layers.
+    #[tokio::test]
+    async fn sign_async_matches_sync_on_order_data() {
+        use crate::signing_scheme::EcdsaSigningScheme;
+        use alloy_signer_local::PrivateKeySigner;
+
+        let private_key = B256::from(hex!(
+            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+        ));
+        let signer = PrivateKeySigner::from_bytes(&private_key).unwrap();
+        let domain = crate::domain::settlement_domain(1, SETTLEMENT);
+        let order = sample_order();
+
+        for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
+            assert_eq!(
+                order.sign(scheme, &domain, &signer).unwrap(),
+                order.sign_async(scheme, &domain, &signer).await.unwrap(),
+            );
+            assert_eq!(
+                order.sign_ecdsa(scheme, &domain, &signer).unwrap(),
+                order
+                    .sign_ecdsa_async(scheme, &domain, &signer)
+                    .await
+                    .unwrap(),
             );
         }
     }
