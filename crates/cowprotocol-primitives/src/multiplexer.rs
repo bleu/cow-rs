@@ -81,6 +81,32 @@ pub enum MultiplexerError {
     IndexOutOfRange,
 }
 
+/// A merkle proof bound to the leaf and index it authenticates.
+///
+/// Returned by [`Multiplexer::proof_with_leaf`]. Unlike the bare
+/// `Vec<B256>` from [`Multiplexer::proof`], this couples the sibling
+/// hashes to the `index` and `leaf` they prove, so a caller cannot
+/// accidentally verify the proof against the wrong leaf.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerkleProof {
+    /// Index of the proved leaf, in the tree's input order.
+    pub index: usize,
+    /// The leaf hash this proof authenticates.
+    pub leaf: B256,
+    /// Sibling hashes from the leaf up to the root, in the order the
+    /// contract's verifier consumes them.
+    pub siblings: Vec<B256>,
+}
+
+impl MerkleProof {
+    /// Verify this proof against `root` with the same commutative
+    /// sorted-pair algorithm the on-chain `MerkleProof.verify` runs.
+    /// Convenience wrapper over [`verify_proof`].
+    pub fn verify(&self, root: B256) -> bool {
+        verify_proof(root, &self.siblings, self.leaf)
+    }
+}
+
 impl Multiplexer {
     /// Construct a tree from leaves derived via [`conditional_order_leaf`].
     ///
@@ -167,6 +193,21 @@ impl Multiplexer {
             idx /= 2;
         }
         Ok(proof)
+    }
+
+    /// Generate a [`MerkleProof`] for the leaf at `index`, bundling the
+    /// index and leaf hash with the sibling hashes so the proof carries
+    /// the leaf it authenticates. Prefer this over [`Multiplexer::proof`]
+    /// when the proof and its leaf travel together.
+    pub fn proof_with_leaf(&self, index: usize) -> Result<MerkleProof, MultiplexerError> {
+        // `proof` bounds-checks `index`, so the leaf lookup below cannot
+        // panic.
+        let siblings = self.proof(index)?;
+        Ok(MerkleProof {
+            index,
+            leaf: self.leaves()[index],
+            siblings,
+        })
     }
 }
 
@@ -283,6 +324,25 @@ mod tests {
         let tree = Multiplexer::new(&[leaf(1), leaf(2)]).unwrap();
         assert_eq!(
             tree.proof(2).unwrap_err(),
+            MultiplexerError::IndexOutOfRange
+        );
+    }
+
+    /// `proof_with_leaf` binds the index, leaf and siblings together and
+    /// the bundle verifies against the root for every leaf.
+    #[test]
+    fn proof_with_leaf_binds_index_and_verifies() {
+        let leaves: Vec<B256> = (1_u8..=5).map(leaf).collect();
+        let tree = Multiplexer::new(&leaves).unwrap();
+        for (i, l) in leaves.iter().enumerate() {
+            let bundle = tree.proof_with_leaf(i).unwrap();
+            assert_eq!(bundle.index, i);
+            assert_eq!(bundle.leaf, *l);
+            assert_eq!(bundle.siblings, tree.proof(i).unwrap());
+            assert!(bundle.verify(tree.root()));
+        }
+        assert_eq!(
+            tree.proof_with_leaf(5).unwrap_err(),
             MultiplexerError::IndexOutOfRange
         );
     }

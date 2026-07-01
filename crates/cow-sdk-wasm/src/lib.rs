@@ -43,8 +43,8 @@ mod signing;
 #[doc(inline)]
 pub use {
     app_data::{
-        app_data_cid_from_hash, app_data_hash_from_json, empty_app_data_hash, sdk_app_data_hash,
-        sdk_app_data_json, to_signed_order_data,
+        app_data_cid_from_hash, app_data_hash_from_json, app_data_prepared, empty_app_data_hash,
+        sdk_app_data_hash, sdk_app_data_json, to_signed_order_data,
     },
     endpoints::{
         account_orders, cancel_order, get_order, get_order_status, get_quote, get_quote_simple,
@@ -52,7 +52,7 @@ pub use {
     },
     signing::{
         build_order_creation, build_order_creation_eip1271, eip712_message_hash, eip712_payload,
-        order_struct_hash, order_uid,
+        ethsign_digest, order_struct_hash, order_uid,
     },
 };
 

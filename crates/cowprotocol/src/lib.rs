@@ -119,10 +119,11 @@ pub use cowprotocol_signing::{cancellation, order, signature, signing_scheme};
 
 pub use crate::{
     app_data::{
-        AppDataCid, AppDataCidError, AppDataDoc, AppDataFlashloan, AppDataHash, AppDataMetadata,
-        AppDataOrderClass, AppDataPartnerFee, AppDataQuote, AppDataReferrer, AppDataReplacedOrder,
-        AppDataUtm, AppDataWrapperCall, COW_RS_APP_CODE, COW_RS_WASM_APP_CODE, EMPTY_APP_DATA_HASH,
-        EMPTY_APP_DATA_JSON, FeePolicy, LATEST_APP_DATA_VERSION, MAX_CID_STR_LEN, app_data_cid,
+        AppDataCid, AppDataCidError, AppDataDoc, AppDataFlashloan, AppDataHash, AppDataHooks,
+        AppDataMetadata, AppDataOrderClass, AppDataPartnerFee, AppDataQuote, AppDataReferrer,
+        AppDataReplacedOrder, AppDataUtm, AppDataWrapperCall, COW_RS_APP_CODE,
+        COW_RS_WASM_APP_CODE, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON, FeePolicy, Hook,
+        LATEST_APP_DATA_VERSION, MAX_CID_STR_LEN, PreparedAppData, app_data_cid,
         app_data_hash_from_cid, parse_app_data_cid,
     },
     cancellation::{OrderCancellations, SignedOrderCancellation, SignedOrderCancellations},
@@ -140,7 +141,7 @@ pub use crate::{
     domain::{
         DOMAIN_NAME, DOMAIN_VERSION, DomainSeparator, eip712_message_hash, settlement_domain,
     },
-    error::{ApiError, Error, Result},
+    error::{ApiError, Error, OrderPostErrorKind, Result},
     eth_flow::{ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowOrder},
     multiplexer::{Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof},
     order::{
@@ -159,7 +160,7 @@ pub use crate::{
     },
     signature::{
         EcdsaSignature, Recovered, Signature, SignatureError, ecdsa_from_components, ecdsa_recover,
-        parse_ecdsa, sign_ecdsa,
+        parse_ecdsa, sign_ecdsa, signing_message,
     },
     signing_scheme::{EcdsaSigningScheme, SigningScheme},
     transport::{HttpMethod, HttpRequest, HttpResponse, HttpTransport},
