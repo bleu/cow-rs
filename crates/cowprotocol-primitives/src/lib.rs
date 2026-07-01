@@ -28,7 +28,7 @@ pub use self::{
     composable::{
         COMPOSABLE_COW, CURRENT_BLOCK_TIMESTAMP_FACTORY, ComposableCoW, ConditionalOrderParams,
         EXTENSIBLE_FALLBACK_HANDLER, PayloadStruct, Proof, ProofLocation, TWAP_HANDLER, TwapData,
-        TwapDuration, TwapError, TwapStart, TwapStaticInput, forwarder_signature,
+        TwapDataBuilder, TwapDuration, TwapError, TwapStart, TwapStaticInput, forwarder_signature,
         safe_handler_signature,
     },
     contracts::{
@@ -38,6 +38,8 @@ pub use self::{
     domain::{
         DOMAIN_NAME, DOMAIN_VERSION, DomainSeparator, eip712_message_hash, settlement_domain,
     },
-    multiplexer::{Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof},
+    multiplexer::{
+        MerkleProof, Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof,
+    },
     order_id::{OrderClass, OrderUid, OrderUidParseError, OrderUidParts, parse_order_uid},
 };

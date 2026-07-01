@@ -130,7 +130,7 @@ pub use crate::{
     composable::{
         COMPOSABLE_COW, CURRENT_BLOCK_TIMESTAMP_FACTORY, ComposableCoW, ConditionalOrderParams,
         EXTENSIBLE_FALLBACK_HANDLER, PayloadStruct, Proof, ProofLocation, TWAP_HANDLER, TwapData,
-        TwapDuration, TwapError, TwapStart, TwapStaticInput, forwarder_signature,
+        TwapDataBuilder, TwapDuration, TwapError, TwapStart, TwapStaticInput, forwarder_signature,
         safe_handler_signature,
     },
     contracts::{
@@ -142,7 +142,9 @@ pub use crate::{
     },
     error::{ApiError, Error, Result},
     eth_flow::{ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowOrder},
-    multiplexer::{Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof},
+    multiplexer::{
+        MerkleProof, Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof,
+    },
     order::{
         BUY_ETH_ADDRESS, BuyTokenDestination, OrderClass, OrderData, OrderKind, OrderUid,
         OrderUidParseError, OrderUidParts, SellTokenSource, order_typed_data, parse_order_uid,
