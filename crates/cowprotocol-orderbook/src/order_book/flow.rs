@@ -242,6 +242,17 @@ pub struct QuoteRequestBuilder<
 /// a ready builder in a signature or return type do not have to.
 pub type ReadyQuoteRequestBuilder<T> = QuoteRequestBuilder<T, Set, Set, Set, Set>;
 
+// Compile-time guard: pins the alias to the state in which the terminal
+// methods exist. Calling `into_request` (available only on the buildable
+// impl) fails to compile if a future edit desynchronises the alias
+// markers from that impl. Never invoked; it exists to be type-checked.
+#[allow(dead_code)]
+fn ready_builder_is_buildable<T: HttpTransport + Clone>(
+    builder: ReadyQuoteRequestBuilder<T>,
+) -> QuoteRequest {
+    builder.into_request()
+}
+
 impl<T, SellToken, BuyToken, From, Amount>
     QuoteRequestBuilder<T, SellToken, BuyToken, From, Amount>
 {
