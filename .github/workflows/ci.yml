@@ -118,9 +118,9 @@ jobs:
           cd crates/cow-sdk-wasm
           wasm-pack build --target web --release --out-dir pkg-web
       - name: Assert .wasm size under ceiling
-        # 786432 bytes = 768 KB; current ~721 KB leaves ~47 KB of headroom.
-        # Raised from 720 KB: the signing stack's cumulative public surface
-        # crosses the old ceiling. Matches #41 and the wasm builders PR.
+        # 786432 bytes = 768 KB; current ~728 KB (744774 bytes measured)
+        # leaves ~40 KB of headroom. The external-signing cancellation
+        # builders (#27) pushed the binary past the previous 720 KB ceiling.
         run: bash scripts/wasm-size-check.sh 786432
 
   wasm-test:

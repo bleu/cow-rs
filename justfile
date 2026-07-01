@@ -60,12 +60,10 @@ wasm-size: wasm-build-all
 # graph. Bump the ceiling consciously, with a commit message explaining
 # the new size's cause, so we don't slip silently.
 #
-# Current size: ~721 KB. The signing stack's cumulative public surface
-# (the public EthSign digest from the recovery/constructor work, plus the
-# orderbook VerifyOwnerError this branch adds) crosses the old 720 KB
-# ceiling; the prior ~679 KB note was stale. Ceiling: 786432 bytes
-# (768 KB) -> ~47 KB of headroom, matching the value #41 and the wasm
-# builders PR raise it to, so identical lines merge cleanly.
+# Current size: ~728 KB (744774 bytes measured). The external-signing
+# cancellation builders (#27) pushed it past the previous 720 KB
+# ceiling. Ceiling: 786432 bytes (768 KB) -> ~40 KB of headroom for
+# API surface growth.
 wasm-size-check: wasm-build-web
 	bash scripts/wasm-size-check.sh 786432
 
