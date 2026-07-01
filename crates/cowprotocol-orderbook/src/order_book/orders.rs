@@ -285,10 +285,10 @@ impl OrderCreation {
     pub fn verify_owner(
         &self,
         domain: &crate::domain::DomainSeparator,
-    ) -> std::result::Result<Address, crate::signature::SignatureError> {
+    ) -> std::result::Result<Address, crate::error::VerifyOwnerError> {
         match self.order_data().recover_signer(domain, &self.signature)? {
             Some(recovered) if recovered.signer == self.from => Ok(self.from),
-            Some(recovered) => Err(crate::signature::SignatureError::SignerMismatch {
+            Some(recovered) => Err(crate::error::VerifyOwnerError::SignerMismatch {
                 declared: self.from,
                 recovered: recovered.signer,
             }),
@@ -300,7 +300,7 @@ impl OrderCreation {
             // `GPv2Signing.setPreSignature`) still validates the owner
             // on-chain in the non-zero case.
             None if self.from == Address::ZERO => {
-                Err(crate::signature::SignatureError::SignerMismatch {
+                Err(crate::error::VerifyOwnerError::SignerMismatch {
                     declared: Address::ZERO,
                     recovered: Address::ZERO,
                 })
@@ -514,7 +514,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             err,
-            crate::signature::SignatureError::SignerMismatch { .. }
+            crate::error::VerifyOwnerError::SignerMismatch { .. }
         ));
     }
 
@@ -546,7 +546,7 @@ mod tests {
         .unwrap();
         let err = creation.verify_owner(&domain).unwrap_err();
         match err {
-            crate::signature::SignatureError::SignerMismatch {
+            crate::error::VerifyOwnerError::SignerMismatch {
                 declared,
                 recovered,
             } => {

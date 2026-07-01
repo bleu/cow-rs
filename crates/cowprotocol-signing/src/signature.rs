@@ -41,7 +41,13 @@ pub const EIP1271_MAX_LEN: usize = 32 * 1024;
 /// [`Signature`] enum.
 pub type EcdsaSignature = PrimSignature;
 
-/// Errors specific to signature parsing or verification.
+/// Errors specific to signature parsing, signing, or recovery.
+///
+/// Every variant is reachable from this crate's own functions. The
+/// order-verification `SignerMismatch` semantic (a recovered signer that
+/// differs from the declared owner) lives in the orderbook crate's
+/// `VerifyOwnerError` instead, since no signing primitive here produces
+/// it.
 #[derive(Debug, thiserror::Error)]
 pub enum SignatureError {
     /// ECDSA payload was not 65 bytes (`r || s || v`).
@@ -71,19 +77,6 @@ pub enum SignatureError {
     /// Owned message so attacker-controllable bytes are never leaked.
     #[error("signer error: {0}")]
     SignerOther(String),
-    /// Recovered signer ≠ declared. Raised by the orderbook crate's
-    /// `OrderCreation::verify_owner`. Kept here rather than in the
-    /// orderbook error enum because the mismatch is a property of the
-    /// signature recovery this crate owns; any consumer that recovers
-    /// and compares (the orderbook, the wasm shim, integrator code)
-    /// reports the same failure shape.
-    #[error("signer mismatch: declared {declared}, recovered {recovered}")]
-    SignerMismatch {
-        /// Owner the order claims to be signed by.
-        declared: Address,
-        /// Owner recovered from the signature bytes.
-        recovered: Address,
-    },
 }
 
 /// Signature over the EIP-712 order hash.
