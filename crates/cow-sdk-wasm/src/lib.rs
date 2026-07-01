@@ -29,7 +29,11 @@
 //!    and normalises a null `receiver` to `address(0)`. Callers that
 //!    only need the 32-byte digest can instead compose
 //!    [`order_struct_hash`] + [`eip712_message_hash`], the lower-level
-//!    path that yields the same hash.
+//!    path that yields the same hash. Cancellations follow the same
+//!    external-signing shape: [`cancellation_eip712_payload`] /
+//!    [`cancellation_ethsign_digest`] produce what the wallet signs,
+//!    then [`build_order_cancellation`] lifts the (r, s, v) into the
+//!    `DELETE`-order payload [`cancel_order`] expects.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![deny(unsafe_code)]
@@ -51,8 +55,9 @@ pub use {
         native_price, post_order, trades_by_order_uid, trades_by_owner, version,
     },
     signing::{
-        build_order_creation, build_order_creation_eip1271, eip712_message_hash, eip712_payload,
-        ethsign_digest, order_struct_hash, order_uid,
+        build_order_cancellation, build_order_creation, build_order_creation_eip1271,
+        cancellation_eip712_payload, cancellation_ethsign_digest, eip712_message_hash,
+        eip712_payload, ethsign_digest, order_struct_hash, order_uid,
     },
 };
 

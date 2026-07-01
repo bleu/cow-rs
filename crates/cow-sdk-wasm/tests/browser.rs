@@ -29,9 +29,10 @@ use {
 };
 
 use cow_sdk_wasm::{
-    app_data_cid_from_hash, app_data_hash_from_json, build_order_creation, chain_info,
-    domain_separator, empty_app_data_hash, get_quote, get_quote_simple, order_uid, post_order,
-    sdk_app_data_hash, sdk_app_data_json, to_signed_order_data, version,
+    app_data_cid_from_hash, app_data_hash_from_json, build_order_cancellation,
+    build_order_creation, cancel_order, chain_info, domain_separator, empty_app_data_hash,
+    get_quote, get_quote_simple, order_uid, post_order, sdk_app_data_hash, sdk_app_data_json,
+    to_signed_order_data, version,
 };
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -428,6 +429,56 @@ async fn subgraph_client_totals_via_mock_fetch() {
     let totals = client.totals().await.expect("totals over fetch transport");
     assert_eq!(totals.orders, "42");
     assert_eq!(totals.settlements, "5");
+    restore_real_fetch();
+}
+
+/// `build_order_cancellation` assembles the external-signing
+/// cancellation payload from a `{ signingScheme, r, s, v }` bag (no
+/// private key), and its output round-trips into `cancel_order`: the same
+/// JSON the builder emits deserialises straight back into the DELETE
+/// binding over a mocked fetch. Proves the external-signing wire shapes
+/// line up end to end without an in-shim key.
+#[wasm_bindgen_test]
+async fn build_order_cancellation_round_trips_into_cancel_order() {
+    let uid = format!("0x{}", "11".repeat(56));
+    // Syntactically valid (r, s, v): 32-byte blobs and v = 27. The
+    // builder does no signer recovery, so the signature need not verify.
+    let signature = JSON::parse(
+        r#"{
+            "signingScheme": "eip712",
+            "r": "0x0000000000000000000000000000000000000000000000000000000000000001",
+            "s": "0x0000000000000000000000000000000000000000000000000000000000000001",
+            "v": 27
+        }"#,
+    )
+    .expect("JSON.parse signature");
+
+    let cancellation = build_order_cancellation(&uid, signature, "mainnet").unwrap_or_else(|err| {
+        panic!(
+            "build_order_cancellation: {}",
+            err.as_string().unwrap_or_default()
+        )
+    });
+
+    // Wire-shape sanity: the DELETE body carries orderUid, a signature
+    // hex string and the lowercase scheme.
+    let order_uid = Reflect::get(&cancellation, &JsValue::from_str("orderUid"))
+        .expect("orderUid present")
+        .as_string()
+        .expect("orderUid string");
+    assert_eq!(order_uid, uid);
+    let scheme = Reflect::get(&cancellation, &JsValue::from_str("signingScheme"))
+        .expect("signingScheme present")
+        .as_string()
+        .expect("signingScheme string");
+    assert_eq!(scheme, "eip712");
+
+    // Round-trip: hand the emitted payload straight to cancel_order. A
+    // successful DELETE returns 2xx with an empty body.
+    let _mock = install_mock_fetch(200, "");
+    cancel_order("mainnet", cancellation)
+        .await
+        .unwrap_or_else(|err| panic!("cancel_order: {}", err.as_string().unwrap_or_default()));
     restore_real_fetch();
 }
 
