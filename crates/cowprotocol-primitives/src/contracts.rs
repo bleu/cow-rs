@@ -23,6 +23,9 @@
 //!   simple transfers.
 //! - [`WETH9`]: `deposit()` and `withdraw(uint256)` on top of the ERC-20
 //!   API, for wrapping and unwrapping the chain's native gas token.
+//! - [`CoWSwapEthFlow`] and [`EthFlowOrderData`]: the native-token sell
+//!   periphery contract and its order struct, including create/invalidate
+//!   calls and refund events.
 //! - [`GPV2_SETTLEMENT`] and [`GPV2_VAULT_RELAYER`]: the two singleton
 //!   addresses that share a deployment across every chain CoW Protocol
 //!   supports (CREATE2 with the same salt and bytecode).
@@ -277,6 +280,92 @@ sol! {
         function withdraw(uint256 wad) external;
     }
 
+    /// The on-chain `EthFlowOrder.Data` struct passed to
+    /// [`CoWSwapEthFlow::createOrder`].
+    ///
+    /// Mirrors `EthFlowOrder.Data` from
+    /// [`EthFlowOrder.sol`](https://github.com/cowprotocol/ethflowcontract/blob/main/src/libraries/EthFlowOrder.sol).
+    #[derive(Debug, Eq, PartialEq)]
+    struct EthFlowOrderData {
+        address buyToken;
+        address receiver;
+        uint256 sellAmount;
+        uint256 buyAmount;
+        bytes32 appData;
+        uint256 feeAmount;
+        uint32 validTo;
+        bool partiallyFillable;
+        int64 quoteId;
+    }
+
+    /// `CoWSwapEthFlow`, the native-token sell periphery contract.
+    ///
+    /// Source:
+    /// [`CoWSwapEthFlow.sol`](https://github.com/cowprotocol/ethflowcontract/blob/main/src/CoWSwapEthFlow.sol)
+    /// and
+    /// [`ICoWSwapEthFlow.sol`](https://github.com/cowprotocol/ethflowcontract/blob/main/src/interfaces/ICoWSwapEthFlow.sol).
+    #[derive(Debug)]
+    interface CoWSwapEthFlow {
+        // --- events ---
+
+        /// Emitted when an expired or otherwise non-tradable EthFlow
+        /// order is invalidated and its unfilled native token is refunded.
+        event OrderRefund(bytes orderUid, address indexed refunder);
+
+        // --- errors ---
+
+        /// An order with the same settlement hash already exists.
+        error OrderIsAlreadyOwned(bytes32 orderHash);
+        /// The EthFlow order is expired at creation time.
+        error OrderIsAlreadyExpired();
+        /// `msg.value` does not equal `sellAmount + feeAmount`.
+        error IncorrectEthAmount();
+        /// EthFlow rejects zero-amount sells.
+        error NotAllowedZeroSellAmount();
+        /// EthFlow rejects `address(0)` receivers because the contract owns
+        /// the settlement order.
+        error ReceiverMustBeSet();
+        /// Caller is not allowed to invalidate this order.
+        error NotAllowedToInvalidateOrder(bytes32 orderHash);
+        /// Native-token refund transfer failed.
+        error EthTransferFailed();
+
+        // --- writes ---
+
+        /// Create and broadcast an EthFlow order.
+        function createOrder(EthFlowOrderData order) external payable returns (bytes32 orderHash);
+
+        /// Invalidate multiple orders, ignoring entries that cannot be
+        /// invalidated by the caller.
+        function invalidateOrdersIgnoringNotAllowed(EthFlowOrderData[] orderArray) external;
+
+        /// Invalidate one EthFlow order and refund any unfilled native token.
+        function invalidateOrder(EthFlowOrderData order) external;
+
+        /// Wrap the contract's whole native-token balance.
+        function wrapAll() external;
+
+        /// Wrap `amount` native token into the chain's wrapped native token.
+        function wrap(uint256 amount) external;
+
+        /// Unwrap `amount` wrapped native token into native token.
+        function unwrap(uint256 amount) external;
+
+        // --- views ---
+
+        /// EIP-1271 signature check used by settlement.
+        function isValidSignature(bytes32 orderHash, bytes signature) external view returns (bytes4 magicValue);
+
+        /// Settlement contract configured at construction.
+        function cowSwapSettlement() external view returns (address);
+
+        /// Wrapped native token configured at construction.
+        function wrappedNativeToken() external view returns (address);
+
+        /// Stored owner and user-facing expiry for an EthFlow order hash.
+        function orders(bytes32 orderHash) external view returns (address owner, uint32 validTo);
+    }
+
     /// On-chain signature scheme variants accepted by
     /// [`CoWSwapOnchainOrders`]. Mirrors the `OnchainSigningScheme`
     /// Solidity enum at
@@ -339,7 +428,7 @@ sol! {
 mod tests {
     use super::*;
     use alloy_primitives::{Bytes, keccak256};
-    use alloy_sol_types::{SolCall, SolEvent};
+    use alloy_sol_types::{SolCall, SolError, SolEvent};
 
     /// `GPv2Settlement::setPreSignature(bytes,bool)` must encode to the same
     /// 4-byte selector as `keccak256("setPreSignature(bytes,bool)")[..4]`.
@@ -482,6 +571,123 @@ mod tests {
         assert_eq!(
             CoWSwapOnchainOrders::OrderInvalidation::SIGNATURE_HASH,
             keccak256("OrderInvalidation(bytes)")
+        );
+    }
+
+    #[test]
+    fn cowswap_eth_flow_selectors_match_keccak() {
+        let order = "(address,address,uint256,uint256,bytes32,uint256,uint32,bool,int64)";
+        let cases: &[(&[u8; 4], String)] = &[
+            (
+                &CoWSwapEthFlow::createOrderCall::SELECTOR,
+                format!("createOrder({order})"),
+            ),
+            (
+                &CoWSwapEthFlow::invalidateOrderCall::SELECTOR,
+                format!("invalidateOrder({order})"),
+            ),
+            (
+                &CoWSwapEthFlow::invalidateOrdersIgnoringNotAllowedCall::SELECTOR,
+                format!("invalidateOrdersIgnoringNotAllowed({order}[])"),
+            ),
+            (
+                &CoWSwapEthFlow::wrapAllCall::SELECTOR,
+                "wrapAll()".to_string(),
+            ),
+            (
+                &CoWSwapEthFlow::wrapCall::SELECTOR,
+                "wrap(uint256)".to_string(),
+            ),
+            (
+                &CoWSwapEthFlow::unwrapCall::SELECTOR,
+                "unwrap(uint256)".to_string(),
+            ),
+            (
+                &CoWSwapEthFlow::isValidSignatureCall::SELECTOR,
+                "isValidSignature(bytes32,bytes)".to_string(),
+            ),
+        ];
+
+        for (selector, signature) in cases {
+            assert_eq!(
+                selector.as_slice(),
+                &keccak256(signature.as_bytes())[..4],
+                "selector for {signature}",
+            );
+        }
+    }
+
+    #[test]
+    fn cowswap_eth_flow_error_selectors_match_keccak() {
+        let cases: &[(&[u8; 4], &[u8])] = &[
+            (
+                &CoWSwapEthFlow::OrderIsAlreadyOwned::SELECTOR,
+                b"OrderIsAlreadyOwned(bytes32)",
+            ),
+            (
+                &CoWSwapEthFlow::OrderIsAlreadyExpired::SELECTOR,
+                b"OrderIsAlreadyExpired()",
+            ),
+            (
+                &CoWSwapEthFlow::IncorrectEthAmount::SELECTOR,
+                b"IncorrectEthAmount()",
+            ),
+            (
+                &CoWSwapEthFlow::NotAllowedZeroSellAmount::SELECTOR,
+                b"NotAllowedZeroSellAmount()",
+            ),
+            (
+                &CoWSwapEthFlow::ReceiverMustBeSet::SELECTOR,
+                b"ReceiverMustBeSet()",
+            ),
+            (
+                &CoWSwapEthFlow::NotAllowedToInvalidateOrder::SELECTOR,
+                b"NotAllowedToInvalidateOrder(bytes32)",
+            ),
+            (
+                &CoWSwapEthFlow::EthTransferFailed::SELECTOR,
+                b"EthTransferFailed()",
+            ),
+        ];
+
+        for (selector, signature) in cases {
+            assert_eq!(
+                selector.as_slice(),
+                &keccak256(signature)[..4],
+                "selector for {}",
+                std::str::from_utf8(signature).unwrap(),
+            );
+        }
+    }
+
+    #[test]
+    fn cowswap_eth_flow_create_order_call_round_trips() {
+        let order = EthFlowOrderData {
+            buyToken: address!("6B175474E89094C44Da98b954EedeAC495271d0F"),
+            receiver: address!("DeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF"),
+            sellAmount: alloy_primitives::U256::from(1_000_000_u64),
+            buyAmount: alloy_primitives::U256::from(999_000_u64),
+            appData: B256::repeat_byte(0xab),
+            feeAmount: alloy_primitives::U256::from(12_345_u64),
+            validTo: 1_700_000_000,
+            partiallyFillable: false,
+            quoteId: 42,
+        };
+        let call = CoWSwapEthFlow::createOrderCall {
+            order: order.clone(),
+        };
+
+        let encoded = call.abi_encode();
+        assert_eq!(&encoded[..4], &CoWSwapEthFlow::createOrderCall::SELECTOR);
+        let decoded = CoWSwapEthFlow::createOrderCall::abi_decode(&encoded).unwrap();
+        assert_eq!(decoded.order, order);
+    }
+
+    #[test]
+    fn cowswap_eth_flow_event_topic_hashes_match_keccak() {
+        assert_eq!(
+            CoWSwapEthFlow::OrderRefund::SIGNATURE_HASH,
+            keccak256("OrderRefund(bytes,address)")
         );
     }
 

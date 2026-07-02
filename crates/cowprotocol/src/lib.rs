@@ -41,9 +41,9 @@
 //!   for the submission and cancellation flows.
 //! - [`AppDataHash`] and [`AppDataDoc`] for the canonical metadata
 //!   document and its keccak digest.
-//! - [`EthFlowOrder`] plus the [`ETH_FLOW_PRODUCTION`] /
-//!   [`ETH_FLOW_STAGING`] addresses for native-ETH sells via the
-//!   periphery EthFlow contract.
+//! - [`EthFlowOrder`], [`eth_flow::EthFlowDeployment`] and
+//!   [`CoWSwapEthFlow`] for native-token sells via the per-chain EthFlow
+//!   periphery contract.
 //! - [`GPv2Settlement`] and [`GPv2OrderData`] for typed contract bindings,
 //!   plus [`GPV2_SETTLEMENT`], [`GPV2_VAULT_RELAYER`], [`WETH9`] and
 //!   [`ERC20`] address constants.
@@ -137,8 +137,9 @@ pub use crate::{
         safe_handler_signature,
     },
     contracts::{
-        CoWSwapOnchainOrders, ERC20, GPV2_ORDER_TYPE_HASH, GPV2_SETTLEMENT, GPV2_VAULT_RELAYER,
-        GPv2OrderData, GPv2Settlement, OnchainSignature, OnchainSigningScheme, WETH9,
+        CoWSwapEthFlow, CoWSwapOnchainOrders, ERC20, EthFlowOrderData, GPV2_ORDER_TYPE_HASH,
+        GPV2_SETTLEMENT, GPV2_VAULT_RELAYER, GPv2OrderData, GPv2Settlement, OnchainSignature,
+        OnchainSigningScheme, WETH9,
     },
     domain::{
         DOMAIN_NAME, DOMAIN_VERSION, DomainSeparator, eip712_message_hash, settlement_domain,

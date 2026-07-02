@@ -10,11 +10,10 @@
 //! Only sells are supported: to buy native ETH, sell to WETH and unwrap
 //! client-side.
 //!
-//! This module exposes the two deployed addresses and the on-chain order
-//! struct ([`EthFlowOrder`]), plus a helper to project it into the canonical
-//! [`OrderData`] payload that flows through the rest of the SDK. ABI
-//! bindings for `createOrder` / `invalidateOrder` are intentionally deferred
-//! to a follow-up commit so this addition can be reviewed in isolation.
+//! This module exposes the on-chain order struct ([`EthFlowOrder`]), plus a
+//! helper to project it into the canonical [`OrderData`] payload that flows
+//! through the rest of the SDK. Per-chain EthFlow deployment metadata and
+//! `CoWSwapEthFlow` ABI bindings live in `cowprotocol-primitives`.
 //!
 //! Source: `cowprotocol/ethflowcontract/src/libraries/EthFlowOrder.sol` and
 //! cow-docs §7 "ETH-flow".
@@ -25,19 +24,12 @@ use {
         error::{Error, Result},
         order::{BuyTokenDestination, OrderData, OrderKind, SellTokenSource},
     },
-    alloy_primitives::{Address, U256, address},
+    alloy_primitives::{Address, U256},
 };
 
-/// Production EthFlow deployment, identical on every chain CoW Protocol
-/// supports.
-///
-/// Source: `cowprotocol/ethflowcontract/networks.prod.json`.
-pub const ETH_FLOW_PRODUCTION: Address = address!("bA3cB449bD2B4ADddBc894D8697F5170800EAdeC");
-
-/// Staging ("barn") EthFlow deployment, identical on every chain.
-///
-/// Source: `cowprotocol/ethflowcontract/networks.barn.json`.
-pub const ETH_FLOW_STAGING: Address = address!("04501b9b1D52e67f6862d157E00D13419D2D6E95");
+pub use cowprotocol_primitives::{
+    ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowDeployment, EthFlowEnvironment,
+};
 
 /// The on-chain `EthFlowOrder.Data` struct passed to `createOrder`.
 ///
@@ -149,6 +141,7 @@ impl EthFlowOrder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy_primitives::address;
 
     /// Canonical WETH address on Ethereum mainnet: the wrapped-native token
     /// the production EthFlow deployment hands over to the settlement
