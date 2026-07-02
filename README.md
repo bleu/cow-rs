@@ -75,8 +75,7 @@ use alloy_signer_local::PrivateKeySigner;
 
 # async fn run(signer: PrivateKeySigner) -> cowprotocol::Result<()> {
 let owner = alloy_signer::Signer::address(&signer);
-let uid = OrderBookApi::with_chain(Chain::Mainnet)
-    .build()
+let uid = OrderBookApi::new(Chain::Mainnet)
     .quote_builder()
     .with_sell_token(address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")) // USDC
     .with_buy_token(address!("6B175474E89094C44Da98b954EedeAC495271d0F")) // DAI
@@ -139,7 +138,7 @@ assert_eq!(uid.0.len(), 56);
 | `signature` | `Signature` (all four schemes), `EcdsaSignature`, `Recovered`, `SignatureError` |
 | `domain` | `DomainSeparator`, `hashed_eip712_message`, `hashed_ethsign_message` |
 | `chain` | `Chain` (ten networks) with `orderbook_base_url`, `orderbook_barn_url`, `settlement`, `vault_relayer`, `subgraph_gateway_deployment_id` |
-| `cancellation` | `SignedOrderCancellation` (single), `OrderCancellations` (collection), `SignedOrderCancellations` |
+| `cancellation` | `OrderCancellation` (unsigned single), `OrderCancellations` (unsigned collection), `SignedOrderCancellation` / `SignedOrderCancellations` (signed bodies), `cancellation_typed_data` (EIP-712 envelope) |
 | `app_data` | `AppDataHash`, `AppDataDoc` (canonical JSON + keccak digest), `AppDataCid` (IPFS CIDv1 derivation), `AppDataDoc::sdk_attribution` for the SDK's `appCode` tag |
 | `eth_flow` | `EthFlowOrder` (non-zero `receiver` enforced at construction), `ETH_FLOW_PRODUCTION`, `ETH_FLOW_STAGING` |
 | `composable` | `ConditionalOrderParams`, `Proof`, `ComposableCoW` events, `TwapData` + `TwapStaticInput`, plus deployment addresses |
@@ -186,11 +185,11 @@ await init();
 
 // 1. Quote (network).
 const { response } = await get_quote_simple(
-  'mainnet',
   '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // USDC
   '0x6B175474E89094C44Da98b954EedeAC495271d0F', // DAI
   '0x70997970C51812dc3A010C7d01b50e0d17dc79C8', // owner
   '100000000', // 100 USDC, 6 decimals
+  'mainnet',
 );
 
 // 2. Sign in-shim.
@@ -198,9 +197,9 @@ const sig = sign_eip712(response.quote, 'mainnet', PRIVATE_KEY_HEX);
 
 // 3. Submit (network).
 const creation = build_order_creation(
-  response.quote, sig, response.from, 'mainnet', '{}', response.id,
+  response.quote, sig, 'mainnet', response.from, '{}', response.id,
 );
-const uid = await post_order('mainnet', creation);
+const uid = await post_order(creation, 'mainnet');
 console.log(`https://explorer.cow.fi/orders/${uid}`);
 ```
 
@@ -222,11 +221,11 @@ import init, {
 await init();
 
 const { response } = await get_quote_simple(
-  'mainnet',
   '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
   '0x6B175474E89094C44Da98b954EedeAC495271d0F',
   ACCOUNT,
   '100000000',
+  'mainnet',
 );
 const payload = eip712_payload(response.quote, 'mainnet');
 ```
@@ -275,8 +274,8 @@ const sig = {
   v: bytes[64],
 };
 
-const creation = build_order_creation(response.quote, sig, ACCOUNT, 'mainnet', '{}', response.id);
-const uid = await post_order('mainnet', creation);
+const creation = build_order_creation(response.quote, sig, 'mainnet', ACCOUNT, '{}', response.id);
+const uid = await post_order(creation, 'mainnet');
 ```
 
 **Conformance**. `eip712_payload` produces the digest

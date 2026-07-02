@@ -17,8 +17,7 @@
 //! use cowprotocol_orderbook::{Chain, OrderBookApi};
 //!
 //! let wallet = PrivateKeySigner::random();
-//! let uid = OrderBookApi::with_chain(Chain::Gnosis)
-//!     .build()
+//! let uid = OrderBookApi::new(Chain::Gnosis)
 //!     .quote_builder()
 //!     .with_sell_token(address!("e91D153E0b41518A2Ce8Dd3D7944Fa863463a97d")) // WXDAI
 //!     .with_buy_token(address!("9C58BAcC331c9aa871AFD802DB6379a98e80CEdb")) // GNO
@@ -32,6 +31,25 @@
 //! println!("https://explorer.cow.fi/gnosis/orders/{uid}");
 //! # Ok(()) }
 //! ```
+//!
+//! # Reading the builder's type signature
+//!
+//! [`QuoteRequestBuilder`] encodes its four required fields in the type
+//! system, so a half-configured builder cannot compile a call to
+//! [`build`]. It carries one phantom marker per required field:
+//! `SellToken`, `BuyToken`, `From`, and `Amount`, each either
+//! [`Missing`](super::builder_state::Missing) (the default) or
+//! [`Set`](super::builder_state::Set). Every `with_*` setter for a
+//! required field flips its marker from `Missing` to `Set` and returns
+//! the next state, so an IDE reports intermediate types such as
+//! `QuoteRequestBuilder<T, Set, Set, Missing, Missing>`: sell and buy
+//! tokens supplied, owner and amount still outstanding.
+//!
+//! Once all four are supplied the builder reaches the fully-set state,
+//! named [`ReadyQuoteRequestBuilder<T>`], the only state in which
+//! [`build`] and [`into_request`](QuoteRequestBuilder::into_request)
+//! exist. Reach for that alias when writing a signature by hand rather
+//! than spelling out `QuoteRequestBuilder<T, Set, Set, Set, Set>`.
 //!
 //! [`build`]: QuoteRequestBuilder::build
 //! [`sign`]: QuotedOrder::sign
@@ -185,8 +203,7 @@ impl QuoteParts {
 ///
 /// The deleted `TradingClient` mapped 1:1 onto this pipeline:
 ///
-/// - `TradingClient::new(chain)` becomes
-///   `OrderBookApi::with_chain(chain).build()`;
+/// - `TradingClient::new(chain)` becomes `OrderBookApi::new(chain)`;
 /// - `TradingClient::from_orderbook(chain, api)` is no longer needed:
 ///   pass the chain to [`QuotedOrder::sign_with`], which performs the
 ///   same mismatch cross-check against the client's chain hint;
@@ -216,6 +233,24 @@ pub struct QuoteRequestBuilder<
     api: OrderBookApi<T>,
     parts: QuoteParts,
     _state: PhantomData<(SellToken, BuyToken, From, Amount)>,
+}
+
+/// A [`QuoteRequestBuilder`] with all four required fields
+/// ([`Set`]): the state in which [`build`](QuoteRequestBuilder::build)
+/// and [`into_request`](QuoteRequestBuilder::into_request) become
+/// available. Spell out the phantom markers once here so callers naming
+/// a ready builder in a signature or return type do not have to.
+pub type ReadyQuoteRequestBuilder<T> = QuoteRequestBuilder<T, Set, Set, Set, Set>;
+
+// Compile-time guard: pins the alias to the state in which the terminal
+// methods exist. Calling `into_request` (available only on the buildable
+// impl) fails to compile if a future edit desynchronises the alias
+// markers from that impl. Never invoked; it exists to be type-checked.
+#[allow(dead_code)]
+fn ready_builder_is_buildable<T: HttpTransport + Clone>(
+    builder: ReadyQuoteRequestBuilder<T>,
+) -> QuoteRequest {
+    builder.into_request()
 }
 
 impl<T, SellToken, BuyToken, From, Amount>
@@ -532,7 +567,7 @@ impl<T: HttpTransport + Clone> QuotedOrder<T> {
                 reason: "full app-data JSON is required to submit a quote pinned \
                          by a non-empty hash",
             })?;
-        let order = OrderCreation::from_signed_order_data(
+        let order = OrderCreation::new(
             &order_data,
             signature,
             self.response.from,

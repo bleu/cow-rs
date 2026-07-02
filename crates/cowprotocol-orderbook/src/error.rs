@@ -1,5 +1,6 @@
 //! Error and `Result` types for the `cow-rs` crate.
 
+use alloy_primitives::Address;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -73,6 +74,12 @@ pub enum Error {
     /// Signature parsing, signing, or recovery failed.
     #[error(transparent)]
     Signature(#[from] SignatureError),
+
+    /// Owner verification failed: either the embedded signature could
+    /// not be recovered, or the recovered signer did not match the
+    /// declared owner. Raised by [`crate::OrderCreation::verify_owner`].
+    #[error(transparent)]
+    VerifyOwner(#[from] VerifyOwnerError),
 
     /// An app-data document failed to hash or serialise (e.g. it
     /// exceeded [`crate::app_data::APP_DATA_SIZE_LIMIT`]). Surfaced
@@ -192,6 +199,29 @@ pub enum Error {
         /// `keccak256(document.fullAppData.as_bytes())` as actually
         /// computed.
         computed: String,
+    },
+}
+
+/// Errors from [`crate::OrderCreation::verify_owner`]: the signer
+/// recovery step this crate delegates to `cowprotocol-signing`, plus the
+/// order-verification `SignerMismatch` semantic that no signing primitive
+/// produces. It lives here rather than in [`SignatureError`] because the
+/// mismatch is a property of the owner check, not of signature parsing,
+/// so a signing-only consumer's match over [`SignatureError`] stays fully
+/// reachable.
+#[derive(Debug, thiserror::Error)]
+pub enum VerifyOwnerError {
+    /// Recovering the signer from the order's ECDSA signature failed.
+    #[error(transparent)]
+    Signature(#[from] SignatureError),
+    /// The signer recovered from the signature did not match the owner
+    /// declared in the order's `from` field.
+    #[error("signer mismatch: declared {declared}, recovered {recovered}")]
+    SignerMismatch {
+        /// Owner the order claims to be signed by.
+        declared: Address,
+        /// Owner recovered from the signature bytes.
+        recovered: Address,
     },
 }
 

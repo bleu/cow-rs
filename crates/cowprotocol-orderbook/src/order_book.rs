@@ -11,7 +11,7 @@ use std::time::Duration;
 /// (reqwest natively, browser `fetch` on wasm32). A stuck or hostile
 /// orderbook cannot hold a caller's task open longer; on native targets,
 /// override it by passing a pre-configured client to
-/// `OrderBookApi::with_client`. Exposed feature-independently so
+/// `OrderBookApiBuilder::with_client`. Exposed feature-independently so
 /// out-of-tree [`HttpTransport`](crate::transport::HttpTransport)
 /// backends can reuse it without pulling in the `http-client` stack.
 pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -45,13 +45,13 @@ mod quote;
 pub use quote::*;
 
 mod orders;
-pub use orders::{Order, OrderCreation, OrderStatus};
+pub use orders::{Order, OrderCreation, OrderCreationBuilder, OrderStatus};
 
 mod api;
 pub use api::OrderBookApi;
 
 mod flow;
-pub use flow::{OrderSubmission, QuoteRequestBuilder, QuotedOrder};
+pub use flow::{OrderSubmission, QuoteRequestBuilder, QuotedOrder, ReadyQuoteRequestBuilder};
 
 #[cfg(feature = "http-client")]
 mod client;

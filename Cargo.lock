@@ -1003,7 +1003,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cow-sdk-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alloy-primitives",
  "alloy-signer-local",
@@ -1021,7 +1021,7 @@ dependencies = [
 
 [[package]]
 name = "cowprotocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -1041,7 +1041,7 @@ dependencies = [
 
 [[package]]
 name = "cowprotocol-appdata"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alloy-primitives",
  "cid",
@@ -1055,7 +1055,7 @@ dependencies = [
 
 [[package]]
 name = "cowprotocol-orderbook"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alloy-primitives",
  "alloy-signer-local",
@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "cowprotocol-primitives"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "alloy-chains",
  "alloy-primitives",
@@ -1092,12 +1092,13 @@ dependencies = [
 
 [[package]]
 name = "cowprotocol-signing"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
  "alloy-signer-local",
  "alloy-sol-types",
+ "async-trait",
  "const-hex",
  "cowprotocol-primitives",
  "getrandom 0.2.17",
@@ -1106,6 +1107,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

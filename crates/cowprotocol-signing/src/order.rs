@@ -74,7 +74,7 @@ pub struct OrderData {
     /// is semantically equal to `None`, but raw `OrderData` you build and
     /// sign yourself is not normalised: the `Some(ZERO)` to `None` collapse
     /// only happens when you go through the orderbook crate's
-    /// `OrderCreation::from_signed_order_data`.
+    /// `OrderCreation::new`.
     #[serde(default)]
     pub receiver: Option<Address>,
     /// Atomic units of `sell_token`.
@@ -123,6 +123,13 @@ impl OrderData {
     /// Sign with an ECDSA signer; equivalent to
     /// [`crate::signature::sign_ecdsa`] applied to the EIP-712 view of
     /// this order.
+    ///
+    /// Requires a [`SignerSync`](alloy_signer::SignerSync) signer, which
+    /// in practice means a raw local key
+    /// (`alloy_signer_local::PrivateKeySigner`). Production hardware,
+    /// remote or KMS signers implement the async
+    /// [`alloy_signer::Signer`] trait instead, so use [`Self::sign_async`]
+    /// or the [`Self::signing_hash`] digest-and-lift recipe for those.
     pub fn sign<S: alloy_signer::SignerSync>(
         &self,
         scheme: crate::signing_scheme::EcdsaSigningScheme,
@@ -137,6 +144,10 @@ impl OrderData {
     /// [`crate::signature::EcdsaSignature`] (`r || s || v`). Useful for
     /// callers that want the unwrapped signature components without
     /// promoting through the [`crate::signature::Signature`] enum.
+    ///
+    /// Like [`Self::sign`], requires a
+    /// [`SignerSync`](alloy_signer::SignerSync) signer; production
+    /// async signers should use [`Self::sign_ecdsa_async`].
     pub fn sign_ecdsa<S: alloy_signer::SignerSync>(
         &self,
         scheme: crate::signing_scheme::EcdsaSigningScheme,
@@ -145,6 +156,83 @@ impl OrderData {
     ) -> Result<crate::signature::EcdsaSignature, crate::signature::SignatureError> {
         let payload = eip712::Order::from(self);
         crate::signature::sign_ecdsa(scheme, domain, &payload, signer)
+    }
+
+    /// Async counterpart to [`Self::sign`], bound on the async
+    /// [`alloy_signer::Signer`] trait rather than
+    /// [`SignerSync`](alloy_signer::SignerSync). Equivalent to
+    /// [`crate::signature::sign_ecdsa_async`] applied to the EIP-712 view
+    /// of this order, then lifted into the scheme-tagged
+    /// [`Signature`](crate::signature::Signature) enum. Prefer this for
+    /// hardware, remote or KMS signers, which implement only the async
+    /// trait.
+    pub async fn sign_async<S: alloy_signer::Signer>(
+        &self,
+        scheme: crate::signing_scheme::EcdsaSigningScheme,
+        domain: &DomainSeparator,
+        signer: &S,
+    ) -> Result<crate::signature::Signature, crate::signature::SignatureError> {
+        let ecdsa = self.sign_ecdsa_async(scheme, domain, signer).await?;
+        Ok(crate::signature::Signature::from_ecdsa(ecdsa, scheme))
+    }
+
+    /// Async counterpart to [`Self::sign_ecdsa`], bound on the async
+    /// [`alloy_signer::Signer`] trait. Returns the raw
+    /// [`crate::signature::EcdsaSignature`] (`r || s || v`) for callers
+    /// that do not want the scheme-tagged
+    /// [`Signature`](crate::signature::Signature) enum.
+    pub async fn sign_ecdsa_async<S: alloy_signer::Signer>(
+        &self,
+        scheme: crate::signing_scheme::EcdsaSigningScheme,
+        domain: &DomainSeparator,
+        signer: &S,
+    ) -> Result<crate::signature::EcdsaSignature, crate::signature::SignatureError> {
+        let payload = eip712::Order::from(self);
+        crate::signature::sign_ecdsa_async(scheme, domain, &payload, signer).await
+    }
+
+    /// Recover the address that signed this order from a scheme-tagged
+    /// [`Signature`](crate::signature::Signature), the symmetric
+    /// counterpart to [`Self::sign`]. Builds the EIP-712 payload
+    /// internally, so callers never touch the hidden `eip712::Order`
+    /// type. Returns `Ok(None)` for the on-chain
+    /// [`Eip1271`](crate::signature::Signature::Eip1271) /
+    /// [`PreSign`](crate::signature::Signature::PreSign) schemes, which
+    /// carry their owner explicitly rather than deriving it.
+    pub fn recover_signer(
+        &self,
+        domain: &DomainSeparator,
+        signature: &crate::signature::Signature,
+    ) -> Result<Option<crate::signature::Recovered>, crate::signature::SignatureError> {
+        signature.recover(domain, &eip712::Order::from(self))
+    }
+
+    /// Recover the signer of a raw
+    /// [`EcdsaSignature`](crate::signature::EcdsaSignature) over this
+    /// order under `scheme`, the counterpart to [`Self::sign_ecdsa`].
+    pub fn recover_ecdsa(
+        &self,
+        scheme: crate::signing_scheme::EcdsaSigningScheme,
+        domain: &DomainSeparator,
+        signature: &crate::signature::EcdsaSignature,
+    ) -> Result<crate::signature::Recovered, crate::signature::SignatureError> {
+        crate::signature::ecdsa_recover(signature, scheme, domain, &eip712::Order::from(self))
+    }
+
+    /// The exact 32-byte message a signer signs for this order under
+    /// `scheme`: the EIP-712 typed-data hash for
+    /// [`Eip712`](crate::signing_scheme::EcdsaSigningScheme::Eip712), or
+    /// that hash wrapped in the EIP-191 personal-sign envelope for
+    /// [`EthSign`](crate::signing_scheme::EcdsaSigningScheme::EthSign).
+    /// Hand this to an external or async signer (hardware wallet, KMS,
+    /// injected provider), then lift the result back with
+    /// [`Signature::from_ecdsa`](crate::signature::Signature::from_ecdsa).
+    pub fn signing_hash(
+        &self,
+        scheme: crate::signing_scheme::EcdsaSigningScheme,
+        domain: &DomainSeparator,
+    ) -> B256 {
+        crate::signature::signing_message(scheme, domain, &eip712::Order::from(self))
     }
 }
 
@@ -385,6 +473,9 @@ pub use cowprotocol_primitives::order_id::{
 };
 
 #[cfg(test)]
+mod order_signing_tests;
+
+#[cfg(test)]
 mod tests {
     use alloy_primitives::{address, keccak256};
     use hex_literal::hex;
@@ -469,6 +560,20 @@ mod tests {
         assert_eq!(&bytes[..32], &expected_r, "r component");
         assert_eq!(&bytes[32..64], &expected_s, "s component");
         assert_eq!(bytes[64], 28, "v component");
+    }
+
+    /// On-chain schemes carry the owner explicitly, so `recover_signer`
+    /// yields `None` rather than deriving an address.
+    #[test]
+    fn recover_signer_is_none_for_onchain_schemes() {
+        let domain = crate::domain::settlement_domain(1, SETTLEMENT);
+        let order = sample_order();
+        assert!(
+            order
+                .recover_signer(&domain, &crate::signature::Signature::pre_sign())
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// Locks the [`eip712::Order`] `SolStruct::eip712_type_hash` derivation
@@ -732,9 +837,9 @@ mod tests {
     }
 
     /// Pins the full [`order_typed_data`] envelope: the domain reuses the
-    /// `settlement_domain` constants, `verifyingContract` is the lower-case
-    /// address string, and a `None` receiver is materialised as
-    /// `address(0)` in the message.
+    /// `settlement_domain` constants, `verifyingContract` is the EIP-55
+    /// checksummed (mixed-case) address string, and a `None` receiver is
+    /// materialised as `address(0)` in the message.
     #[test]
     fn order_typed_data_envelope_shape() {
         let mut order = sample_order();

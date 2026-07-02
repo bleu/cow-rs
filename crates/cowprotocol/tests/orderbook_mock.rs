@@ -9,9 +9,9 @@
 
 use alloy_primitives::{Address, B256, U256, address};
 use cowprotocol::{
-    AppDataHash, BuyTokenDestination, Chain, OrderBookApi, OrderCancellations, OrderCreation,
-    OrderData, OrderKind, OrderUid, QuoteRequest, SellTokenSource, Signature,
-    SignedOrderCancellation, SigningScheme, order_book::AppDataDocument,
+    AppDataHash, BuyTokenDestination, Chain, OrderBookApi, OrderCancellation, OrderCancellations,
+    OrderCreation, OrderData, OrderKind, OrderUid, QuoteRequest, SellTokenSource, Signature,
+    SigningScheme, order_book::AppDataDocument,
 };
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -87,7 +87,7 @@ async fn post_order_returns_assigned_uid() {
         app_data: cowprotocol::EMPTY_APP_DATA_HASH,
         ..OrderData::default()
     };
-    let creation = OrderCreation::from_signed_order_data(
+    let creation = OrderCreation::new(
         &order,
         zero_eip712_signature(),
         OWNER,
@@ -112,7 +112,7 @@ async fn post_order_surfaces_orderbook_api_error() {
         .mount(&server)
         .await;
 
-    let creation = OrderCreation::from_signed_order_data(
+    let creation = OrderCreation::new(
         &OrderData {
             app_data: cowprotocol::EMPTY_APP_DATA_HASH,
             ..OrderData::default()
@@ -245,13 +245,9 @@ async fn cancel_order_puts_uid_in_path_and_omits_it_from_body() {
         Chain::Mainnet.id(),
         address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
     );
-    let cancellation = SignedOrderCancellation::sign(
-        uid,
-        cowprotocol::EcdsaSigningScheme::Eip712,
-        &domain,
-        &signer,
-    )
-    .unwrap();
+    let cancellation = OrderCancellation::from(uid)
+        .sign(cowprotocol::EcdsaSigningScheme::Eip712, &domain, &signer)
+        .unwrap();
 
     api(&server).cancel_order(&cancellation).await.unwrap();
 }
@@ -758,7 +754,10 @@ async fn slow_server_trips_client_timeout() {
         .timeout(std::time::Duration::from_millis(100))
         .build()
         .unwrap();
-    let api = OrderBookApi::with_client(server.uri().parse().unwrap(), client);
+    let api = OrderBookApi::builder()
+        .with_base_url(server.uri().parse().unwrap())
+        .with_client(client)
+        .build();
 
     let err = api.version().await.unwrap_err();
     match err {

@@ -29,9 +29,10 @@ use {
 };
 
 use cow_sdk_wasm::{
-    app_data_cid_from_hash, app_data_hash_from_json, build_order_creation, chain_info,
-    domain_separator, empty_app_data_hash, get_quote, get_quote_simple, order_uid, post_order,
-    sdk_app_data_hash, sdk_app_data_json, to_signed_order_data, version,
+    app_data_cid_from_hash, app_data_hash_from_json, build_order_cancellation,
+    build_order_creation, cancel_order, cancellation_eip712_payload, cancellation_ethsign_digest,
+    chain_info, domain_separator, empty_app_data_hash, get_quote, get_quote_simple, order_uid,
+    post_order, sdk_app_data_hash, sdk_app_data_json, to_signed_order_data, version,
 };
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -267,11 +268,11 @@ async fn get_quote_simple_parses_response_via_mock_fetch() {
     }"#;
     let _mock = install_mock_fetch(200, Box::leak(body.to_string().into_boxed_str()));
     let payload = get_quote_simple(
-        "mainnet",
         "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
         "0x6B175474E89094C44Da98b954EedeAC495271d0F",
         "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
         "100000000",
+        "mainnet",
     )
     .await
     .unwrap_or_else(|err| panic!("get_quote_simple: {}", err.as_string().unwrap_or_default()));
@@ -336,7 +337,7 @@ async fn get_quote_accepts_pinned_app_data() {
         }"#,
     )
     .unwrap();
-    let response = get_quote("mainnet", request)
+    let response = get_quote(request, "mainnet")
         .await
         .unwrap_or_else(|err| panic!("get_quote: {}", err.as_string().unwrap_or_default()));
     let quote = Reflect::get(&response, &JsValue::from_str("quote")).expect("quote present");
@@ -429,6 +430,129 @@ async fn subgraph_client_totals_via_mock_fetch() {
     assert_eq!(totals.orders, "42");
     assert_eq!(totals.settlements, "5");
     restore_real_fetch();
+}
+
+/// `build_order_cancellation` assembles the external-signing
+/// cancellation payload from a `{ signingScheme, r, s, v }` bag (no
+/// private key), and its output round-trips into `cancel_order`: the same
+/// JSON the builder emits deserialises straight back into the DELETE
+/// binding over a mocked fetch. Proves the external-signing wire shapes
+/// line up end to end without an in-shim key.
+#[wasm_bindgen_test]
+async fn build_order_cancellation_round_trips_into_cancel_order() {
+    let uid = format!("0x{}", "11".repeat(56));
+    // Syntactically valid (r, s, v): 32-byte blobs and v = 27. The
+    // builder does no signer recovery, so the signature need not verify.
+    let signature = JSON::parse(
+        r#"{
+            "signingScheme": "eip712",
+            "r": "0x0000000000000000000000000000000000000000000000000000000000000001",
+            "s": "0x0000000000000000000000000000000000000000000000000000000000000001",
+            "v": 27
+        }"#,
+    )
+    .expect("JSON.parse signature");
+
+    let cancellation = build_order_cancellation(&uid, signature, "mainnet").unwrap_or_else(|err| {
+        panic!(
+            "build_order_cancellation: {}",
+            err.as_string().unwrap_or_default()
+        )
+    });
+
+    // Wire-shape sanity: the DELETE body carries orderUid, a signature
+    // hex string and the lowercase scheme.
+    let order_uid = Reflect::get(&cancellation, &JsValue::from_str("orderUid"))
+        .expect("orderUid present")
+        .as_string()
+        .expect("orderUid string");
+    assert_eq!(order_uid, uid);
+    let scheme = Reflect::get(&cancellation, &JsValue::from_str("signingScheme"))
+        .expect("signingScheme present")
+        .as_string()
+        .expect("signingScheme string");
+    assert_eq!(scheme, "eip712");
+
+    // Round-trip: hand the emitted payload straight to cancel_order. A
+    // successful DELETE returns 2xx with an empty body.
+    let _mock = install_mock_fetch(200, "");
+    cancel_order(cancellation, "mainnet")
+        .await
+        .unwrap_or_else(|err| panic!("cancel_order: {}", err.as_string().unwrap_or_default()));
+    restore_real_fetch();
+}
+
+/// `cancellation_eip712_payload` returns the `{ domain, primaryType,
+/// types, message }` envelope a wallet's `signTypedData` accepts. Assert
+/// the wasm wiring threads the right chain accessors (`c.id()` into
+/// `domain.chainId`), pins `primaryType` to `OrderCancellation`,
+/// round-trips the uid into `message.orderUid`, and omits the
+/// `EIP712Domain` typedef so viem / ethers do not throw on a duplicate.
+#[wasm_bindgen_test]
+fn cancellation_eip712_payload_has_expected_envelope() {
+    let uid = format!("0x{}", "22".repeat(56));
+    let payload = cancellation_eip712_payload(&uid, "mainnet").unwrap_or_else(|err| {
+        panic!(
+            "cancellation_eip712_payload: {}",
+            err.as_string().unwrap_or_default()
+        )
+    });
+
+    let primary_type = Reflect::get(&payload, &JsValue::from_str("primaryType"))
+        .expect("primaryType present")
+        .as_string()
+        .expect("primaryType string");
+    assert_eq!(primary_type, "OrderCancellation");
+
+    let domain = Reflect::get(&payload, &JsValue::from_str("domain")).expect("domain present");
+    let chain_id = Reflect::get(&domain, &JsValue::from_str("chainId"))
+        .expect("chainId present")
+        .as_f64()
+        .expect("chainId number");
+    assert_eq!(chain_id, 1.0, "mainnet chainId should be 1");
+
+    let message = Reflect::get(&payload, &JsValue::from_str("message")).expect("message present");
+    let order_uid = Reflect::get(&message, &JsValue::from_str("orderUid"))
+        .expect("orderUid present")
+        .as_string()
+        .expect("orderUid string");
+    assert_eq!(
+        order_uid, uid,
+        "message.orderUid should round-trip the input"
+    );
+
+    // The `EIP712Domain` typedef is deliberately omitted so ethers v6 /
+    // viem build it from the `domain` object instead of throwing on a
+    // duplicate entry.
+    let types = Reflect::get(&payload, &JsValue::from_str("types")).expect("types present");
+    assert!(
+        !Reflect::has(&types, &JsValue::from_str("EIP712Domain")).unwrap_or(true),
+        "types should omit the EIP712Domain entry",
+    );
+    assert!(
+        Reflect::has(&types, &JsValue::from_str("OrderCancellation")).unwrap_or(false),
+        "types should carry the OrderCancellation entry",
+    );
+}
+
+/// `cancellation_ethsign_digest` returns the 0x-prefixed 32-byte digest
+/// an injected wallet must `personal_sign`. Assert the shape at the wasm
+/// boundary; the exact hash is locked in `cowprotocol-signing`.
+#[wasm_bindgen_test]
+fn cancellation_ethsign_digest_is_32_byte_hex() {
+    let uid = format!("0x{}", "22".repeat(56));
+    let digest = cancellation_ethsign_digest(&uid, "mainnet").unwrap_or_else(|err| {
+        panic!(
+            "cancellation_ethsign_digest: {}",
+            err.as_string().unwrap_or_default()
+        )
+    });
+    assert!(digest.starts_with("0x"), "no 0x prefix: {digest}");
+    assert_eq!(
+        digest.len(),
+        2 + 64,
+        "expected 32 bytes (64 hex chars): {digest}"
+    );
 }
 
 // ===== In-shim signing (feature-gated) =================================
@@ -532,7 +656,7 @@ fn sdk_app_data_json_and_hash_are_consistent() {
 #[wasm_bindgen_test]
 fn build_order_creation_rejects_overflowing_quote_id() {
     // App-data hash matching the canonical empty document `"{}"`, so
-    // `from_signed_order_data` cannot reject the body on the
+    // `OrderCreation::new` cannot reject the body on the
     // hash-mismatch path before the `quote_id` check fires. Use the
     // app-data hash sentinel from the SDK for the same reason.
     let empty_hash = empty_app_data_hash();
@@ -569,8 +693,8 @@ fn build_order_creation_rejects_overflowing_quote_id() {
     let err = build_order_creation(
         order_js,
         signature,
-        "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
         "mainnet",
+        "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
         "{}",
         Some(u64::MAX),
     )
@@ -638,7 +762,7 @@ async fn post_order_rejects_wrong_from_locally() {
     let creation_json = serde_json::to_string(&creation).expect("creation to json");
     let creation_js = JSON::parse(&creation_json).expect("JSON.parse creation");
 
-    let err = post_order("mainnet", creation_js)
+    let err = post_order(creation_js, "mainnet")
         .await
         .expect_err("expected signer mismatch before fetch");
     let msg = err.as_string().unwrap_or_default();

@@ -74,9 +74,35 @@ mod client_config {
     use crate::chain::Chain;
     use crate::order::OrderUid;
 
+    // Delegation test for the deprecated `OrderBookApi::with_chain`
+    // shortcut: it must still resolve to the same chain hint and base URL
+    // as the builder path it forwards to.
     #[test]
-    fn orderbook_api_builder_with_chain_sets_chain_and_url() {
+    #[allow(deprecated)]
+    fn deprecated_with_chain_delegates_to_builder() {
         let api = OrderBookApi::with_chain(Chain::Gnosis).build();
+
+        assert_eq!(api.chain(), Some(Chain::Gnosis));
+        assert_eq!(api.base_url().as_str(), "https://api.cow.fi/xdai/");
+    }
+
+    // Delegation test for the deprecated `OrderBookApi::with_client`
+    // shortcut: it must still resolve to the same base URL and chainless
+    // client as the advanced-HTTP builder path it is superseded by.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_with_client_delegates_to_builder() {
+        let url = url::Url::parse("https://example.test/orderbook/").unwrap();
+        let api = OrderBookApi::with_client(url.clone(), reqwest::Client::new());
+
+        assert_eq!(api.chain(), None);
+        assert_eq!(api.base_url(), &url);
+    }
+
+    #[test]
+    fn new_sets_chain_hint_and_base_url() {
+        let api = OrderBookApi::new(Chain::Gnosis);
 
         assert_eq!(api.chain(), Some(Chain::Gnosis));
         assert_eq!(api.base_url().as_str(), "https://api.cow.fi/xdai/");
@@ -303,7 +329,7 @@ mod wire_shape {
             )
             .unwrap();
         let signature = zero_eip712_signature();
-        let creation = OrderCreation::from_signed_order_data(
+        let creation = OrderCreation::new(
             &signed,
             signature,
             quote.from,
@@ -341,7 +367,7 @@ mod wire_shape {
                 &OrderCosts::default(),
             )
             .unwrap();
-        let original = OrderCreation::from_signed_order_data(
+        let original = OrderCreation::new(
             &signed,
             signature,
             quote.from,
@@ -434,7 +460,7 @@ mod wire_shape {
                 &OrderCosts::default(),
             )
             .unwrap();
-        let creation = OrderCreation::from_signed_order_data(
+        let creation = OrderCreation::new(
             &signed,
             zero_eip712_signature(),
             quote.from,
@@ -1206,7 +1232,7 @@ mod pipeline {
         assert!(
             matches!(
                 err,
-                Error::Signature(crate::signature::SignatureError::SignerMismatch { .. })
+                Error::VerifyOwner(crate::error::VerifyOwnerError::SignerMismatch { .. })
             ),
             "got: {err:?}"
         );
@@ -1372,7 +1398,7 @@ mod pipeline {
             .sign(EcdsaSigningScheme::Eip712, &domain, &wallet)
             .unwrap();
         // Declared owner is NOT the signer: the chokepoint must refuse.
-        let body = OrderCreation::from_signed_order_data(
+        let body = OrderCreation::new(
             &order_data,
             signature,
             impostor,
@@ -1387,7 +1413,7 @@ mod pipeline {
         assert!(
             matches!(
                 err,
-                Error::Signature(crate::signature::SignatureError::SignerMismatch { .. })
+                Error::VerifyOwner(crate::error::VerifyOwnerError::SignerMismatch { .. })
             ),
             "got: {err:?}"
         );

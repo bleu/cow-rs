@@ -28,11 +28,12 @@ pub use cowprotocol_appdata::{
 };
 pub use cowprotocol_primitives::{Chain, chain, contracts, domain};
 pub use cowprotocol_signing::{
-    BUY_ETH_ADDRESS, BuyTokenDestination, EcdsaSignature, EcdsaSigningScheme, OrderCancellations,
-    OrderClass, OrderData, OrderKind, OrderUid, OrderUidParseError, OrderUidParts, Recovered,
-    SellTokenSource, Signature, SignatureError, SignedOrderCancellation, SignedOrderCancellations,
-    SignerSync, SigningScheme, cancellation, ecdsa_from_components, ecdsa_recover, order,
-    order_typed_data, parse_ecdsa, parse_order_uid, sign_ecdsa, signature, signing_scheme,
+    BUY_ETH_ADDRESS, BuyTokenDestination, EcdsaSignature, EcdsaSigningScheme, OrderCancellation,
+    OrderCancellations, OrderClass, OrderData, OrderKind, OrderUid, OrderUidParseError,
+    OrderUidParts, Recovered, SellTokenSource, Signature, SignatureError, SignedOrderCancellation,
+    SignedOrderCancellations, SignerSync, SigningScheme, cancellation, cancellation_typed_data,
+    ecdsa_from_components, ecdsa_recover, order, order_typed_data, parse_ecdsa, parse_order_uid,
+    sign_ecdsa, signature, signing_scheme,
 };
 
 pub mod error;
@@ -44,13 +45,14 @@ pub mod subgraph;
 pub mod transport;
 
 pub use self::{
-    error::{ApiError, Error, Result},
+    error::{ApiError, Error, Result, VerifyOwnerError},
     eth_flow::{ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowOrder},
     order_book::{
         AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, Order,
-        OrderBookApi, OrderCreation, OrderQuote, OrderQuoteResponse, OrderStatus, OrderSubmission,
-        PriceQuality, QuoteAppData, QuoteRequest, QuoteRequestBuilder, QuotedOrder, TokenMetadata,
-        TotalSurplus, Trade,
+        OrderBookApi, OrderCreation, OrderCreationBuilder, OrderQuote, OrderQuoteResponse,
+        OrderStatus, OrderSubmission, PriceQuality, QuoteAppData, QuoteRequest,
+        QuoteRequestBuilder, QuotedOrder, ReadyQuoteRequestBuilder, TokenMetadata, TotalSurplus,
+        Trade,
     },
     quote_amounts::{
         Amounts as QuoteAmounts, DEFAULT_SLIPPAGE_BPS, OrderCosts, ProtocolFeeBps,

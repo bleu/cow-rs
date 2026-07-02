@@ -18,7 +18,7 @@
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/model/src/signature.rs
 
 use alloy_primitives::{Address, B256, Bytes, Signature as PrimSignature, eip191_hash_message};
-use alloy_signer::{SignerSync, k256::ecdsa::Error as K256Error};
+use alloy_signer::{Signer, SignerSync, k256::ecdsa::Error as K256Error};
 use alloy_sol_types::SolStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::fmt::{self, Debug, Formatter};
@@ -41,7 +41,13 @@ pub const EIP1271_MAX_LEN: usize = 32 * 1024;
 /// [`Signature`] enum.
 pub type EcdsaSignature = PrimSignature;
 
-/// Errors specific to signature parsing or verification.
+/// Errors specific to signature parsing, signing, or recovery.
+///
+/// Every variant is reachable from this crate's own functions. The
+/// order-verification `SignerMismatch` semantic (a recovered signer that
+/// differs from the declared owner) lives in the orderbook crate's
+/// `VerifyOwnerError` instead, since no signing primitive here produces
+/// it.
 #[derive(Debug, thiserror::Error)]
 pub enum SignatureError {
     /// ECDSA payload was not 65 bytes (`r || s || v`).
@@ -71,19 +77,6 @@ pub enum SignatureError {
     /// Owned message so attacker-controllable bytes are never leaked.
     #[error("signer error: {0}")]
     SignerOther(String),
-    /// Recovered signer ≠ declared. Raised by the orderbook crate's
-    /// `OrderCreation::verify_owner`. Kept here rather than in the
-    /// orderbook error enum because the mismatch is a property of the
-    /// signature recovery this crate owns; any consumer that recovers
-    /// and compares (the orderbook, the wasm shim, integrator code)
-    /// reports the same failure shape.
-    #[error("signer mismatch: declared {declared}, recovered {recovered}")]
-    SignerMismatch {
-        /// Owner the order claims to be signed by.
-        declared: Address,
-        /// Owner recovered from the signature bytes.
-        recovered: Address,
-    },
 }
 
 /// Signature over the EIP-712 order hash.
@@ -101,12 +94,24 @@ pub enum Signature {
     /// `abi.encodePacked(owner, signature)` (owner in the first 20
     /// bytes), so feeding these bytes straight into
     /// `GPv2Settlement.settle()` yields a malformed signature.
+    ///
+    /// Construct it with [`Signature::eip1271`] rather than the bare
+    /// variant: the constructor enforces the [`EIP1271_MAX_LEN`] cap,
+    /// which direct variant construction skips.
     Eip1271(Vec<u8>),
     /// On-chain pre-signature via `GPv2Signing::setPreSignature`. The
     /// orderbook wire form is an empty payload (the owner is carried on
     /// the order); the on-chain calldata form is the 20-byte owner
     /// address (`GPv2Signing.sol` requires `length == 20`).
     /// [`Signature::from_bytes`] accepts both.
+    ///
+    /// Construct it with [`Signature::pre_sign`] rather than the bare
+    /// variant; `to_bytes` then yields the empty wire payload:
+    ///
+    /// ```
+    /// use cowprotocol_signing::Signature;
+    /// assert!(Signature::pre_sign().to_bytes().is_empty());
+    /// ```
     PreSign,
 }
 
@@ -131,6 +136,29 @@ impl Signature {
             EcdsaSigningScheme::Eip712 => Self::Eip712(sig),
             EcdsaSigningScheme::EthSign => Self::EthSign(sig),
         }
+    }
+
+    /// Construct an EIP-1271 (contract-wallet) signature, enforcing the
+    /// [`EIP1271_MAX_LEN`] cap that the bare [`Signature::Eip1271`]
+    /// variant skips. The named, validating constructor for the Safe /
+    /// contract-wallet flow, mirroring [`Signature::from_ecdsa`] for the
+    /// off-chain schemes.
+    pub fn eip1271(bytes: impl Into<Vec<u8>>) -> Result<Self, SignatureError> {
+        let bytes = bytes.into();
+        if bytes.len() > EIP1271_MAX_LEN {
+            return Err(SignatureError::Eip1271TooLong {
+                len: bytes.len(),
+                max: EIP1271_MAX_LEN,
+            });
+        }
+        Ok(Self::Eip1271(bytes))
+    }
+
+    /// Construct a [`Signature::PreSign`] signature for the on-chain
+    /// pre-signature flow. The pre-signature carries no payload;
+    /// [`Signature::to_bytes`] yields an empty `Vec`.
+    pub const fn pre_sign() -> Self {
+        Self::PreSign
     }
 
     /// Which signing scheme this signature corresponds to.
@@ -227,8 +255,14 @@ pub struct Recovered {
 }
 
 /// Sign an EIP-712 [`SolStruct`] payload with a
-/// `SignerSync`-implementing signer (e.g.
-/// `alloy_signer_local::PrivateKeySigner`).
+/// [`SignerSync`]-implementing signer.
+///
+/// In practice only a raw in-memory key
+/// (`alloy_signer_local::PrivateKeySigner`) implements [`SignerSync`].
+/// Production backends (hardware wallet, remote signer, KMS) implement
+/// the async [`alloy_signer::Signer`] trait, so reach for the
+/// [`sign_ecdsa_async`] twin or the [`signing_message`] digest-and-lift
+/// recipe instead.
 pub fn sign_ecdsa<T: SolStruct, S: SignerSync>(
     scheme: EcdsaSigningScheme,
     domain: &DomainSeparator,
@@ -237,6 +271,31 @@ pub fn sign_ecdsa<T: SolStruct, S: SignerSync>(
 ) -> Result<EcdsaSignature, SignatureError> {
     let message = signing_message(scheme, domain, payload);
     let raw = signer.sign_hash_sync(&message).map_err(|e| match e {
+        alloy_signer::Error::Ecdsa(k) => SignatureError::Signer(k),
+        other => SignatureError::SignerOther(other.to_string()),
+    })?;
+    parse_ecdsa(&raw.as_bytes())
+}
+
+/// Async counterpart to [`sign_ecdsa`], bound on the async
+/// [`alloy_signer::Signer`] trait (`sign_hash`) rather than
+/// [`SignerSync`]. This makes production backends (hardware wallet,
+/// remote signer, KMS), which implement only the async trait, a
+/// first-class signing path.
+///
+/// Signs the same [`signing_message`] digest as [`sign_ecdsa`], so a
+/// signer implementing both traits yields a byte-identical signature.
+/// The async signer's error is mapped into [`SignatureError::Signer`]
+/// for the `k256` case and [`SignatureError::SignerOther`] otherwise,
+/// preserving the signer's own message.
+pub async fn sign_ecdsa_async<T: SolStruct, S: Signer>(
+    scheme: EcdsaSigningScheme,
+    domain: &DomainSeparator,
+    payload: &T,
+    signer: &S,
+) -> Result<EcdsaSignature, SignatureError> {
+    let message = signing_message(scheme, domain, payload);
+    let raw = signer.sign_hash(&message).await.map_err(|e| match e {
         alloy_signer::Error::Ecdsa(k) => SignatureError::Signer(k),
         other => SignatureError::SignerOther(other.to_string()),
     })?;
@@ -287,7 +346,15 @@ pub fn ecdsa_recover<T: SolStruct>(
 /// [`SolStruct::eip712_signing_hash`]; `EthSign` wraps that hash in the
 /// EIP-191 personal-sign envelope via
 /// [`alloy_primitives::eip191_hash_message`].
-fn signing_message<T: SolStruct>(
+///
+/// This is the forward counterpart to [`ecdsa_recover`]: it yields the
+/// exact 32 bytes to hand an external or async signer (hardware wallet,
+/// KMS, injected provider), whose returned signature is then lifted back
+/// with [`Signature::from_ecdsa`] / [`ecdsa_from_components`]. For an
+/// [`crate::order::OrderData`] prefer the
+/// [`OrderData::signing_hash`](crate::order::OrderData::signing_hash)
+/// wrapper, which builds the payload for you.
+pub fn signing_message<T: SolStruct>(
     signing_scheme: EcdsaSigningScheme,
     domain: &DomainSeparator,
     payload: &T,
@@ -500,6 +567,25 @@ mod tests {
     }
 
     #[test]
+    fn eip1271_constructor_enforces_cap() {
+        // At the cap is accepted; one byte over is rejected, unlike the
+        // bare `Signature::Eip1271(..)` variant which skips the check.
+        let at_cap = Signature::eip1271(vec![0u8; EIP1271_MAX_LEN]).unwrap();
+        assert_eq!(at_cap.to_bytes().len(), EIP1271_MAX_LEN);
+        assert!(matches!(
+            Signature::eip1271(vec![0u8; EIP1271_MAX_LEN + 1]),
+            Err(SignatureError::Eip1271TooLong { max, .. }) if max == EIP1271_MAX_LEN
+        ));
+    }
+
+    #[test]
+    fn pre_sign_constructor_yields_empty_wire_bytes() {
+        let sig = Signature::pre_sign();
+        assert_eq!(sig, Signature::PreSign);
+        assert!(sig.to_bytes().is_empty());
+    }
+
+    #[test]
     fn v_normalisation_matches_services() {
         for (raw, expected) in [(0u8, 27u8), (1, 28), (27, 27), (28, 28)] {
             let mut bytes = [0u8; 65];
@@ -582,6 +668,77 @@ mod tests {
             let recovered = typed.recover(&domain, &payload).unwrap().unwrap();
             assert_eq!(recovered.signer, address);
         }
+    }
+
+    /// [`sign_ecdsa_async`] must produce the byte-identical signature to
+    /// [`sign_ecdsa`] for a signer implementing both traits, since both
+    /// sign the same [`signing_message`] digest.
+    #[tokio::test]
+    async fn sign_ecdsa_async_matches_sync() {
+        let signer = PrivateKeySigner::from_bytes(&U256::from(1u64).to_be_bytes().into()).unwrap();
+        let domain = crate::domain::settlement_domain(
+            1,
+            alloy_primitives::address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
+        );
+        let payload = probe_payload(hex!(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
+
+        for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
+            let sync = sign_ecdsa(scheme, &domain, &payload, &signer).unwrap();
+            let asynchronous = sign_ecdsa_async(scheme, &domain, &payload, &signer)
+                .await
+                .unwrap();
+            assert_eq!(sync, asynchronous);
+        }
+    }
+
+    /// Async-only signer (implements [`alloy_signer::Signer`] but not
+    /// [`SignerSync`]) whose `sign_hash` always fails, mirroring a remote
+    /// or KMS backend that rejects the request.
+    struct FailingAsyncSigner;
+
+    #[async_trait::async_trait]
+    impl Signer for FailingAsyncSigner {
+        async fn sign_hash(&self, _hash: &B256) -> Result<PrimSignature, alloy_signer::Error> {
+            Err(alloy_signer::Error::message("remote signer offline"))
+        }
+
+        fn address(&self) -> alloy_primitives::Address {
+            alloy_primitives::Address::ZERO
+        }
+
+        fn chain_id(&self) -> Option<alloy_primitives::ChainId> {
+            None
+        }
+
+        fn set_chain_id(&mut self, _chain_id: Option<alloy_primitives::ChainId>) {}
+    }
+
+    /// [`sign_ecdsa_async`] accepts a signer that implements only the async
+    /// [`Signer`] trait, and maps the signer's own error into
+    /// [`SignatureError::SignerOther`] with its message preserved.
+    #[tokio::test]
+    async fn sign_ecdsa_async_maps_signer_error() {
+        let domain = crate::domain::settlement_domain(
+            1,
+            alloy_primitives::address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
+        );
+        let payload = probe_payload([0u8; 32]);
+
+        let err = sign_ecdsa_async(
+            EcdsaSigningScheme::Eip712,
+            &domain,
+            &payload,
+            &FailingAsyncSigner,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            SignatureError::SignerOther(ref msg) if msg.contains("remote signer offline")
+        ));
     }
 
     #[test]

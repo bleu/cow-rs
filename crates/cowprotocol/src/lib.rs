@@ -74,8 +74,7 @@
 //! use alloy_primitives::{U256, address};
 //!
 //! # pub async fn run() -> cowprotocol::Result<()> {
-//! let quote = OrderBookApi::with_chain(Chain::Mainnet)
-//!     .build()
+//! let quote = OrderBookApi::new(Chain::Mainnet)
 //!     .quote_builder()
 //!     .with_sell_token(address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")) // USDC
 //!     .with_buy_token(address!("6B175474E89094C44Da98b954EedeAC495271d0F")) // DAI
@@ -119,18 +118,22 @@ pub use cowprotocol_signing::{cancellation, order, signature, signing_scheme};
 
 pub use crate::{
     app_data::{
-        AppDataCid, AppDataCidError, AppDataDoc, AppDataFlashloan, AppDataHash, AppDataMetadata,
-        AppDataOrderClass, AppDataPartnerFee, AppDataQuote, AppDataReferrer, AppDataReplacedOrder,
-        AppDataUtm, AppDataWrapperCall, COW_RS_APP_CODE, COW_RS_WASM_APP_CODE, EMPTY_APP_DATA_HASH,
-        EMPTY_APP_DATA_JSON, FeePolicy, LATEST_APP_DATA_VERSION, MAX_CID_STR_LEN, app_data_cid,
+        AppDataCid, AppDataCidError, AppDataDoc, AppDataFlashloan, AppDataHash, AppDataHooks,
+        AppDataMetadata, AppDataOrderClass, AppDataPartnerFee, AppDataQuote, AppDataReferrer,
+        AppDataReplacedOrder, AppDataUtm, AppDataWrapperCall, COW_RS_APP_CODE,
+        COW_RS_WASM_APP_CODE, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON, FeePolicy, Hook,
+        LATEST_APP_DATA_VERSION, MAX_CID_STR_LEN, PreparedAppData, app_data_cid,
         app_data_hash_from_cid, parse_app_data_cid,
     },
-    cancellation::{OrderCancellations, SignedOrderCancellation, SignedOrderCancellations},
+    cancellation::{
+        OrderCancellation, OrderCancellations, SignedOrderCancellation, SignedOrderCancellations,
+        cancellation_typed_data,
+    },
     chain::{Chain, UnsupportedChain},
     composable::{
         COMPOSABLE_COW, CURRENT_BLOCK_TIMESTAMP_FACTORY, ComposableCoW, ConditionalOrderParams,
         EXTENSIBLE_FALLBACK_HANDLER, PayloadStruct, Proof, ProofLocation, TWAP_HANDLER, TwapData,
-        TwapDuration, TwapError, TwapStart, TwapStaticInput, forwarder_signature,
+        TwapDataBuilder, TwapDuration, TwapError, TwapStart, TwapStaticInput, forwarder_signature,
         safe_handler_signature,
     },
     contracts::{
@@ -140,18 +143,21 @@ pub use crate::{
     domain::{
         DOMAIN_NAME, DOMAIN_VERSION, DomainSeparator, eip712_message_hash, settlement_domain,
     },
-    error::{ApiError, Error, Result},
+    error::{ApiError, Error, Result, VerifyOwnerError},
     eth_flow::{ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowOrder},
-    multiplexer::{Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof},
+    multiplexer::{
+        MerkleProof, Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof,
+    },
     order::{
         BUY_ETH_ADDRESS, BuyTokenDestination, OrderClass, OrderData, OrderKind, OrderUid,
         OrderUidParseError, OrderUidParts, SellTokenSource, order_typed_data, parse_order_uid,
     },
     order_book::{
         AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, Order,
-        OrderBookApi, OrderCreation, OrderQuote, OrderQuoteResponse, OrderStatus, OrderSubmission,
-        PriceQuality, QuoteAppData, QuoteRequest, QuoteRequestBuilder, QuotedOrder, TokenMetadata,
-        TotalSurplus, Trade,
+        OrderBookApi, OrderCreation, OrderCreationBuilder, OrderQuote, OrderQuoteResponse,
+        OrderStatus, OrderSubmission, PriceQuality, QuoteAppData, QuoteRequest,
+        QuoteRequestBuilder, QuotedOrder, ReadyQuoteRequestBuilder, TokenMetadata, TotalSurplus,
+        Trade,
     },
     quote_amounts::{
         Amounts as QuoteAmounts, DEFAULT_SLIPPAGE_BPS, OrderCosts, ProtocolFeeBps,
@@ -159,7 +165,7 @@ pub use crate::{
     },
     signature::{
         EcdsaSignature, Recovered, Signature, SignatureError, ecdsa_from_components, ecdsa_recover,
-        parse_ecdsa, sign_ecdsa,
+        parse_ecdsa, sign_ecdsa, sign_ecdsa_async, signing_message,
     },
     signing_scheme::{EcdsaSigningScheme, SigningScheme},
     transport::{HttpMethod, HttpRequest, HttpResponse, HttpTransport},
@@ -180,9 +186,10 @@ pub use crate::{order_book::OrderBookApiBuilder, transport::DefaultTransport};
 pub mod prelude {
     pub use crate::{
         AppDataDoc, AppDataHash, Chain, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON, Error,
-        OrderBookApi, OrderCreation, OrderData, OrderKind, OrderQuoteResponse, OrderSubmission,
-        OrderUid, PriceQuality, QuoteAppData, QuoteRequest, QuoteRequestBuilder, QuotedOrder,
-        Result, Signature, SigningScheme, settlement_domain,
+        OrderBookApi, OrderCreation, OrderCreationBuilder, OrderData, OrderKind,
+        OrderQuoteResponse, OrderSubmission, OrderUid, PriceQuality, QuoteAppData, QuoteRequest,
+        QuoteRequestBuilder, QuotedOrder, ReadyQuoteRequestBuilder, Result, Signature,
+        SigningScheme, settlement_domain,
     };
 
     #[cfg(feature = "http-client")]

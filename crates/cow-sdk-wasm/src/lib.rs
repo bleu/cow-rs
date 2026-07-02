@@ -29,7 +29,24 @@
 //!    and normalises a null `receiver` to `address(0)`. Callers that
 //!    only need the 32-byte digest can instead compose
 //!    [`order_struct_hash`] + [`eip712_message_hash`], the lower-level
-//!    path that yields the same hash.
+//!    path that yields the same hash. Cancellations follow the same
+//!    external-signing shape: [`cancellation_eip712_payload`] /
+//!    [`cancellation_ethsign_digest`] produce what the wallet signs,
+//!    then [`build_order_cancellation`] lifts the (r, s, v) into the
+//!    `DELETE`-order payload [`cancel_order`] expects.
+//!
+//! # Parameter-ordering convention
+//!
+//! Every exported function orders its arguments the same way, so callers
+//! build muscle memory instead of consulting the docs per call: the
+//! **primary subject or payload comes first** (the `orderData`, the
+//! `orderUid`, the quote `request`, the token being priced), **then the
+//! `chain`**, **then any auxiliaries** (`owner`, app-data JSON), with
+//! **optional pagination or ids last** (`offset` / `limit`, `quoteId`).
+//! Functions taking only a payload (or only a `chain`) are unaffected.
+//! When the payload is spread across several positional arguments (for
+//! example [`get_quote_simple`]'s token tuple), those stay grouped up
+//! front and `chain` follows the group.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![deny(unsafe_code)]
@@ -43,16 +60,17 @@ mod signing;
 #[doc(inline)]
 pub use {
     app_data::{
-        app_data_cid_from_hash, app_data_hash_from_json, empty_app_data_hash, sdk_app_data_hash,
-        sdk_app_data_json, to_signed_order_data,
+        app_data_cid_from_hash, app_data_hash_from_json, app_data_prepared, empty_app_data_hash,
+        sdk_app_data_hash, sdk_app_data_json, to_signed_order_data,
     },
     endpoints::{
         account_orders, cancel_order, get_order, get_order_status, get_quote, get_quote_simple,
         native_price, post_order, trades_by_order_uid, trades_by_owner, version,
     },
     signing::{
-        build_order_creation, build_order_creation_eip1271, eip712_message_hash, eip712_payload,
-        order_struct_hash, order_uid,
+        build_order_cancellation, build_order_creation, build_order_creation_eip1271,
+        cancellation_eip712_payload, cancellation_ethsign_digest, eip712_message_hash,
+        eip712_payload, ethsign_digest, order_struct_hash, order_uid,
     },
 };
 
