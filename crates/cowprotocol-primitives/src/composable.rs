@@ -25,8 +25,11 @@
 //!
 //! [cc]: https://github.com/cowprotocol/composable-cow
 
+#[path = "composable/conditional.rs"]
+mod conditional;
 mod twap;
 
+pub use conditional::*;
 pub use twap::*;
 
 use alloy_primitives::{Address, B256, Bytes, U256, address};
