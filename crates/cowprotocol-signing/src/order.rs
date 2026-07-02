@@ -146,6 +146,50 @@ impl OrderData {
         let payload = eip712::Order::from(self);
         crate::signature::sign_ecdsa(scheme, domain, &payload, signer)
     }
+
+    /// Recover the address that signed this order from a scheme-tagged
+    /// [`Signature`](crate::signature::Signature), the symmetric
+    /// counterpart to [`Self::sign`]. Builds the EIP-712 payload
+    /// internally, so callers never touch the hidden `eip712::Order`
+    /// type. Returns `Ok(None)` for the on-chain
+    /// [`Eip1271`](crate::signature::Signature::Eip1271) /
+    /// [`PreSign`](crate::signature::Signature::PreSign) schemes, which
+    /// carry their owner explicitly rather than deriving it.
+    pub fn recover_signer(
+        &self,
+        domain: &DomainSeparator,
+        signature: &crate::signature::Signature,
+    ) -> Result<Option<crate::signature::Recovered>, crate::signature::SignatureError> {
+        signature.recover(domain, &eip712::Order::from(self))
+    }
+
+    /// Recover the signer of a raw
+    /// [`EcdsaSignature`](crate::signature::EcdsaSignature) over this
+    /// order under `scheme`, the counterpart to [`Self::sign_ecdsa`].
+    pub fn recover_ecdsa(
+        &self,
+        scheme: crate::signing_scheme::EcdsaSigningScheme,
+        domain: &DomainSeparator,
+        signature: &crate::signature::EcdsaSignature,
+    ) -> Result<crate::signature::Recovered, crate::signature::SignatureError> {
+        crate::signature::ecdsa_recover(signature, scheme, domain, &eip712::Order::from(self))
+    }
+
+    /// The exact 32-byte message a signer signs for this order under
+    /// `scheme`: the EIP-712 typed-data hash for
+    /// [`Eip712`](crate::signing_scheme::EcdsaSigningScheme::Eip712), or
+    /// that hash wrapped in the EIP-191 personal-sign envelope for
+    /// [`EthSign`](crate::signing_scheme::EcdsaSigningScheme::EthSign).
+    /// Hand this to an external or async signer (hardware wallet, KMS,
+    /// injected provider), then lift the result back with
+    /// [`Signature::from_ecdsa`](crate::signature::Signature::from_ecdsa).
+    pub fn signing_hash(
+        &self,
+        scheme: crate::signing_scheme::EcdsaSigningScheme,
+        domain: &DomainSeparator,
+    ) -> B256 {
+        crate::signature::signing_message(scheme, domain, &eip712::Order::from(self))
+    }
 }
 
 impl From<&OrderData> for eip712::Order {
@@ -469,6 +513,57 @@ mod tests {
         assert_eq!(&bytes[..32], &expected_r, "r component");
         assert_eq!(&bytes[32..64], &expected_s, "s component");
         assert_eq!(bytes[64], 28, "v component");
+    }
+
+    /// `OrderData::sign` then `recover_signer` round-trips to the
+    /// signing key for both ECDSA schemes, giving `OrderData` the
+    /// symmetric recover counterpart it previously lacked. Also checks
+    /// `recover_ecdsa` and that `signing_hash` equals the message the
+    /// recovery reports.
+    #[test]
+    fn sign_recover_round_trip_on_order_data() {
+        use crate::signing_scheme::EcdsaSigningScheme;
+        use alloy_signer_local::PrivateKeySigner;
+
+        let private_key = B256::from(hex!(
+            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+        ));
+        let signer = PrivateKeySigner::from_bytes(&private_key).unwrap();
+        let owner = signer.address();
+        let domain = crate::domain::settlement_domain(1, SETTLEMENT);
+        let order = sample_order();
+
+        for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
+            let signature = order.sign(scheme, &domain, &signer).unwrap();
+            let recovered = order
+                .recover_signer(&domain, &signature)
+                .unwrap()
+                .expect("ECDSA schemes recover an owner");
+            assert_eq!(recovered.signer, owner);
+            // The recovered message is exactly what `signing_hash` yields.
+            assert_eq!(recovered.message, order.signing_hash(scheme, &domain));
+
+            // The raw-ECDSA recover path agrees.
+            let ecdsa = order.sign_ecdsa(scheme, &domain, &signer).unwrap();
+            assert_eq!(
+                order.recover_ecdsa(scheme, &domain, &ecdsa).unwrap().signer,
+                owner,
+            );
+        }
+    }
+
+    /// On-chain schemes carry the owner explicitly, so `recover_signer`
+    /// yields `None` rather than deriving an address.
+    #[test]
+    fn recover_signer_is_none_for_onchain_schemes() {
+        let domain = crate::domain::settlement_domain(1, SETTLEMENT);
+        let order = sample_order();
+        assert!(
+            order
+                .recover_signer(&domain, &crate::signature::Signature::pre_sign())
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// Locks the [`eip712::Order`] `SolStruct::eip712_type_hash` derivation
