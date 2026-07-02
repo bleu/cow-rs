@@ -1232,7 +1232,7 @@ mod pipeline {
         assert!(
             matches!(
                 err,
-                Error::Signature(crate::signature::SignatureError::SignerMismatch { .. })
+                Error::VerifyOwner(crate::error::VerifyOwnerError::SignerMismatch { .. })
             ),
             "got: {err:?}"
         );
@@ -1413,7 +1413,7 @@ mod pipeline {
         assert!(
             matches!(
                 err,
-                Error::Signature(crate::signature::SignatureError::SignerMismatch { .. })
+                Error::VerifyOwner(crate::error::VerifyOwnerError::SignerMismatch { .. })
             ),
             "got: {err:?}"
         );
