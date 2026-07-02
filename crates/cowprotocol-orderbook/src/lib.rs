@@ -28,11 +28,12 @@ pub use cowprotocol_appdata::{
 };
 pub use cowprotocol_primitives::{Chain, chain, contracts, domain};
 pub use cowprotocol_signing::{
-    BUY_ETH_ADDRESS, BuyTokenDestination, EcdsaSignature, EcdsaSigningScheme, OrderCancellations,
-    OrderClass, OrderData, OrderKind, OrderUid, OrderUidParseError, OrderUidParts, Recovered,
-    SellTokenSource, Signature, SignatureError, SignedOrderCancellation, SignedOrderCancellations,
-    SignerSync, SigningScheme, cancellation, ecdsa_from_components, ecdsa_recover, order,
-    order_typed_data, parse_ecdsa, parse_order_uid, sign_ecdsa, signature, signing_scheme,
+    BUY_ETH_ADDRESS, BuyTokenDestination, EcdsaSignature, EcdsaSigningScheme, OrderCancellation,
+    OrderCancellations, OrderClass, OrderData, OrderKind, OrderUid, OrderUidParseError,
+    OrderUidParts, Recovered, SellTokenSource, Signature, SignatureError, SignedOrderCancellation,
+    SignedOrderCancellations, SignerSync, SigningScheme, cancellation, cancellation_typed_data,
+    ecdsa_from_components, ecdsa_recover, order, order_typed_data, parse_ecdsa, parse_order_uid,
+    sign_ecdsa, signature, signing_scheme,
 };
 
 pub mod error;

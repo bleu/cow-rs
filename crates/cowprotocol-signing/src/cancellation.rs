@@ -2,11 +2,17 @@
 //!
 //! The CoW orderbook exposes two cancel-by-UID flows:
 //!
-//! - **Single**: [`SignedOrderCancellation`]: a signed `OrderCancellation(bytes orderUid)`
-//!   EIP-712 struct.
-//! - **Collection**: [`OrderCancellations`]: a signed
-//!   `OrderCancellations(bytes[] orderUid)` EIP-712 struct that cancels
-//!   many orders in one body.
+//! - **Single**: [`OrderCancellation`]: an unsigned `OrderCancellation(bytes orderUid)`
+//!   EIP-712 struct; sign it into a [`SignedOrderCancellation`] for
+//!   `DELETE /api/v1/orders/{uid}`.
+//! - **Collection**: [`OrderCancellations`]: an unsigned
+//!   `OrderCancellations(bytes[] orderUids)` EIP-712 struct; sign it into a
+//!   [`SignedOrderCancellations`] to cancel many orders in one
+//!   `DELETE /api/v1/orders` body.
+//!
+//! Both unsigned values follow the crate's build-then-`.sign(..)` idiom:
+//! `<unsigned>.sign(scheme, &domain, &signer)`, so single and collection
+//! cancellation read identically.
 //!
 //! Both flows are "soft": they remove the order from the matching pool
 //! but cannot recall an order that is already in flight. For pre-signed
@@ -25,7 +31,7 @@ use {
         signature::{EcdsaSignature, SignatureError, ecdsa_recover, ecdsa_wire, sign_ecdsa},
         signing_scheme::EcdsaSigningScheme,
     },
-    alloy_primitives::B256,
+    alloy_primitives::{Address, B256},
     serde::{Deserialize, Serialize},
 };
 
@@ -67,6 +73,68 @@ mod eip712 {
     }
 }
 
+/// Unsigned cancellation of a single order.
+///
+/// The single-order counterpart to [`OrderCancellations`]. Wrap the
+/// [`OrderUid`] you want to cancel, then call [`OrderCancellation::sign`]
+/// to produce a [`SignedOrderCancellation`] for `DELETE /api/v1/orders/{uid}`.
+/// This restores the build-an-unsigned-value-then-`.sign(..)` idiom every
+/// other signable type in the crate follows, so single and collection
+/// cancellation read identically.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrderCancellation {
+    /// UID of the order being cancelled.
+    pub order_uid: OrderUid,
+}
+
+impl From<OrderUid> for OrderCancellation {
+    fn from(order_uid: OrderUid) -> Self {
+        Self { order_uid }
+    }
+}
+
+impl OrderCancellation {
+    /// EIP-712 `hashStruct` for the single-order cancellation type.
+    /// Delegates to [`alloy_sol_types::SolStruct`] applied to the private
+    /// `eip712::OrderCancellation` declaration.
+    pub fn hash_struct(&self) -> B256 {
+        use alloy_sol_types::SolStruct;
+        eip712::single(&self.order_uid).eip712_hash_struct()
+    }
+
+    /// The exact 32-byte message a signer signs for this cancellation
+    /// under `scheme`: the EIP-712 typed-data hash for
+    /// [`Eip712`](crate::signing_scheme::EcdsaSigningScheme::Eip712), or
+    /// that hash wrapped in the EIP-191 personal-sign envelope for
+    /// [`EthSign`](crate::signing_scheme::EcdsaSigningScheme::EthSign).
+    /// Hand this to an external or async signer (hardware wallet, KMS,
+    /// injected provider), then lift the result back with
+    /// [`Signature::from_ecdsa`](crate::signature::Signature::from_ecdsa).
+    /// The cancellation counterpart to
+    /// [`OrderData::signing_hash`](crate::order::OrderData::signing_hash).
+    pub fn signing_hash(&self, scheme: EcdsaSigningScheme, domain: &DomainSeparator) -> B256 {
+        crate::signature::signing_message(scheme, domain, &eip712::single(&self.order_uid))
+    }
+
+    /// Sign the cancellation with an ECDSA signer. The caller chooses the
+    /// ECDSA scheme; `EthSign` adds the EIP-191 personal-sign envelope.
+    /// Consumes `self`, mirroring [`OrderCancellations::sign`].
+    pub fn sign<S: alloy_signer::SignerSync>(
+        self,
+        scheme: EcdsaSigningScheme,
+        domain: &DomainSeparator,
+        signer: &S,
+    ) -> Result<SignedOrderCancellation, SignatureError> {
+        let signature = sign_ecdsa(scheme, domain, &eip712::single(&self.order_uid), signer)?;
+        Ok(SignedOrderCancellation {
+            order_uid: self.order_uid,
+            signature,
+            signing_scheme: scheme,
+        })
+    }
+}
+
 /// Signed cancellation of a single order. Mirrors `cowprotocol/services`
 /// `OrderCancellation` exactly so any future on-chain verification path
 /// stays interoperable.
@@ -86,35 +154,36 @@ pub struct SignedOrderCancellation {
 
 impl SignedOrderCancellation {
     /// EIP-712 `hashStruct` for the single-order cancellation type.
-    /// Delegates to [`alloy_sol_types::SolStruct`] applied to the
-    /// private `eip712::OrderCancellation` declaration.
+    ///
+    /// Delegates to [`OrderCancellation::hash_struct`].
+    #[deprecated(
+        since = "0.2.0",
+        note = "use OrderCancellation::from(uid).hash_struct() instead"
+    )]
     pub fn hash_struct(uid: &OrderUid) -> B256 {
-        use alloy_sol_types::SolStruct;
-        eip712::single(uid).eip712_hash_struct()
+        OrderCancellation::from(*uid).hash_struct()
     }
 
     /// Sign a single-order cancellation. The caller chooses the ECDSA
     /// scheme; `EthSign` adds the EIP-191 personal-sign envelope.
+    ///
+    /// Delegates to [`OrderCancellation::sign`].
+    #[deprecated(
+        since = "0.2.0",
+        note = "use OrderCancellation::from(uid).sign(scheme, domain, signer) instead"
+    )]
     pub fn sign<S: alloy_signer::SignerSync>(
         order_uid: OrderUid,
         scheme: EcdsaSigningScheme,
         domain: &DomainSeparator,
         signer: &S,
     ) -> Result<Self, SignatureError> {
-        let signature = sign_ecdsa(scheme, domain, &eip712::single(&order_uid), signer)?;
-        Ok(Self {
-            order_uid,
-            signature,
-            signing_scheme: scheme,
-        })
+        OrderCancellation::from(order_uid).sign(scheme, domain, signer)
     }
 
     /// Recover the signing owner from this cancellation, given the
     /// chain's domain separator.
-    pub fn recover_owner(
-        &self,
-        domain: &DomainSeparator,
-    ) -> Result<alloy_primitives::Address, SignatureError> {
+    pub fn recover_owner(&self, domain: &DomainSeparator) -> Result<Address, SignatureError> {
         let payload = eip712::single(&self.order_uid);
         Ok(ecdsa_recover(&self.signature, self.signing_scheme, domain, &payload)?.signer)
     }
@@ -197,13 +266,69 @@ pub struct SignedOrderCancellations {
 
 impl SignedOrderCancellations {
     /// Recover the signing owner.
-    pub fn recover_owner(
-        &self,
-        domain: &DomainSeparator,
-    ) -> Result<alloy_primitives::Address, SignatureError> {
+    pub fn recover_owner(&self, domain: &DomainSeparator) -> Result<Address, SignatureError> {
         let payload = eip712::collection(&self.order_uids);
         Ok(ecdsa_recover(&self.signature, self.signing_scheme, domain, &payload)?.signer)
     }
+}
+
+/// Build the `{ "name": .., "type": .. }` entries of the EIP-712
+/// `OrderCancellation` type from the canonical
+/// [`eip712::OrderCancellation`] `sol!` declaration, so the typed-data
+/// table cannot silently drift from the struct the orderbook verifies
+/// against. Parses [`alloy_sol_types::SolStruct::eip712_root_type`], which
+/// is `OrderCancellation(<solType> <fieldName>,..)`.
+fn cancellation_type_entries() -> Vec<serde_json::Value> {
+    use alloy_sol_types::SolStruct;
+    let root = <eip712::OrderCancellation as SolStruct>::eip712_root_type();
+    let fields = root
+        .strip_prefix("OrderCancellation(")
+        .and_then(|s| s.strip_suffix(')'))
+        .expect("canonical OrderCancellation root type is `OrderCancellation(...)`");
+    fields
+        .split(',')
+        .map(|field| {
+            let (sol_type, name) = field
+                .split_once(' ')
+                .expect("each EIP-712 field is `<type> <name>`");
+            serde_json::json!({ "name": name, "type": sol_type })
+        })
+        .collect()
+}
+
+/// Canonical EIP-712 typed-data payload for a single-order cancellation,
+/// ready to feed into viem's `signTypedData` or ethers'
+/// `signer.signTypedData`. The cancellation counterpart to
+/// [`order_typed_data`](crate::order::order_typed_data), letting external
+/// EIP-712 wallets sign cancellations without hand-redeclaring the
+/// `OrderCancellation` type table.
+///
+/// Returns `{ domain, primaryType, types, message }`. The domain `name` /
+/// `version` come from [`crate::domain::DOMAIN_NAME`] /
+/// [`crate::domain::DOMAIN_VERSION`], the same constants
+/// [`crate::domain::settlement_domain`] derives the separator from, so the
+/// typed-data domain and the separator cannot drift.
+///
+/// `types` deliberately omits the `EIP712Domain` entry: ethers v6 and viem
+/// build the domain typedef from the `domain` object and throw on a
+/// duplicate. Raw `eth_signTypedData_v4` callers must inject it themselves.
+pub fn cancellation_typed_data(
+    cancellation: &OrderCancellation,
+    chain_id: u64,
+    verifying_contract: Address,
+) -> serde_json::Value {
+    let message = serde_json::to_value(cancellation).expect("OrderCancellation serialises to JSON");
+    serde_json::json!({
+        "domain": {
+            "name": crate::domain::DOMAIN_NAME,
+            "version": crate::domain::DOMAIN_VERSION,
+            "chainId": chain_id,
+            "verifyingContract": verifying_contract.to_string(),
+        },
+        "primaryType": "OrderCancellation",
+        "types": { "OrderCancellation": cancellation_type_entries() },
+        "message": message,
+    })
 }
 
 #[cfg(test)]
@@ -266,7 +391,7 @@ mod tests {
         );
     }
 
-    /// Locks `SignedOrderCancellation::hash_struct` against an independent
+    /// Locks `OrderCancellation::hash_struct` against an independent
     /// re-derivation of the EIP-712 `hashStruct` for the single dynamic
     /// `bytes orderUid` field, computed by hand with raw `keccak256` rather
     /// than going through alloy's [`alloy_sol_types::SolStruct`].
@@ -289,7 +414,7 @@ mod tests {
             encoded[32..64].copy_from_slice(keccak256(uid.as_slice()).as_slice());
             let expected = keccak256(encoded);
 
-            assert_eq!(SignedOrderCancellation::hash_struct(&uid), expected);
+            assert_eq!(OrderCancellation::from(uid).hash_struct(), expected);
         }
     }
 
@@ -316,8 +441,9 @@ mod tests {
         let uid = OrderUid::from([0x42; 56]);
 
         for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
-            let cancellation =
-                SignedOrderCancellation::sign(uid, scheme, &domain, &signer).unwrap();
+            let cancellation = OrderCancellation::from(uid)
+                .sign(scheme, &domain, &signer)
+                .unwrap();
             let recovered = cancellation.recover_owner(&domain).unwrap();
             assert_eq!(recovered, signer.address());
         }
@@ -359,13 +485,9 @@ mod tests {
     /// type back and forth without losing fields.
     #[test]
     fn order_cancellation_json_round_trip() {
-        let original = SignedOrderCancellation::sign(
-            OrderUid::from([0x77; 56]),
-            EcdsaSigningScheme::Eip712,
-            &fixed_domain(),
-            &fixed_signer(),
-        )
-        .unwrap();
+        let original = OrderCancellation::from(OrderUid::from([0x77; 56]))
+            .sign(EcdsaSigningScheme::Eip712, &fixed_domain(), &fixed_signer())
+            .unwrap();
         let json = serde_json::to_string(&original).unwrap();
         let parsed: SignedOrderCancellation = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, original);
@@ -412,5 +534,86 @@ mod tests {
         assert!(value.get("orderUids").is_some());
         assert!(value.get("signature").is_some());
         assert!(value.get("signingScheme").is_some());
+    }
+
+    /// The deprecated single-cancel entry points on the signed type still
+    /// delegate to the new [`OrderCancellation`] value type, so callers
+    /// pinned to the old shape keep getting byte-identical results.
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_single_cancel_delegates_to_new_type() {
+        let signer = fixed_signer();
+        let domain = fixed_domain();
+        let uid = OrderUid::from([0x42; 56]);
+
+        assert_eq!(
+            SignedOrderCancellation::hash_struct(&uid),
+            OrderCancellation::from(uid).hash_struct(),
+        );
+
+        for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
+            let old = SignedOrderCancellation::sign(uid, scheme, &domain, &signer).unwrap();
+            let new = OrderCancellation::from(uid)
+                .sign(scheme, &domain, &signer)
+                .unwrap();
+            assert_eq!(old, new);
+        }
+    }
+
+    /// `OrderCancellation::signing_hash` equals the message the signature
+    /// recovery reports, the same forward/inverse relationship
+    /// [`crate::order::OrderData`] has between `signing_hash` and recovery.
+    #[test]
+    fn cancellation_signing_hash_matches_recovered_message() {
+        let signer = fixed_signer();
+        let domain = fixed_domain();
+        let uid = OrderUid::from([0x42; 56]);
+
+        for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
+            let cancellation = OrderCancellation::from(uid);
+            let signed = cancellation.sign(scheme, &domain, &signer).unwrap();
+            let recovered =
+                ecdsa_recover(&signed.signature, scheme, &domain, &eip712::single(&uid)).unwrap();
+            assert_eq!(
+                recovered.message,
+                cancellation.signing_hash(scheme, &domain)
+            );
+        }
+    }
+
+    /// Locks the typed-data `types`."OrderCancellation" table built by
+    /// [`cancellation_typed_data`] against the single canonical
+    /// `bytes orderUid` field. Any change to the `sol!` struct, the parser,
+    /// or the JSON shaping trips this.
+    #[test]
+    fn cancellation_typed_data_table_matches_canonical_field() {
+        let typed = cancellation_typed_data(
+            &OrderCancellation::from(OrderUid::from([0x11; 56])),
+            1,
+            Address::ZERO,
+        );
+        let table = typed["types"]["OrderCancellation"].as_array().unwrap();
+        assert_eq!(table.len(), 1);
+        assert_eq!(table[0]["name"], "orderUid");
+        assert_eq!(table[0]["type"], "bytes");
+    }
+
+    /// Pins the full [`cancellation_typed_data`] envelope: the domain reuses
+    /// the `settlement_domain` constants, `verifyingContract` is the EIP-55
+    /// checksummed (mixed-case) address string, `EIP712Domain` is absent from
+    /// `types`, and the message carries the `orderUid` as a hex string.
+    #[test]
+    fn cancellation_typed_data_envelope_shape() {
+        let uid = OrderUid::from([0x11; 56]);
+        let contract = alloy_primitives::address!("9008D19f58AAbD9eD0D60971565AA8510560ab41");
+        let typed = cancellation_typed_data(&OrderCancellation::from(uid), 1, contract);
+
+        assert_eq!(typed["domain"]["name"], crate::domain::DOMAIN_NAME);
+        assert_eq!(typed["domain"]["version"], crate::domain::DOMAIN_VERSION);
+        assert_eq!(typed["domain"]["chainId"], 1);
+        assert_eq!(typed["domain"]["verifyingContract"], contract.to_string());
+        assert_eq!(typed["primaryType"], "OrderCancellation");
+        assert!(typed["types"].get("EIP712Domain").is_none());
+        assert_eq!(typed["message"]["orderUid"], uid.to_string());
     }
 }

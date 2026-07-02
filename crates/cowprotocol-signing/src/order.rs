@@ -827,9 +827,9 @@ mod tests {
     }
 
     /// Pins the full [`order_typed_data`] envelope: the domain reuses the
-    /// `settlement_domain` constants, `verifyingContract` is the lower-case
-    /// address string, and a `None` receiver is materialised as
-    /// `address(0)` in the message.
+    /// `settlement_domain` constants, `verifyingContract` is the EIP-55
+    /// checksummed (mixed-case) address string, and a `None` receiver is
+    /// materialised as `address(0)` in the message.
     #[test]
     fn order_typed_data_envelope_shape() {
         let mut order = sample_order();
