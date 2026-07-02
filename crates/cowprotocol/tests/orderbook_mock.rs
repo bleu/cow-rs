@@ -758,7 +758,10 @@ async fn slow_server_trips_client_timeout() {
         .timeout(std::time::Duration::from_millis(100))
         .build()
         .unwrap();
-    let api = OrderBookApi::with_client(server.uri().parse().unwrap(), client);
+    let api = OrderBookApi::builder()
+        .with_base_url(server.uri().parse().unwrap())
+        .with_client(client)
+        .build();
 
     let err = api.version().await.unwrap_err();
     match err {

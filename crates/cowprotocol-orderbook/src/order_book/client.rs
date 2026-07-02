@@ -7,6 +7,22 @@
 //! quote pipeline live in the feature-independent [`api`](super::api) /
 //! [`flow`](super::flow) siblings; the transport backends live in
 //! [`crate::transport`].
+//!
+//! # Choosing a constructor
+//!
+//! There is one entry point per tier, from most common to most niche:
+//!
+//! - Quick start: [`OrderBookApi::new`] for a production [`Chain`], or
+//!   [`OrderBookApi::new_with_base_url`] for an arbitrary base URL (barn,
+//!   staging, a recorded mock). Both build over the target's
+//!   [`DefaultTransport`] with the standard timeout.
+//! - Custom transport: [`OrderBookApi::new_with_transport`] (in the
+//!   feature-independent [`api`](super::api) sibling) for an out-of-tree
+//!   [`HttpTransport`](crate::transport::HttpTransport) backend, needing
+//!   neither this feature nor a concrete transport.
+//! - Advanced HTTP: [`OrderBookApi::builder`] when you need a
+//!   pre-configured [`reqwest::Client`] (custom timeouts, proxies, TLS
+//!   roots, or auth middleware) together with a chain hint or base URL.
 
 use crate::chain::Chain;
 use crate::transport::DefaultTransport;
@@ -99,11 +115,26 @@ impl OrderBookApiBuilder<builder_state::Set> {
 
 impl OrderBookApi {
     /// Start a type-state builder for an orderbook client.
+    ///
+    /// Reach for the builder only when a quick-start constructor cannot
+    /// express the configuration: pair a pre-configured
+    /// [`reqwest::Client`] (custom timeouts, proxies, TLS roots, or auth
+    /// middleware) via [`OrderBookApiBuilder::with_client`] with either
+    /// [`OrderBookApiBuilder::with_chain`] or
+    /// [`OrderBookApiBuilder::with_base_url`]. For the common cases
+    /// prefer [`Self::new`] (a production [`Chain`]) or
+    /// [`Self::new_with_base_url`] (an arbitrary URL), which need no
+    /// terminal `.build()`.
     pub const fn builder() -> OrderBookApiBuilder {
         OrderBookApiBuilder::new()
     }
 
     /// Start a type-state builder targeting the production orderbook on `chain`.
+    #[deprecated(
+        since = "0.1.1",
+        note = "use OrderBookApi::new(chain) for the quick-start path, or \
+                OrderBookApi::builder().with_chain(chain).build() to keep configuring the builder"
+    )]
     pub fn with_chain(chain: Chain) -> OrderBookApiBuilder<builder_state::Set> {
         Self::builder().with_chain(chain)
     }
@@ -136,6 +167,11 @@ impl OrderBookApi {
     /// code should build over a [`DefaultTransport`] via
     /// [`Self::new_with_transport`] (or the chain constructors) instead.
     #[cfg(not(target_arch = "wasm32"))]
+    #[deprecated(
+        since = "0.1.1",
+        note = "use OrderBookApi::builder().with_base_url(base_url).with_client(client).build(), \
+                the advanced-HTTP tier reserved for pre-configured reqwest clients"
+    )]
     pub fn with_client(base_url: url::Url, client: reqwest::Client) -> Self {
         Self::new_with_transport(base_url, ReqwestTransport::new(client))
     }

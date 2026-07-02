@@ -74,8 +74,7 @@
 //! use alloy_primitives::{U256, address};
 //!
 //! # pub async fn run() -> cowprotocol::Result<()> {
-//! let quote = OrderBookApi::with_chain(Chain::Mainnet)
-//!     .build()
+//! let quote = OrderBookApi::new(Chain::Mainnet)
 //!     .quote_builder()
 //!     .with_sell_token(address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")) // USDC
 //!     .with_buy_token(address!("6B175474E89094C44Da98b954EedeAC495271d0F")) // DAI
@@ -152,8 +151,8 @@ pub use crate::{
     order_book::{
         AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, Order,
         OrderBookApi, OrderCreation, OrderQuote, OrderQuoteResponse, OrderStatus, OrderSubmission,
-        PriceQuality, QuoteAppData, QuoteRequest, QuoteRequestBuilder, QuotedOrder, TokenMetadata,
-        TotalSurplus, Trade,
+        PriceQuality, QuoteAppData, QuoteRequest, QuoteRequestBuilder, QuotedOrder,
+        ReadyQuoteRequestBuilder, TokenMetadata, TotalSurplus, Trade,
     },
     quote_amounts::{
         Amounts as QuoteAmounts, DEFAULT_SLIPPAGE_BPS, OrderCosts, ProtocolFeeBps,
@@ -184,7 +183,7 @@ pub mod prelude {
         AppDataDoc, AppDataHash, Chain, EMPTY_APP_DATA_HASH, EMPTY_APP_DATA_JSON, Error,
         OrderBookApi, OrderCreation, OrderData, OrderKind, OrderQuoteResponse, OrderSubmission,
         OrderUid, PriceQuality, QuoteAppData, QuoteRequest, QuoteRequestBuilder, QuotedOrder,
-        Result, Signature, SigningScheme, settlement_domain,
+        ReadyQuoteRequestBuilder, Result, Signature, SigningScheme, settlement_domain,
     };
 
     #[cfg(feature = "http-client")]
