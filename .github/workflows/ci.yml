@@ -118,8 +118,8 @@ jobs:
           cd crates/cow-sdk-wasm
           wasm-pack build --target web --release --out-dir pkg-web
       - name: Assert .wasm size under ceiling
-        # 786432 bytes = 768 KB; keep this guardrail in sync with the
-        # justfile and bump it only after measuring the integrated wasm build.
+        # 786432 bytes = 768 KB; current integrated build is 752626 bytes
+        # (~736 KB), leaving ~33 KB of headroom.
         run: bash scripts/wasm-size-check.sh 786432
 
   wasm-test:
