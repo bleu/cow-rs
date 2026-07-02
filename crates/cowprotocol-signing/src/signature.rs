@@ -18,7 +18,7 @@
 //! [`cowprotocol/services`]: https://github.com/cowprotocol/services/blob/main/crates/model/src/signature.rs
 
 use alloy_primitives::{Address, B256, Bytes, Signature as PrimSignature, eip191_hash_message};
-use alloy_signer::{SignerSync, k256::ecdsa::Error as K256Error};
+use alloy_signer::{Signer, SignerSync, k256::ecdsa::Error as K256Error};
 use alloy_sol_types::SolStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::fmt::{self, Debug, Formatter};
@@ -255,8 +255,14 @@ pub struct Recovered {
 }
 
 /// Sign an EIP-712 [`SolStruct`] payload with a
-/// `SignerSync`-implementing signer (e.g.
-/// `alloy_signer_local::PrivateKeySigner`).
+/// [`SignerSync`]-implementing signer.
+///
+/// In practice only a raw in-memory key
+/// (`alloy_signer_local::PrivateKeySigner`) implements [`SignerSync`].
+/// Production backends (hardware wallet, remote signer, KMS) implement
+/// the async [`alloy_signer::Signer`] trait, so reach for the
+/// [`sign_ecdsa_async`] twin or the [`signing_message`] digest-and-lift
+/// recipe instead.
 pub fn sign_ecdsa<T: SolStruct, S: SignerSync>(
     scheme: EcdsaSigningScheme,
     domain: &DomainSeparator,
@@ -265,6 +271,31 @@ pub fn sign_ecdsa<T: SolStruct, S: SignerSync>(
 ) -> Result<EcdsaSignature, SignatureError> {
     let message = signing_message(scheme, domain, payload);
     let raw = signer.sign_hash_sync(&message).map_err(|e| match e {
+        alloy_signer::Error::Ecdsa(k) => SignatureError::Signer(k),
+        other => SignatureError::SignerOther(other.to_string()),
+    })?;
+    parse_ecdsa(&raw.as_bytes())
+}
+
+/// Async counterpart to [`sign_ecdsa`], bound on the async
+/// [`alloy_signer::Signer`] trait (`sign_hash`) rather than
+/// [`SignerSync`]. This makes production backends (hardware wallet,
+/// remote signer, KMS), which implement only the async trait, a
+/// first-class signing path.
+///
+/// Signs the same [`signing_message`] digest as [`sign_ecdsa`], so a
+/// signer implementing both traits yields a byte-identical signature.
+/// The async signer's error is mapped into [`SignatureError::Signer`]
+/// for the `k256` case and [`SignatureError::SignerOther`] otherwise,
+/// preserving the signer's own message.
+pub async fn sign_ecdsa_async<T: SolStruct, S: Signer>(
+    scheme: EcdsaSigningScheme,
+    domain: &DomainSeparator,
+    payload: &T,
+    signer: &S,
+) -> Result<EcdsaSignature, SignatureError> {
+    let message = signing_message(scheme, domain, payload);
+    let raw = signer.sign_hash(&message).await.map_err(|e| match e {
         alloy_signer::Error::Ecdsa(k) => SignatureError::Signer(k),
         other => SignatureError::SignerOther(other.to_string()),
     })?;
@@ -637,6 +668,77 @@ mod tests {
             let recovered = typed.recover(&domain, &payload).unwrap().unwrap();
             assert_eq!(recovered.signer, address);
         }
+    }
+
+    /// [`sign_ecdsa_async`] must produce the byte-identical signature to
+    /// [`sign_ecdsa`] for a signer implementing both traits, since both
+    /// sign the same [`signing_message`] digest.
+    #[tokio::test]
+    async fn sign_ecdsa_async_matches_sync() {
+        let signer = PrivateKeySigner::from_bytes(&U256::from(1u64).to_be_bytes().into()).unwrap();
+        let domain = crate::domain::settlement_domain(
+            1,
+            alloy_primitives::address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
+        );
+        let payload = probe_payload(hex!(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
+
+        for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
+            let sync = sign_ecdsa(scheme, &domain, &payload, &signer).unwrap();
+            let asynchronous = sign_ecdsa_async(scheme, &domain, &payload, &signer)
+                .await
+                .unwrap();
+            assert_eq!(sync, asynchronous);
+        }
+    }
+
+    /// Async-only signer (implements [`alloy_signer::Signer`] but not
+    /// [`SignerSync`]) whose `sign_hash` always fails, mirroring a remote
+    /// or KMS backend that rejects the request.
+    struct FailingAsyncSigner;
+
+    #[async_trait::async_trait]
+    impl Signer for FailingAsyncSigner {
+        async fn sign_hash(&self, _hash: &B256) -> Result<PrimSignature, alloy_signer::Error> {
+            Err(alloy_signer::Error::message("remote signer offline"))
+        }
+
+        fn address(&self) -> alloy_primitives::Address {
+            alloy_primitives::Address::ZERO
+        }
+
+        fn chain_id(&self) -> Option<alloy_primitives::ChainId> {
+            None
+        }
+
+        fn set_chain_id(&mut self, _chain_id: Option<alloy_primitives::ChainId>) {}
+    }
+
+    /// [`sign_ecdsa_async`] accepts a signer that implements only the async
+    /// [`Signer`] trait, and maps the signer's own error into
+    /// [`SignatureError::SignerOther`] with its message preserved.
+    #[tokio::test]
+    async fn sign_ecdsa_async_maps_signer_error() {
+        let domain = crate::domain::settlement_domain(
+            1,
+            alloy_primitives::address!("9008D19f58AAbD9eD0D60971565AA8510560ab41"),
+        );
+        let payload = probe_payload([0u8; 32]);
+
+        let err = sign_ecdsa_async(
+            EcdsaSigningScheme::Eip712,
+            &domain,
+            &payload,
+            &FailingAsyncSigner,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            SignatureError::SignerOther(ref msg) if msg.contains("remote signer offline")
+        ));
     }
 
     #[test]
