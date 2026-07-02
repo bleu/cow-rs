@@ -388,7 +388,7 @@
           const last = signResults[labels[labels.length - 1]];
           const creation = build_order_creation(SIGN_ORDER, {
             signingScheme: 'eip712', ...last.sig,
-          }, OWNER, 'mainnet', '{}', null);
+          }, 'mainnet', OWNER, '{}', null);
           signRoundTrip = {
             signatureWire: creation.signature,
             from: creation.from,
@@ -542,7 +542,7 @@
 
       // Panel 4: get_quote_simple.
       runOnClick('run-quote', 'quote-status', 'quote-output', async () => {
-        const result = await get_quote_simple('mainnet', USDC, DAI, OWNER, '100000000');
+        const result = await get_quote_simple(USDC, DAI, OWNER, '100000000', 'mainnet');
         if (!result?.response?.quote?.buyAmount) {
           throw new Error('response missing quote.buyAmount');
         }
@@ -729,7 +729,7 @@
             kind:      'sell',
             sellAmountBeforeFee: sellAmountAtomic,
           };
-          const response = await get_quote('base', request);
+          const response = await get_quote(request, 'base');
 
           // 2. SDK attribution app-data.
           const appDataJson = sdk_app_data_json();
@@ -784,12 +784,12 @@
           const creation = build_order_creation(
             orderData,
             { signingScheme: 'eip712', r, s, v },
-            account,
             'base',
+            account,
             appDataJson,
             quoteId,
           );
-          const uid = await post_order('base', creation);
+          const uid = await post_order(creation, 'base');
 
           submitOutput.textContent = JSON.stringify(
             {

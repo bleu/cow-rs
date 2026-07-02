@@ -3,17 +3,17 @@
 //! the `OrderCreation` assemblers fed back from external wallets.
 
 use {
-    crate::{from_js, js_err, parse_address, parse_b256, parse_chain, to_js},
-    cowprotocol::{EcdsaSigningScheme, OrderData, Signature, SigningScheme, ecdsa_from_components},
+    crate::{from_js, js_err, parse_address, parse_b256, parse_chain, parse_uid, to_js},
+    cowprotocol::{
+        EcdsaSignature, EcdsaSigningScheme, OrderCancellation, OrderData, Signature,
+        SignedOrderCancellation, SigningScheme, ecdsa_from_components,
+    },
     serde::Deserialize,
     wasm_bindgen::prelude::*,
 };
 
 #[cfg(feature = "in_shim_signing")]
-use {
-    crate::parse_uid, alloy_primitives::B256, alloy_signer_local::PrivateKeySigner,
-    cowprotocol::OrderCancellation,
-};
+use {alloy_primitives::B256, alloy_signer_local::PrivateKeySigner};
 
 #[cfg(feature = "in_shim_signing")]
 fn parse_signer(private_key_hex: &str) -> Result<PrivateKeySigner, JsValue> {
@@ -207,30 +207,44 @@ fn sign_with_scheme(
 pub fn build_order_creation(
     order_data: JsValue,
     signature: JsValue,
-    owner: &str,
     chain: &str,
+    owner: &str,
     app_data_json: &str,
     quote_id: Option<u64>,
 ) -> Result<JsValue, JsValue> {
     let order: OrderData = from_js(order_data)?;
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct SigInput {
-        // Deserialised straight into the enum: serde owns the
-        // "eip712" / "ethsign" wire names, so the shim no longer
-        // duplicates them. The scheme strings are case-sensitive.
-        signing_scheme: EcdsaSigningScheme,
-        r: String,
-        s: String,
-        v: u8,
-    }
+    let (ecdsa, scheme) = ecdsa_from_bag(signature)?;
+    let signature = Signature::from_ecdsa(ecdsa, scheme);
+    assemble_creation(order, signature, chain, owner, app_data_json, quote_id)
+}
+
+/// The `{ signingScheme, r, s, v }` bag both external-signing builders
+/// ([`build_order_creation`] and [`build_order_cancellation`]) accept,
+/// deserialised from the object a wallet's `signTypedData` /
+/// `personal_sign` result is reshaped into on the JS side.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SigInput {
+    // Deserialised straight into the enum: serde owns the "eip712" /
+    // "ethsign" wire names, so the shim no longer duplicates them. The
+    // scheme strings are case-sensitive.
+    signing_scheme: EcdsaSigningScheme,
+    r: String,
+    s: String,
+    v: u8,
+}
+
+/// Parse an external ECDSA signature bag into its `(EcdsaSignature,
+/// scheme)` parts. `v` is normalised to `27` / `28` through
+/// [`ecdsa_from_components`] even when the originating wallet returns the
+/// raw `0` / `1` form. Shared by the order and cancellation external-
+/// signing builders so both accept a byte-identical input contract.
+fn ecdsa_from_bag(signature: JsValue) -> Result<(EcdsaSignature, EcdsaSigningScheme), JsValue> {
     let sig: SigInput = from_js(signature)?;
-    let scheme = sig.signing_scheme;
     let r = parse_b256(&sig.r)?;
     let s = parse_b256(&sig.s)?;
     let ecdsa = ecdsa_from_components(r, s, sig.v).map_err(js_err("invalid signature"))?;
-    let signature = Signature::from_ecdsa(ecdsa, scheme);
-    assemble_creation(order, signature, owner, chain, app_data_json, quote_id)
+    Ok((ecdsa, sig.signing_scheme))
 }
 
 /// Convert a JS-supplied `quote_id` (`u64`) into the orderbook's `i64`
@@ -244,7 +258,7 @@ fn to_quote_id(quote_id: Option<u64>) -> Result<Option<i64>, JsValue> {
 
 /// Shared tail of [`build_order_creation`] and
 /// [`build_order_creation_eip1271`]: thread the parsed `signature`,
-/// `owner`, `chain`, app-data JSON and `quote_id` into core's
+/// `chain`, `owner`, app-data JSON and `quote_id` into core's
 /// `OrderCreation::new`, then run the local
 /// `verify_owner` guard against the chain's settlement domain before
 /// handing the body back to JS. The two public exports differ only in
@@ -252,8 +266,8 @@ fn to_quote_id(quote_id: Option<u64>) -> Result<Option<i64>, JsValue> {
 fn assemble_creation(
     order: OrderData,
     signature: Signature,
-    owner: &str,
     chain: &str,
+    owner: &str,
     app_data_json: &str,
     quote_id: Option<u64>,
 ) -> Result<JsValue, JsValue> {
@@ -296,8 +310,8 @@ fn assemble_creation(
 pub fn build_order_creation_eip1271(
     order_data: JsValue,
     signature_hex: &str,
-    owner: &str,
     chain: &str,
+    owner: &str,
     app_data_json: &str,
     quote_id: Option<u64>,
 ) -> Result<JsValue, JsValue> {
@@ -307,7 +321,77 @@ pub fn build_order_creation_eip1271(
         .map_err(js_err("invalid signature hex"))?;
     let signature = Signature::from_bytes(SigningScheme::Eip1271, &bytes)
         .map_err(js_err("invalid eip1271 signature"))?;
-    assemble_creation(order, signature, owner, chain, app_data_json, quote_id)
+    assemble_creation(order, signature, chain, owner, app_data_json, quote_id)
+}
+
+/// Canonical EIP-712 typed-data payload for a single-order cancellation,
+/// ready to feed into viem's `signTypedData` or ethers'
+/// `signer.signTypedData`. The cancellation counterpart to
+/// [`eip712_payload`], letting JS callers sign a cancellation with their
+/// own wallet without redeclaring the `OrderCancellation` type or the
+/// `Gnosis Protocol` domain separator.
+///
+/// Returns `{ domain, primaryType, types, message }`. As with
+/// [`eip712_payload`], `types` omits the `EIP712Domain` entry so ethers
+/// v6 and viem do not throw on a duplicate; raw `eth_signTypedData_v4`
+/// callers must inject it themselves before stringifying the payload.
+#[wasm_bindgen]
+pub fn cancellation_eip712_payload(order_uid: &str, chain: &str) -> Result<JsValue, JsValue> {
+    let uid = parse_uid(order_uid)?;
+    let c = parse_chain(chain)?;
+    to_js(&cowprotocol::cancellation_typed_data(
+        &OrderCancellation::from(uid),
+        c.id(),
+        c.settlement(),
+    ))
+}
+
+/// The exact 32-byte digest an injected wallet must `personal_sign`
+/// (EthSign / EIP-191) to cancel this order, 0x-prefixed. Hand the
+/// wallet this value, then lift the returned (r, s, v) back through
+/// [`build_order_cancellation`] with `signingScheme: "ethsign"`. The
+/// cancellation counterpart to [`ethsign_digest`]: it applies the
+/// EIP-191 personal-sign wrap, so it is the value `personal_sign`
+/// expects (the EIP-712 path uses [`cancellation_eip712_payload`]).
+#[wasm_bindgen]
+pub fn cancellation_ethsign_digest(order_uid: &str, chain: &str) -> Result<String, JsValue> {
+    let uid = parse_uid(order_uid)?;
+    let c = parse_chain(chain)?;
+    Ok(OrderCancellation::from(uid)
+        .signing_hash(EcdsaSigningScheme::EthSign, &c.settlement_domain())
+        .to_string())
+}
+
+/// Build a `DELETE /api/v1/orders/{uid}` payload from an externally
+/// signed cancellation. The cancellation counterpart to
+/// [`build_order_creation`]: it accepts the same `{ signingScheme, r, s,
+/// v }` signature bag (funnelled through the shared `ecdsa_from_components`
+/// path so `v` is normalised to `27` / `28` even when the originating
+/// wallet returns the raw `0` / `1` form) and returns the
+/// [`SignedOrderCancellation`] JSON ready to pass to
+/// [`cancel_order`](crate::endpoints::cancel_order).
+///
+/// `chain` is accepted for parity with [`build_order_creation`] and is
+/// validated so a malformed bag of arguments is rejected uniformly; the
+/// cancellation wire shape carries no chain, so it does not enter the
+/// returned payload. Unlike the order-side builder there is no `owner`
+/// to recover against, so no local `verify_owner` guard runs: the
+/// orderbook authenticates the cancellation by recovering the signer
+/// from the signature server-side.
+#[wasm_bindgen]
+pub fn build_order_cancellation(
+    order_uid: &str,
+    signature: JsValue,
+    chain: &str,
+) -> Result<JsValue, JsValue> {
+    let order_uid = parse_uid(order_uid)?;
+    parse_chain(chain)?;
+    let (signature, signing_scheme) = ecdsa_from_bag(signature)?;
+    to_js(&SignedOrderCancellation {
+        order_uid,
+        signature,
+        signing_scheme,
+    })
 }
 
 /// Pure-compute helper: sign a single-order cancellation in-shim and

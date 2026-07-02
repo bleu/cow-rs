@@ -38,7 +38,7 @@ fn parse_u256(value: &str) -> Result<U256, JsValue> {
 /// with a guessed digest would only reject requests that pin a
 /// non-empty `appData`.
 #[wasm_bindgen]
-pub async fn get_quote(chain: &str, request: JsValue) -> Result<JsValue, JsValue> {
+pub async fn get_quote(request: JsValue, chain: &str) -> Result<JsValue, JsValue> {
     let request: QuoteRequest = from_js(request)?;
     let response = OrderBookApi::new(parse_chain(chain)?)
         .quote(&request)
@@ -53,11 +53,11 @@ pub async fn get_quote(chain: &str, request: JsValue) -> Result<JsValue, JsValue
 /// target).
 #[wasm_bindgen]
 pub async fn get_quote_simple(
-    chain: &str,
     sell_token: &str,
     buy_token: &str,
     from: &str,
     sell_amount_before_fee: &str,
+    chain: &str,
 ) -> Result<JsValue, JsValue> {
     let request = QuoteRequest::sell_before_fee(
         parse_address(sell_token)?,
@@ -92,7 +92,7 @@ pub async fn get_quote_simple(
 /// runs at assembly time inside
 /// [`build_order_creation`](crate::signing::build_order_creation).
 #[wasm_bindgen]
-pub async fn post_order(chain: &str, creation: JsValue) -> Result<String, JsValue> {
+pub async fn post_order(creation: JsValue, chain: &str) -> Result<String, JsValue> {
     let creation: OrderCreation = from_js(creation)?;
     OrderBookApi::new(parse_chain(chain)?)
         .post_order(&creation)
@@ -103,7 +103,7 @@ pub async fn post_order(chain: &str, creation: JsValue) -> Result<String, JsValu
 
 /// `GET /api/v1/orders/{uid}`.
 #[wasm_bindgen]
-pub async fn get_order(chain: &str, uid: &str) -> Result<JsValue, JsValue> {
+pub async fn get_order(uid: &str, chain: &str) -> Result<JsValue, JsValue> {
     let order = OrderBookApi::new(parse_chain(chain)?)
         .order(&parse_uid(uid)?)
         .await
@@ -113,7 +113,7 @@ pub async fn get_order(chain: &str, uid: &str) -> Result<JsValue, JsValue> {
 
 /// `GET /api/v1/orders/{uid}/status`.
 #[wasm_bindgen]
-pub async fn get_order_status(chain: &str, uid: &str) -> Result<JsValue, JsValue> {
+pub async fn get_order_status(uid: &str, chain: &str) -> Result<JsValue, JsValue> {
     let status = OrderBookApi::new(parse_chain(chain)?)
         .order_status(&parse_uid(uid)?)
         .await
@@ -124,8 +124,8 @@ pub async fn get_order_status(chain: &str, uid: &str) -> Result<JsValue, JsValue
 /// `GET /api/v1/account/{owner}/orders`.
 #[wasm_bindgen]
 pub async fn account_orders(
-    chain: &str,
     owner: &str,
+    chain: &str,
     offset: Option<u32>,
     limit: Option<u32>,
 ) -> Result<JsValue, JsValue> {
@@ -140,8 +140,8 @@ pub async fn account_orders(
 /// for the server defaults.
 #[wasm_bindgen]
 pub async fn trades_by_owner(
-    chain: &str,
     owner: &str,
+    chain: &str,
     offset: Option<u32>,
     limit: Option<u32>,
 ) -> Result<JsValue, JsValue> {
@@ -156,8 +156,8 @@ pub async fn trades_by_owner(
 /// for the server defaults.
 #[wasm_bindgen]
 pub async fn trades_by_order_uid(
-    chain: &str,
     uid: &str,
+    chain: &str,
     offset: Option<u32>,
     limit: Option<u32>,
 ) -> Result<JsValue, JsValue> {
@@ -170,7 +170,7 @@ pub async fn trades_by_order_uid(
 
 /// `GET /api/v1/token/{token}/native_price`.
 #[wasm_bindgen]
-pub async fn native_price(chain: &str, token: &str) -> Result<JsValue, JsValue> {
+pub async fn native_price(token: &str, chain: &str) -> Result<JsValue, JsValue> {
     let price = OrderBookApi::new(parse_chain(chain)?)
         .native_price(parse_address(token)?)
         .await
@@ -188,9 +188,12 @@ pub async fn version(chain: &str) -> Result<String, JsValue> {
 }
 
 /// `DELETE /api/v1/orders/{uid}`. Caller must construct the signed
-/// `SignedOrderCancellation` (see `cancel_order_signed`) and pass it here.
+/// `SignedOrderCancellation` (via
+/// [`build_order_cancellation`](crate::signing::build_order_cancellation)
+/// for external wallets, or `cancel_order_signed` in-shim) and pass it
+/// here.
 #[wasm_bindgen]
-pub async fn cancel_order(chain: &str, cancellation: JsValue) -> Result<(), JsValue> {
+pub async fn cancel_order(cancellation: JsValue, chain: &str) -> Result<(), JsValue> {
     let cancellation: SignedOrderCancellation = from_js(cancellation)?;
     OrderBookApi::new(parse_chain(chain)?)
         .cancel_order(&cancellation)
