@@ -2,13 +2,13 @@
 **Goal**: Merge all open release PR heads onto `develop`.
 **Success Criteria**: PRs #40-#48 are present with intentional conflict resolutions.
 **Tests**: `git status` clean after merges.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 2: Release Blockers
 **Goal**: Fix integration blockers from review.
 **Success Criteria**: `Cargo.lock` is canonical and `order.rs` stays below 1000 lines.
 **Tests**: `cargo +1.91.1 fmt --all -- --check`.
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 3: Validation
 **Goal**: Prove the integrated release candidate builds on native and wasm.

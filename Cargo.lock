@@ -1098,6 +1098,7 @@ dependencies = [
  "alloy-signer",
  "alloy-signer-local",
  "alloy-sol-types",
+ "async-trait",
  "const-hex",
  "cowprotocol-primitives",
  "getrandom 0.2.17",

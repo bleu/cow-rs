@@ -473,6 +473,9 @@ pub use cowprotocol_primitives::order_id::{
 };
 
 #[cfg(test)]
+mod order_signing_tests;
+
+#[cfg(test)]
 mod tests {
     use alloy_primitives::{address, keccak256};
     use hex_literal::hex;
@@ -557,73 +560,6 @@ mod tests {
         assert_eq!(&bytes[..32], &expected_r, "r component");
         assert_eq!(&bytes[32..64], &expected_s, "s component");
         assert_eq!(bytes[64], 28, "v component");
-    }
-
-    /// `OrderData::sign` then `recover_signer` round-trips to the
-    /// signing key for both ECDSA schemes, giving `OrderData` the
-    /// symmetric recover counterpart it previously lacked. Also checks
-    /// `recover_ecdsa` and that `signing_hash` equals the message the
-    /// recovery reports.
-    #[test]
-    fn sign_recover_round_trip_on_order_data() {
-        use crate::signing_scheme::EcdsaSigningScheme;
-        use alloy_signer_local::PrivateKeySigner;
-
-        let private_key = B256::from(hex!(
-            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-        ));
-        let signer = PrivateKeySigner::from_bytes(&private_key).unwrap();
-        let owner = signer.address();
-        let domain = crate::domain::settlement_domain(1, SETTLEMENT);
-        let order = sample_order();
-
-        for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
-            let signature = order.sign(scheme, &domain, &signer).unwrap();
-            let recovered = order
-                .recover_signer(&domain, &signature)
-                .unwrap()
-                .expect("ECDSA schemes recover an owner");
-            assert_eq!(recovered.signer, owner);
-            // The recovered message is exactly what `signing_hash` yields.
-            assert_eq!(recovered.message, order.signing_hash(scheme, &domain));
-
-            // The raw-ECDSA recover path agrees.
-            let ecdsa = order.sign_ecdsa(scheme, &domain, &signer).unwrap();
-            assert_eq!(
-                order.recover_ecdsa(scheme, &domain, &ecdsa).unwrap().signer,
-                owner,
-            );
-        }
-    }
-
-    /// The async signing twins yield byte-identical signatures to the
-    /// sync ones for a key implementing both traits, for both ECDSA
-    /// schemes and at both the scheme-tagged and raw-ECDSA layers.
-    #[tokio::test]
-    async fn sign_async_matches_sync_on_order_data() {
-        use crate::signing_scheme::EcdsaSigningScheme;
-        use alloy_signer_local::PrivateKeySigner;
-
-        let private_key = B256::from(hex!(
-            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-        ));
-        let signer = PrivateKeySigner::from_bytes(&private_key).unwrap();
-        let domain = crate::domain::settlement_domain(1, SETTLEMENT);
-        let order = sample_order();
-
-        for scheme in [EcdsaSigningScheme::Eip712, EcdsaSigningScheme::EthSign] {
-            assert_eq!(
-                order.sign(scheme, &domain, &signer).unwrap(),
-                order.sign_async(scheme, &domain, &signer).await.unwrap(),
-            );
-            assert_eq!(
-                order.sign_ecdsa(scheme, &domain, &signer).unwrap(),
-                order
-                    .sign_ecdsa_async(scheme, &domain, &signer)
-                    .await
-                    .unwrap(),
-            );
-        }
     }
 
     /// On-chain schemes carry the owner explicitly, so `recover_signer`
