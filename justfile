@@ -60,10 +60,13 @@ wasm-size: wasm-build-all
 # graph. Bump the ceiling consciously, with a commit message explaining
 # the new size's cause, so we don't slip silently.
 #
-# Current size: ~679 KB. Ceiling: 737280 bytes (720 KB) -> ~41 KB of
-# headroom for API surface growth.
+# Current size: ~744 KB. The typed app-data hooks and the bundled
+# prepare()/app_data_prepared accessor added ~8 KB of serde glue on top
+# of develop's actual ~736 KB; the ~679 KB previously noted here was
+# stale. Ceiling: 786432 bytes (768 KB) -> ~42 KB of headroom for API
+# surface growth.
 wasm-size-check: wasm-build-web
-	bash scripts/wasm-size-check.sh 737280
+	bash scripts/wasm-size-check.sh 786432
 
 # Combine the three wasm-pack targets into a single publishable npm
 # package with one shared .wasm + an exports map that routes the right
