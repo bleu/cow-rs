@@ -329,7 +329,7 @@ mod wire_shape {
             )
             .unwrap();
         let signature = zero_eip712_signature();
-        let creation = OrderCreation::from_signed_order_data(
+        let creation = OrderCreation::new(
             &signed,
             signature,
             quote.from,
@@ -367,7 +367,7 @@ mod wire_shape {
                 &OrderCosts::default(),
             )
             .unwrap();
-        let original = OrderCreation::from_signed_order_data(
+        let original = OrderCreation::new(
             &signed,
             signature,
             quote.from,
@@ -460,7 +460,7 @@ mod wire_shape {
                 &OrderCosts::default(),
             )
             .unwrap();
-        let creation = OrderCreation::from_signed_order_data(
+        let creation = OrderCreation::new(
             &signed,
             zero_eip712_signature(),
             quote.from,
@@ -1398,7 +1398,7 @@ mod pipeline {
             .sign(EcdsaSigningScheme::Eip712, &domain, &wallet)
             .unwrap();
         // Declared owner is NOT the signer: the chokepoint must refuse.
-        let body = OrderCreation::from_signed_order_data(
+        let body = OrderCreation::new(
             &order_data,
             signature,
             impostor,
