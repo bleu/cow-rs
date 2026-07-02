@@ -7,6 +7,8 @@
 use alloy_primitives::{Address, Bytes, U256};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{
     app_data::AppDataHash,
@@ -15,6 +17,14 @@ use crate::{
     signature::Signature,
     signing_scheme::SigningScheme,
 };
+
+/// Default client-side upper bound for `OrderCreation::valid_to`.
+///
+/// Mirrors services' default `max-limit-order-validity-period` (1 year).
+/// Market orders are usually capped more tightly server-side, but
+/// `OrderCreation` does not carry order class, so the SDK uses the broader
+/// limit-order default and lets callers configure a shorter local policy.
+pub const DEFAULT_ORDER_VALID_TO_MAX_HORIZON_SECS: u64 = 31_536_000;
 
 /// Server-side lifecycle status from `GET /api/v1/orders/{uid}`.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -247,6 +257,52 @@ impl TryFrom<OrderCreationWire> for OrderCreation {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn current_epoch_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_secs()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn current_epoch_seconds() -> u64 {
+    let millis = js_sys::Date::now();
+    if millis.is_finite() && millis > 0.0 {
+        (millis / 1_000.0) as u64
+    } else {
+        0
+    }
+}
+
+#[cfg(test)]
+pub(in crate::order_book) fn valid_to_after_for_tests(seconds: u64) -> u32 {
+    current_epoch_seconds()
+        .saturating_add(seconds)
+        .min(u64::from(u32::MAX)) as u32
+}
+
+fn validate_valid_to_max_horizon(
+    valid_to: u32,
+    signing_scheme: SigningScheme,
+    max_horizon_secs: u64,
+) -> Result<()> {
+    if signing_scheme == SigningScheme::PreSign {
+        return Ok(());
+    }
+
+    let max_valid_to = current_epoch_seconds()
+        .saturating_add(max_horizon_secs)
+        .min(u64::from(u32::MAX));
+    if u64::from(valid_to) > max_valid_to {
+        return Err(Error::OrderCreationInvalid {
+            field: "valid_to",
+            reason: "valid_to exceeds the configured maximum horizon",
+        });
+    }
+    Ok(())
+}
+
 impl OrderCreation {
     /// Project the 12 signed fields back out of an [`OrderCreation`] as
     /// the [`OrderData`] the EIP-712 hash and UID were computed against.
@@ -331,12 +387,38 @@ impl OrderCreation {
         app_data_json: String,
         quote_id: Option<i64>,
     ) -> Result<Self> {
+        Self::new_with_valid_to_max_horizon_secs(
+            order_data,
+            signature,
+            from,
+            app_data_json,
+            quote_id,
+            DEFAULT_ORDER_VALID_TO_MAX_HORIZON_SECS,
+        )
+    }
+
+    /// Same as [`Self::new`], but with a caller-supplied maximum
+    /// `valid_to` horizon in seconds.
+    ///
+    /// Passing `u64::MAX` effectively disables the client-side upper
+    /// bound. Pre-sign orders are exempt, matching the services
+    /// validation policy for signature-collection workflows.
+    pub fn new_with_valid_to_max_horizon_secs(
+        order_data: &OrderData,
+        signature: Signature,
+        from: Address,
+        app_data_json: String,
+        quote_id: Option<i64>,
+        max_horizon_secs: u64,
+    ) -> Result<Self> {
         if from == Address::ZERO {
             return Err(Error::OrderCreationInvalid {
                 field: "from",
                 reason: "owner address must be non-zero",
             });
         }
+        let signing_scheme = signature.scheme();
+        validate_valid_to_max_horizon(order_data.valid_to, signing_scheme, max_horizon_secs)?;
         // The JSON document MUST hash to the digest the order was signed
         // against. Otherwise a wrapper layer can bind the user's
         // signature to bytes the orderbook never sees, while pinning a
@@ -369,7 +451,7 @@ impl OrderCreation {
             partially_fillable: order_data.partially_fillable,
             sell_token_balance: order_data.sell_token_balance,
             buy_token_balance: order_data.buy_token_balance,
-            signing_scheme: signature.scheme(),
+            signing_scheme,
             signature,
             from,
             quote_id,
@@ -419,6 +501,7 @@ pub struct OrderCreationBuilder {
     from: Address,
     app_data_json: String,
     quote_id: Option<i64>,
+    valid_to_max_horizon_secs: u64,
 }
 
 impl OrderCreationBuilder {
@@ -434,6 +517,7 @@ impl OrderCreationBuilder {
             from,
             app_data_json,
             quote_id: None,
+            valid_to_max_horizon_secs: DEFAULT_ORDER_VALID_TO_MAX_HORIZON_SECS,
         }
     }
 
@@ -444,15 +528,26 @@ impl OrderCreationBuilder {
         self
     }
 
+    /// Override the default client-side `valid_to` maximum horizon.
+    ///
+    /// The default is [`DEFAULT_ORDER_VALID_TO_MAX_HORIZON_SECS`]. Passing
+    /// `u64::MAX` effectively disables the upper-bound check.
+    #[must_use]
+    pub const fn with_valid_to_max_horizon_secs(mut self, seconds: u64) -> Self {
+        self.valid_to_max_horizon_secs = seconds;
+        self
+    }
+
     /// Validate and assemble the [`OrderCreation`], delegating to
     /// [`OrderCreation::new`].
     pub fn build(self) -> Result<OrderCreation> {
-        OrderCreation::new(
+        OrderCreation::new_with_valid_to_max_horizon_secs(
             &self.order_data,
             self.signature,
             self.from,
             self.app_data_json,
             self.quote_id,
+            self.valid_to_max_horizon_secs,
         )
     }
 }
@@ -476,8 +571,6 @@ mod tests {
         ))
     }
 
-    /// `OrderData` whose `app_data` is `EMPTY_APP_DATA_HASH`, so the
-    /// canonical `EMPTY_APP_DATA_JSON` document hashes to match it.
     fn empty_app_data_order() -> OrderData {
         OrderData {
             sell_token: address!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
@@ -485,7 +578,7 @@ mod tests {
             receiver: None,
             sell_amount: U256::from(1_000_000u64),
             buy_amount: U256::from(999u64),
-            valid_to: 0xffff_ffff,
+            valid_to: valid_to_after_for_tests(3_600),
             app_data: EMPTY_APP_DATA_HASH,
             fee_amount: U256::ZERO,
             kind: OrderKind::Sell,
@@ -798,5 +891,63 @@ mod tests {
         .build()
         .unwrap();
         assert_eq!(creation.quote_id, None);
+    }
+
+    #[test]
+    fn new_rejects_valid_to_beyond_default_horizon() {
+        let mut order = empty_app_data_order();
+        order.valid_to = valid_to_after_for_tests(DEFAULT_ORDER_VALID_TO_MAX_HORIZON_SECS + 60);
+
+        let err = OrderCreation::new(
+            &order,
+            zero_eip712_signature(),
+            address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
+            EMPTY_APP_DATA_JSON.to_owned(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::OrderCreationInvalid {
+                    field: "valid_to",
+                    ..
+                }
+            ),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn builder_can_override_valid_to_horizon() {
+        let mut order = empty_app_data_order();
+        order.valid_to = valid_to_after_for_tests(DEFAULT_ORDER_VALID_TO_MAX_HORIZON_SECS + 60);
+
+        let creation = OrderCreation::builder(
+            &order,
+            zero_eip712_signature(),
+            address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
+            EMPTY_APP_DATA_JSON.to_owned(),
+        )
+        .with_valid_to_max_horizon_secs(DEFAULT_ORDER_VALID_TO_MAX_HORIZON_SECS + 120)
+        .build()
+        .unwrap();
+        assert_eq!(creation.valid_to, order.valid_to);
+    }
+
+    #[test]
+    fn presign_orders_are_exempt_from_valid_to_max_horizon() {
+        let mut order = empty_app_data_order();
+        order.valid_to = u32::MAX;
+
+        let creation = OrderCreation::new(
+            &order,
+            Signature::PreSign,
+            address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
+            EMPTY_APP_DATA_JSON.to_owned(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(creation.valid_to, u32::MAX);
     }
 }

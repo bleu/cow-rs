@@ -26,14 +26,14 @@ workspace = true
 [features]
 default = ["http-client", "subgraph"]
 # One switch, two backends: reqwest on native targets, the browser
-# `fetch` global on wasm32. The `dep:` entries name optional deps that
-# only exist in one target table each, so they activate solely where
-# that table applies. The quote pipeline's signer bound comes through
+# `fetch` global on wasm32. `js-sys` is a small unconditional wasm32
+# dependency because order validation also needs `Date.now()` there;
+# the other optional `dep:` entries activate solely where their target
+# table applies. The quote pipeline's signer bound comes through
 # `cowprotocol_signing::SignerSync` (that crate owns the alloy-signer
 # edge for `OrderData::sign`), so this feature only gates transports.
 http-client = [
     "dep:reqwest",
-    "dep:js-sys",
     "dep:wasm-bindgen",
     "dep:wasm-bindgen-futures",
 ]
@@ -55,7 +55,7 @@ url.workspace = true
 reqwest = { workspace = true, features = ["rustls-tls"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-js-sys = { workspace = true, optional = true }
+js-sys.workspace = true
 wasm-bindgen = { workspace = true, optional = true }
 wasm-bindgen-futures = { workspace = true, optional = true }
 

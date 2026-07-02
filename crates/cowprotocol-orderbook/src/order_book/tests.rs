@@ -1036,6 +1036,7 @@ mod pipeline {
     use super::*;
     use crate::app_data::{APP_DATA_SIZE_LIMIT, AppDataDoc, AppDataError};
     use crate::chain::Chain;
+    use crate::order_book::orders::valid_to_after_for_tests;
     use crate::transport::{HttpMethod, HttpRequest, HttpResponse, HttpTransport};
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
@@ -1097,7 +1098,7 @@ mod pipeline {
                 "receiver": null,
                 "sellAmount": SELL.to_string(),
                 "buyAmount": BUY.to_string(),
-                "validTo": 1_900_000_000_u32,
+                "validTo": valid_to_after_for_tests(3_600),
                 "appData": format!("{EMPTY_APP_DATA_HASH:#x}"),
                 "feeAmount": "0",
                 "kind": "sell",
@@ -1386,7 +1387,7 @@ mod pipeline {
             buy_token: DAI,
             sell_amount: U256::from(SELL),
             buy_amount: U256::from(BUY),
-            valid_to: 1_900_000_000,
+            valid_to: valid_to_after_for_tests(3_600),
             app_data: EMPTY_APP_DATA_HASH,
             ..OrderData::default()
         };

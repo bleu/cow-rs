@@ -7,6 +7,8 @@
 
 #![cfg(all(not(target_arch = "wasm32"), feature = "http-client"))]
 
+mod common;
+
 use alloy_primitives::{Address, B256, U256, address};
 use cowprotocol::{
     AppDataHash, BuyTokenDestination, Chain, OrderBookApi, OrderCancellation, OrderCancellations,
@@ -19,6 +21,8 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{body_json, body_string_contains, method, path, query_param},
 };
+
+use common::valid_to_after;
 
 const OWNER: Address = address!("70997970C51812dc3A010C7d01b50e0d17dc79C8");
 const USDC: Address = address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
@@ -83,7 +87,7 @@ async fn post_order_returns_assigned_uid() {
         buy_token: DAI,
         sell_amount: U256::from(1_000_000_u64),
         buy_amount: U256::from(999_000_u64),
-        valid_to: u32::MAX,
+        valid_to: valid_to_after(3_600),
         app_data: cowprotocol::EMPTY_APP_DATA_HASH,
         ..OrderData::default()
     };
@@ -829,7 +833,7 @@ async fn quote_builder_can_quote_sign_and_submit() {
                 "receiver": null,
                 "sellAmount": "100000000",
                 "buyAmount": "99900000",
-                "validTo": 1_900_000_000_u32,
+                "validTo": valid_to_after(3_600),
                 "appData": format!("{:#x}", cowprotocol::EMPTY_APP_DATA_HASH),
                 "feeAmount": "0",
                 "kind": "sell",
