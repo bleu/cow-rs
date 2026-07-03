@@ -10,6 +10,8 @@
 
 #![cfg(all(not(target_arch = "wasm32"), feature = "http-client"))]
 
+mod common;
+
 use alloy_primitives::{Address, U256, address};
 use alloy_signer_local::PrivateKeySigner;
 use cowprotocol::{AppDataDoc, Chain, EcdsaSigningScheme, OrderBookApi};
@@ -18,6 +20,8 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
+
+use common::valid_to_after;
 
 const USDC: Address = address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
 const DAI: Address = address!("6B175474E89094C44Da98b954EedeAC495271d0F");
@@ -42,7 +46,7 @@ fn quote_body(
         "receiver": null,
         "sellAmount": sell.to_string(),
         "buyAmount": buy.to_string(),
-        "validTo": 1_900_000_000_u32,
+        "validTo": valid_to_after(3_600),
         "appData": "0x0000000000000000000000000000000000000000000000000000000000000000",
         "feeAmount": fee.to_string(),
         "kind": "sell",

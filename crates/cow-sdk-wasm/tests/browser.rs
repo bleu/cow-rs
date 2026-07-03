@@ -37,6 +37,16 @@ use cow_sdk_wasm::{
 
 wasm_bindgen_test_configure!(run_in_browser);
 
+fn valid_to_after(seconds: u64) -> u32 {
+    let millis = js_sys::Date::now();
+    let now_secs = if millis.is_finite() && millis > 0.0 {
+        (millis / 1_000.0) as u64
+    } else {
+        0
+    };
+    now_secs.saturating_add(seconds).min(u64::from(u32::MAX)) as u32
+}
+
 // ===== Pure-compute tests ==============================================
 
 /// `order_uid` should produce a 0x-prefixed 56-byte hex string
@@ -666,7 +676,7 @@ fn build_order_creation_rejects_overflowing_quote_id() {
         "receiver": null,
         "sellAmount": "100000000",
         "buyAmount":  "99000000000000000000",
-        "validTo": 4_294_967_295u32,
+        "validTo": valid_to_after(3_600),
         "appData": empty_hash,
         "feeAmount": "0",
         "kind": "sell",
@@ -742,7 +752,7 @@ async fn post_order_rejects_wrong_from_locally() {
         "receiver": null,
         "sellAmount": "100000000",
         "buyAmount":  "99000000000000000000",
-        "validTo": 4_294_967_295u32,
+        "validTo": valid_to_after(3_600),
         "appData": "{}",
         "appDataHash": empty_hash,
         "feeAmount": "0",

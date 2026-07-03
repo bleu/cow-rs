@@ -155,11 +155,11 @@ pub use crate::{
         OrderUidParseError, OrderUidParts, SellTokenSource, order_typed_data, parse_order_uid,
     },
     order_book::{
-        AppDataDocument, Auction, AuctionStatus, AuctionStatusType, NativePrice, Order,
-        OrderBookApi, OrderCreation, OrderCreationBuilder, OrderQuote, OrderQuoteResponse,
-        OrderStatus, OrderSubmission, PriceQuality, QuoteAppData, QuoteRequest,
-        QuoteRequestBuilder, QuotedOrder, ReadyQuoteRequestBuilder, TokenMetadata, TotalSurplus,
-        Trade,
+        AppDataDocument, Auction, AuctionStatus, AuctionStatusType,
+        DEFAULT_ORDER_VALID_TO_MAX_HORIZON_SECS, NativePrice, Order, OrderBookApi, OrderCreation,
+        OrderCreationBuilder, OrderQuote, OrderQuoteResponse, OrderStatus, OrderSubmission,
+        PriceQuality, QuoteAppData, QuoteRequest, QuoteRequestBuilder, QuotedOrder,
+        ReadyQuoteRequestBuilder, TokenMetadata, TotalSurplus, Trade,
     },
     quote_amounts::{
         Amounts as QuoteAmounts, DEFAULT_SLIPPAGE_BPS, OrderCosts, ProtocolFeeBps,
