@@ -225,6 +225,223 @@ pub enum VerifyOwnerError {
     },
 }
 
+/// Typed view of the orderbook's machine-readable `errorType` strings.
+///
+/// The variants mirror the bundled orderbook OpenAPI plus a few values the
+/// live `cowprotocol/services` code returns but the spec has not carried
+/// consistently (`Forbidden`, `NonZeroFee`, `InsufficientFee`, and
+/// `DuplicateOrder`). Unknown values are preserved verbatim so callers can
+/// log, metric, or apply their own policy without losing information when the
+/// server grows a new error type.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum OrderbookApiErrorType {
+    /// `DuplicatedOrder`
+    DuplicatedOrder,
+    /// Historical singular spelling seen in downstream tests.
+    DuplicateOrder,
+    /// `QuoteNotFound`
+    QuoteNotFound,
+    /// `QuoteNotVerified`
+    QuoteNotVerified,
+    /// `InvalidQuote`
+    InvalidQuote,
+    /// `MissingFrom`
+    MissingFrom,
+    /// `WrongOwner`
+    WrongOwner,
+    /// `InvalidEip1271Signature`
+    InvalidEip1271Signature,
+    /// `InsufficientBalance`
+    InsufficientBalance,
+    /// `InsufficientAllowance`
+    InsufficientAllowance,
+    /// `InvalidSignature`
+    InvalidSignature,
+    /// `SellAmountOverflow`
+    SellAmountOverflow,
+    /// `TransferSimulationFailed`
+    TransferSimulationFailed,
+    /// `ZeroAmount`
+    ZeroAmount,
+    /// `IncompatibleSigningScheme`
+    IncompatibleSigningScheme,
+    /// `TooManyLimitOrders`
+    TooManyLimitOrders,
+    /// `TooMuchGas`
+    TooMuchGas,
+    /// `UnsupportedBuyTokenDestination`
+    UnsupportedBuyTokenDestination,
+    /// `UnsupportedSellTokenSource`
+    UnsupportedSellTokenSource,
+    /// `UnsupportedOrderType`
+    UnsupportedOrderType,
+    /// `InsufficientValidTo`
+    InsufficientValidTo,
+    /// `ExcessiveValidTo`
+    ExcessiveValidTo,
+    /// `InvalidNativeSellToken`
+    InvalidNativeSellToken,
+    /// `SameBuyAndSellToken`
+    SameBuyAndSellToken,
+    /// `UnsupportedToken`
+    UnsupportedToken,
+    /// `InvalidAppData`
+    InvalidAppData,
+    /// `AppDataHashMismatch`
+    AppDataHashMismatch,
+    /// `AppDataMismatch`
+    AppDataMismatch,
+    /// `AppdataFromMismatch`
+    AppdataFromMismatch,
+    /// `MetadataSerializationFailed`
+    MetadataSerializationFailed,
+    /// `OldOrderActivelyBidOn`
+    OldOrderActivelyBidOn,
+    /// `Forbidden`
+    Forbidden,
+    /// `NonZeroFee`
+    NonZeroFee,
+    /// `InsufficientFee`
+    InsufficientFee,
+    /// `NoLiquidity`
+    NoLiquidity,
+    /// Unknown server-side `errorType` value.
+    Unknown(String),
+}
+
+impl OrderbookApiErrorType {
+    /// Borrow the exact wire spelling for known variants.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::DuplicatedOrder => "DuplicatedOrder",
+            Self::DuplicateOrder => "DuplicateOrder",
+            Self::QuoteNotFound => "QuoteNotFound",
+            Self::QuoteNotVerified => "QuoteNotVerified",
+            Self::InvalidQuote => "InvalidQuote",
+            Self::MissingFrom => "MissingFrom",
+            Self::WrongOwner => "WrongOwner",
+            Self::InvalidEip1271Signature => "InvalidEip1271Signature",
+            Self::InsufficientBalance => "InsufficientBalance",
+            Self::InsufficientAllowance => "InsufficientAllowance",
+            Self::InvalidSignature => "InvalidSignature",
+            Self::SellAmountOverflow => "SellAmountOverflow",
+            Self::TransferSimulationFailed => "TransferSimulationFailed",
+            Self::ZeroAmount => "ZeroAmount",
+            Self::IncompatibleSigningScheme => "IncompatibleSigningScheme",
+            Self::TooManyLimitOrders => "TooManyLimitOrders",
+            Self::TooMuchGas => "TooMuchGas",
+            Self::UnsupportedBuyTokenDestination => "UnsupportedBuyTokenDestination",
+            Self::UnsupportedSellTokenSource => "UnsupportedSellTokenSource",
+            Self::UnsupportedOrderType => "UnsupportedOrderType",
+            Self::InsufficientValidTo => "InsufficientValidTo",
+            Self::ExcessiveValidTo => "ExcessiveValidTo",
+            Self::InvalidNativeSellToken => "InvalidNativeSellToken",
+            Self::SameBuyAndSellToken => "SameBuyAndSellToken",
+            Self::UnsupportedToken => "UnsupportedToken",
+            Self::InvalidAppData => "InvalidAppData",
+            Self::AppDataHashMismatch => "AppDataHashMismatch",
+            Self::AppDataMismatch => "AppDataMismatch",
+            Self::AppdataFromMismatch => "AppdataFromMismatch",
+            Self::MetadataSerializationFailed => "MetadataSerializationFailed",
+            Self::OldOrderActivelyBidOn => "OldOrderActivelyBidOn",
+            Self::Forbidden => "Forbidden",
+            Self::NonZeroFee => "NonZeroFee",
+            Self::InsufficientFee => "InsufficientFee",
+            Self::NoLiquidity => "NoLiquidity",
+            Self::Unknown(s) => s,
+        }
+    }
+}
+
+impl fmt::Display for OrderbookApiErrorType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<&str> for OrderbookApiErrorType {
+    fn from(value: &str) -> Self {
+        match value {
+            "DuplicatedOrder" => Self::DuplicatedOrder,
+            "DuplicateOrder" => Self::DuplicateOrder,
+            "QuoteNotFound" => Self::QuoteNotFound,
+            "QuoteNotVerified" => Self::QuoteNotVerified,
+            "InvalidQuote" => Self::InvalidQuote,
+            "MissingFrom" => Self::MissingFrom,
+            "WrongOwner" => Self::WrongOwner,
+            "InvalidEip1271Signature" => Self::InvalidEip1271Signature,
+            "InsufficientBalance" => Self::InsufficientBalance,
+            "InsufficientAllowance" => Self::InsufficientAllowance,
+            "InvalidSignature" => Self::InvalidSignature,
+            "SellAmountOverflow" => Self::SellAmountOverflow,
+            "TransferSimulationFailed" => Self::TransferSimulationFailed,
+            "ZeroAmount" => Self::ZeroAmount,
+            "IncompatibleSigningScheme" => Self::IncompatibleSigningScheme,
+            "TooManyLimitOrders" => Self::TooManyLimitOrders,
+            "TooMuchGas" => Self::TooMuchGas,
+            "UnsupportedBuyTokenDestination" => Self::UnsupportedBuyTokenDestination,
+            "UnsupportedSellTokenSource" => Self::UnsupportedSellTokenSource,
+            "UnsupportedOrderType" => Self::UnsupportedOrderType,
+            "InsufficientValidTo" => Self::InsufficientValidTo,
+            "ExcessiveValidTo" => Self::ExcessiveValidTo,
+            "InvalidNativeSellToken" => Self::InvalidNativeSellToken,
+            "SameBuyAndSellToken" => Self::SameBuyAndSellToken,
+            "UnsupportedToken" => Self::UnsupportedToken,
+            "InvalidAppData" => Self::InvalidAppData,
+            "AppDataHashMismatch" => Self::AppDataHashMismatch,
+            "AppDataMismatch" => Self::AppDataMismatch,
+            "AppdataFromMismatch" => Self::AppdataFromMismatch,
+            "MetadataSerializationFailed" => Self::MetadataSerializationFailed,
+            "OldOrderActivelyBidOn" => Self::OldOrderActivelyBidOn,
+            "Forbidden" => Self::Forbidden,
+            "NonZeroFee" => Self::NonZeroFee,
+            "InsufficientFee" => Self::InsufficientFee,
+            "NoLiquidity" => Self::NoLiquidity,
+            other => Self::Unknown(other.to_owned()),
+        }
+    }
+}
+
+impl From<String> for OrderbookApiErrorType {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+/// Caller policy hint for a structured orderbook API error.
+///
+/// This is intentionally a hint, not middleware: callers still own their
+/// retry loops and idempotency writes, but no longer need to string-match
+/// `ApiError.error_type` to decide the broad outcome.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum RetryHint {
+    /// Try again on the next block/tick.
+    Retry,
+    /// Delay before trying again.
+    Backoff {
+        /// Suggested backoff duration in seconds.
+        seconds: u64,
+    },
+    /// Treat the order as terminally rejected.
+    Drop,
+    /// The orderbook already has the order; record it as submitted.
+    AlreadySubmitted,
+}
+
+// Mirrors cowprotocol/watch-tower's API_ERRORS_BACKOFF table.
+const WATCH_TOWER_APP_DATA_BACKOFF_SECS: u64 = 60;
+const WATCH_TOWER_BALANCE_ALLOWANCE_BACKOFF_SECS: u64 = 10 * 60;
+const WATCH_TOWER_LIMIT_ORDER_BACKOFF_SECS: u64 = 60 * 60;
+
+impl RetryHint {
+    /// `true` when retrying the same payload later may succeed.
+    pub const fn is_retryable(self) -> bool {
+        matches!(self, Self::Retry | Self::Backoff { .. })
+    }
+}
+
 /// Structured error envelope returned by the CoW orderbook for 4xx / 5xx
 /// responses. Mirrors the `Error` schema declared by the orderbook OpenAPI.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -237,6 +454,70 @@ pub struct ApiError {
     /// Optional structured data attached by the orderbook.
     #[serde(default)]
     pub data: Option<serde_json::Value>,
+}
+
+impl ApiError {
+    /// Typed view of [`Self::error_type`].
+    pub fn error_kind(&self) -> OrderbookApiErrorType {
+        OrderbookApiErrorType::from(self.error_type.as_str())
+    }
+
+    /// Classify this orderbook error into a caller retry policy.
+    ///
+    /// The table mirrors the CoW watch-tower policy: quote freshness and
+    /// EIP-1271 timing issues are retried on the next block; balance,
+    /// allowance, limit-order quota and app-data propagation use explicit
+    /// backoff; malformed or unsupported orders are dropped. `DuplicatedOrder`
+    /// and the historical `DuplicateOrder` spelling are separated from
+    /// ordinary drops so submitters can record the order as already accepted
+    /// without deleting the parent watch.
+    pub fn retry_hint(&self) -> RetryHint {
+        match self.error_kind() {
+            OrderbookApiErrorType::DuplicatedOrder | OrderbookApiErrorType::DuplicateOrder => {
+                RetryHint::AlreadySubmitted
+            }
+            OrderbookApiErrorType::QuoteNotFound
+            | OrderbookApiErrorType::InvalidQuote
+            | OrderbookApiErrorType::InsufficientValidTo
+            | OrderbookApiErrorType::InvalidEip1271Signature
+            | OrderbookApiErrorType::InsufficientFee => RetryHint::Retry,
+            OrderbookApiErrorType::InsufficientAllowance
+            | OrderbookApiErrorType::InsufficientBalance => RetryHint::Backoff {
+                seconds: WATCH_TOWER_BALANCE_ALLOWANCE_BACKOFF_SECS,
+            },
+            OrderbookApiErrorType::TooManyLimitOrders => RetryHint::Backoff {
+                seconds: WATCH_TOWER_LIMIT_ORDER_BACKOFF_SECS,
+            },
+            OrderbookApiErrorType::InvalidAppData => RetryHint::Backoff {
+                seconds: WATCH_TOWER_APP_DATA_BACKOFF_SECS,
+            },
+            OrderbookApiErrorType::QuoteNotVerified
+            | OrderbookApiErrorType::MissingFrom
+            | OrderbookApiErrorType::WrongOwner
+            | OrderbookApiErrorType::InvalidSignature
+            | OrderbookApiErrorType::SellAmountOverflow
+            | OrderbookApiErrorType::TransferSimulationFailed
+            | OrderbookApiErrorType::ZeroAmount
+            | OrderbookApiErrorType::IncompatibleSigningScheme
+            | OrderbookApiErrorType::TooMuchGas
+            | OrderbookApiErrorType::UnsupportedBuyTokenDestination
+            | OrderbookApiErrorType::UnsupportedSellTokenSource
+            | OrderbookApiErrorType::UnsupportedOrderType
+            | OrderbookApiErrorType::ExcessiveValidTo
+            | OrderbookApiErrorType::InvalidNativeSellToken
+            | OrderbookApiErrorType::SameBuyAndSellToken
+            | OrderbookApiErrorType::UnsupportedToken
+            | OrderbookApiErrorType::AppDataHashMismatch
+            | OrderbookApiErrorType::AppDataMismatch
+            | OrderbookApiErrorType::AppdataFromMismatch
+            | OrderbookApiErrorType::MetadataSerializationFailed
+            | OrderbookApiErrorType::OldOrderActivelyBidOn
+            | OrderbookApiErrorType::Forbidden
+            | OrderbookApiErrorType::NonZeroFee
+            | OrderbookApiErrorType::NoLiquidity
+            | OrderbookApiErrorType::Unknown(_) => RetryHint::Drop,
+        }
+    }
 }
 
 impl fmt::Display for ApiError {
@@ -271,5 +552,70 @@ mod tests {
         let parsed: ApiError = serde_json::from_value(json).unwrap();
         assert!(parsed.data.is_some());
         assert_eq!(parsed.data.unwrap()["fee_amount"], "1234");
+    }
+
+    #[test]
+    fn api_error_type_parses_known_and_unknown_values() {
+        assert_eq!(
+            OrderbookApiErrorType::from("DuplicatedOrder"),
+            OrderbookApiErrorType::DuplicatedOrder
+        );
+        assert_eq!(
+            OrderbookApiErrorType::from("DuplicateOrder"),
+            OrderbookApiErrorType::DuplicateOrder
+        );
+        assert_eq!(
+            OrderbookApiErrorType::from("NewServerError"),
+            OrderbookApiErrorType::Unknown("NewServerError".to_owned())
+        );
+    }
+
+    #[test]
+    fn api_error_exposes_typed_error_type() {
+        let api = ApiError {
+            error_type: "InsufficientBalance".to_owned(),
+            description: "balance too low".to_owned(),
+            data: None,
+        };
+
+        assert_eq!(api.error_kind(), OrderbookApiErrorType::InsufficientBalance);
+    }
+
+    #[test]
+    fn retry_hint_classifies_orderbook_errors() {
+        let cases = [
+            ("DuplicatedOrder", RetryHint::AlreadySubmitted),
+            ("DuplicateOrder", RetryHint::AlreadySubmitted),
+            ("QuoteNotFound", RetryHint::Retry),
+            (
+                "InsufficientBalance",
+                RetryHint::Backoff {
+                    seconds: WATCH_TOWER_BALANCE_ALLOWANCE_BACKOFF_SECS,
+                },
+            ),
+            (
+                "InsufficientAllowance",
+                RetryHint::Backoff {
+                    seconds: WATCH_TOWER_BALANCE_ALLOWANCE_BACKOFF_SECS,
+                },
+            ),
+            (
+                "TooManyLimitOrders",
+                RetryHint::Backoff {
+                    seconds: WATCH_TOWER_LIMIT_ORDER_BACKOFF_SECS,
+                },
+            ),
+            ("InvalidSignature", RetryHint::Drop),
+            ("NewServerError", RetryHint::Drop),
+        ];
+
+        for (error_type, expected) in cases {
+            let api = ApiError {
+                error_type: error_type.to_owned(),
+                description: "test".to_owned(),
+                data: None,
+            };
+            assert_eq!(api.retry_hint(), expected, "{error_type}");
+        }
     }
 }
