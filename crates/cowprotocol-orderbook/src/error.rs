@@ -430,6 +430,11 @@ pub enum RetryHint {
     AlreadySubmitted,
 }
 
+// Mirrors cowprotocol/watch-tower's API_ERRORS_BACKOFF table.
+const WATCH_TOWER_APP_DATA_BACKOFF_SECS: u64 = 60;
+const WATCH_TOWER_BALANCE_ALLOWANCE_BACKOFF_SECS: u64 = 10 * 60;
+const WATCH_TOWER_LIMIT_ORDER_BACKOFF_SECS: u64 = 60 * 60;
+
 impl RetryHint {
     /// `true` when retrying the same payload later may succeed.
     pub const fn is_retryable(self) -> bool {
@@ -477,9 +482,15 @@ impl ApiError {
             | OrderbookApiErrorType::InvalidEip1271Signature
             | OrderbookApiErrorType::InsufficientFee => RetryHint::Retry,
             OrderbookApiErrorType::InsufficientAllowance
-            | OrderbookApiErrorType::InsufficientBalance => RetryHint::Backoff { seconds: 10 * 60 },
-            OrderbookApiErrorType::TooManyLimitOrders => RetryHint::Backoff { seconds: 60 * 60 },
-            OrderbookApiErrorType::InvalidAppData => RetryHint::Backoff { seconds: 60 },
+            | OrderbookApiErrorType::InsufficientBalance => RetryHint::Backoff {
+                seconds: WATCH_TOWER_BALANCE_ALLOWANCE_BACKOFF_SECS,
+            },
+            OrderbookApiErrorType::TooManyLimitOrders => RetryHint::Backoff {
+                seconds: WATCH_TOWER_LIMIT_ORDER_BACKOFF_SECS,
+            },
+            OrderbookApiErrorType::InvalidAppData => RetryHint::Backoff {
+                seconds: WATCH_TOWER_APP_DATA_BACKOFF_SECS,
+            },
             OrderbookApiErrorType::QuoteNotVerified
             | OrderbookApiErrorType::MissingFrom
             | OrderbookApiErrorType::WrongOwner
@@ -576,9 +587,24 @@ mod tests {
             ("DuplicatedOrder", RetryHint::AlreadySubmitted),
             ("DuplicateOrder", RetryHint::AlreadySubmitted),
             ("QuoteNotFound", RetryHint::Retry),
-            ("InsufficientBalance", RetryHint::Backoff { seconds: 600 }),
-            ("InsufficientAllowance", RetryHint::Backoff { seconds: 600 }),
-            ("TooManyLimitOrders", RetryHint::Backoff { seconds: 3600 }),
+            (
+                "InsufficientBalance",
+                RetryHint::Backoff {
+                    seconds: WATCH_TOWER_BALANCE_ALLOWANCE_BACKOFF_SECS,
+                },
+            ),
+            (
+                "InsufficientAllowance",
+                RetryHint::Backoff {
+                    seconds: WATCH_TOWER_BALANCE_ALLOWANCE_BACKOFF_SECS,
+                },
+            ),
+            (
+                "TooManyLimitOrders",
+                RetryHint::Backoff {
+                    seconds: WATCH_TOWER_LIMIT_ORDER_BACKOFF_SECS,
+                },
+            ),
             ("InvalidSignature", RetryHint::Drop),
             ("NewServerError", RetryHint::Drop),
         ];
