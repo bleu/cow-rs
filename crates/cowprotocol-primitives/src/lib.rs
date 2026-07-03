@@ -9,6 +9,7 @@ pub mod chain;
 pub mod composable;
 pub mod contracts;
 pub mod domain;
+pub mod eth_flow;
 pub mod multiplexer;
 pub mod order_id;
 
@@ -33,12 +34,14 @@ pub use self::{
         safe_handler_signature,
     },
     contracts::{
-        CoWSwapOnchainOrders, ERC20, GPV2_ORDER_TYPE_HASH, GPV2_SETTLEMENT, GPV2_VAULT_RELAYER,
-        GPv2OrderData, GPv2Settlement, OnchainSignature, OnchainSigningScheme, WETH9,
+        CoWSwapEthFlow, CoWSwapOnchainOrders, ERC20, EthFlowOrderData, GPV2_ORDER_TYPE_HASH,
+        GPV2_SETTLEMENT, GPV2_VAULT_RELAYER, GPv2OrderData, GPv2Settlement, OnchainSignature,
+        OnchainSigningScheme, WETH9,
     },
     domain::{
         DOMAIN_NAME, DOMAIN_VERSION, DomainSeparator, eip712_message_hash, settlement_domain,
     },
+    eth_flow::{ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, EthFlowDeployment, EthFlowEnvironment},
     multiplexer::{
         MerkleProof, Multiplexer, MultiplexerError, conditional_order_leaf, verify_proof,
     },
