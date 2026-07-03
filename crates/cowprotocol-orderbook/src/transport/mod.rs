@@ -71,6 +71,19 @@ pub enum HttpMethod {
     Delete,
 }
 
+impl HttpMethod {
+    /// Canonical uppercase HTTP verb string, suitable for host
+    /// passthrough APIs that accept method names instead of an enum.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Get => "GET",
+            Self::Post => "POST",
+            Self::Put => "PUT",
+            Self::Delete => "DELETE",
+        }
+    }
+}
+
 /// A fully-formed, transport-agnostic request the orderbook client hands to
 /// an [`HttpTransport`]. The body, when present, is already serialised JSON
 /// and implies a `content-type: application/json` header.
@@ -98,6 +111,22 @@ impl core::fmt::Debug for HttpRequest {
             .field("json_body", &self.json_body)
             .field("bearer", &self.bearer.as_ref().map(|_| "<redacted>"))
             .finish()
+    }
+}
+
+impl HttpRequest {
+    /// Path plus query string for host APIs that route relative to a
+    /// chain-specific CoW API base URL.
+    ///
+    /// For example, `https://cow.host/api/v1/orders?offset=10` becomes
+    /// `/api/v1/orders?offset=10`. The method intentionally omits scheme,
+    /// host, and fragment so custom transports can forward only the
+    /// endpoint path to a sandbox host interface.
+    pub fn path_and_query(&self) -> String {
+        self.url.query().map_or_else(
+            || self.url.path().to_owned(),
+            |query| format!("{}?{query}", self.url.path()),
+        )
     }
 }
 
@@ -149,6 +178,57 @@ pub struct HttpResponse {
 ///
 /// Pass an instance to
 /// [`OrderBookApi::new_with_transport`](crate::OrderBookApi::new_with_transport).
+///
+/// For sandboxed WASM guests, the backend can be a host passthrough rather
+/// than an HTTP stack in the guest. Build the API with an arbitrary base URL
+/// whose path is `/`, add a [`crate::Chain`] hint for signing checks, and
+/// forward the request method, relative path, and JSON body to the host:
+///
+/// ```
+/// use cowprotocol_orderbook::error::Result;
+/// use cowprotocol_orderbook::{
+///     Chain, HttpRequest, HttpResponse, HttpTransport, OrderBookApi,
+/// };
+///
+/// trait CowApiHost {
+///     fn request(
+///         &self,
+///         method: &str,
+///         path: &str,
+///         body: Option<&str>,
+///     ) -> Result<(u16, String)>;
+/// }
+///
+/// struct HostTransport<H> {
+///     host: H,
+/// }
+///
+/// impl<H: CowApiHost> HttpTransport for HostTransport<H> {
+///     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse> {
+///         let body = request
+///             .json_body
+///             .as_ref()
+///             .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+///         let (status, body) = self.host.request(
+///             request.method.as_str(),
+///             &request.path_and_query(),
+///             body.as_deref(),
+///         )?;
+///         Ok(HttpResponse { status, body })
+///     }
+/// }
+///
+/// # struct StubHost;
+/// # impl CowApiHost for StubHost {
+/// #     fn request(&self, _: &str, _: &str, _: Option<&str>) -> Result<(u16, String)> {
+/// #         Ok((200, "{}".to_owned()))
+/// #     }
+/// # }
+/// let transport = HostTransport { host: StubHost };
+/// let base = url::Url::parse("https://cow.host/").unwrap();
+/// let _api = OrderBookApi::new_with_transport(base, transport)
+///     .with_chain_hint(Chain::Mainnet);
+/// ```
 #[allow(async_fn_in_trait)]
 pub trait HttpTransport {
     /// Execute `request` and return the capped response, or an [`Error`] for
@@ -206,5 +286,48 @@ impl HttpResponse {
                 api,
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn method_as_str_returns_http_verbs() {
+        assert_eq!(HttpMethod::Get.as_str(), "GET");
+        assert_eq!(HttpMethod::Post.as_str(), "POST");
+        assert_eq!(HttpMethod::Put.as_str(), "PUT");
+        assert_eq!(HttpMethod::Delete.as_str(), "DELETE");
+    }
+
+    #[test]
+    fn request_path_and_query_preserves_endpoint_and_query_string() {
+        let request = HttpRequest {
+            method: HttpMethod::Get,
+            url: url::Url::parse(
+                "https://api.cow.fi/mainnet/api/v1/account/0xabc/orders?offset=10&limit=5",
+            )
+            .unwrap(),
+            json_body: None,
+            bearer: None,
+        };
+
+        assert_eq!(
+            request.path_and_query(),
+            "/mainnet/api/v1/account/0xabc/orders?offset=10&limit=5"
+        );
+    }
+
+    #[test]
+    fn request_path_and_query_omits_empty_query() {
+        let request = HttpRequest {
+            method: HttpMethod::Post,
+            url: url::Url::parse("https://api.cow.fi/xdai/api/v1/orders").unwrap(),
+            json_body: Some(br#"{"foo":"bar"}"#.to_vec()),
+            bearer: None,
+        };
+
+        assert_eq!(request.path_and_query(), "/xdai/api/v1/orders");
     }
 }
