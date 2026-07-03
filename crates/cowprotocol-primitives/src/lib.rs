@@ -27,8 +27,9 @@ pub use self::{
     chain::{Chain, UnsupportedChain},
     composable::{
         COMPOSABLE_COW, CURRENT_BLOCK_TIMESTAMP_FACTORY, ComposableCoW, ConditionalOrderParams,
-        EXTENSIBLE_FALLBACK_HANDLER, PayloadStruct, Proof, ProofLocation, TWAP_HANDLER, TwapData,
-        TwapDataBuilder, TwapDuration, TwapError, TwapStart, TwapStaticInput, forwarder_signature,
+        ConditionalOrderRevert, EXTENSIBLE_FALLBACK_HANDLER, IConditionalOrder, PayloadStruct,
+        Proof, ProofLocation, TWAP_HANDLER, TwapData, TwapDataBuilder, TwapDuration, TwapError,
+        TwapStart, TwapStaticInput, decode_conditional_order_revert, forwarder_signature,
         safe_handler_signature,
     },
     contracts::{
